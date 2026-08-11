@@ -1,0 +1,440 @@
+import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, Not, IsNull } from 'typeorm';
+import { Usuario } from './usuario.entity';
+import * as bcrypt from 'bcrypt';
+import { UsuarioOposicion } from './usuario-oposicion.entity';
+import { Oposicion } from '../oposicion/oposicion.entity';
+import { EstadoUsuario, SuscripcionUsuario } from './usuario.entity';
+import { resetearConsumosSiEsNuevoDia } from '../common/helpers/consumo.helper';
+import { getSuscripcionLimits, haSuperadoLimite } from '../common/helpers/plan.helper';
+import { createClient } from '@supabase/supabase-js';
+import { TipoAvatar } from './usuario.entity';
+
+
+
+
+@Injectable()
+export class UsuarioService {
+  private supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!,
+);
+  constructor(
+    @InjectRepository(Usuario)
+    private readonly repo: Repository<Usuario>,
+
+    @InjectRepository(UsuarioOposicion)
+    private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
+
+    @InjectRepository(Oposicion)
+    private readonly oposicionRepo: Repository<Oposicion>,
+  ) {}
+
+  // ---------------------------------------------------------
+  // OPOSICIONES DEL USUARIO
+  // ---------------------------------------------------------
+
+  async getMisOposiciones(usuarioId: string): Promise<any[]> {
+    const relaciones = await this.usuarioOposicionRepo.find({
+      where: { usuario: { id: usuarioId } },
+      relations: ['oposicion'],
+      order: { creadoEn: 'DESC' },
+    });
+
+    return relaciones.map(r => ({
+      ...r.oposicion,
+      activa: r.activa,
+    }));
+  }
+
+
+
+
+ async activarOposicion(usuarioId: string, oposicionId: string) {
+  // 1. Desactivar todas las oposiciones anteriores del usuario
+  await this.usuarioOposicionRepo.update(
+    { usuario: { id: usuarioId } },
+    { activa: false }
+  );
+
+  // 2. Buscar si ya existe la relación usuario-oposición
+  let relacion = await this.usuarioOposicionRepo.findOne({
+    where: {
+      usuario: { id: usuarioId },
+      oposicion: { id: oposicionId },
+    },
+    relations: ['usuario', 'oposicion'],
+  });
+
+  // 3. Si no existe, crearla
+  if (!relacion) {
+    relacion = this.usuarioOposicionRepo.create({
+      usuario: { id: usuarioId },
+      oposicion: { id: oposicionId },
+      activa: true,
+    });
+  } else {
+    relacion.activa = true;
+  }
+
+  // 4. Guardar la relación
+  await this.usuarioOposicionRepo.save(relacion);
+
+  return relacion;
+}
+
+async desactivarOposicion(usuarioId: string, oposicionId: string) {
+  const relacion = await this.usuarioOposicionRepo.findOne({
+    where: {
+      usuario: { id: usuarioId },
+      oposicion: { id: oposicionId },
+    },
+  });
+
+  if (!relacion) return;
+
+  relacion.activa = false;
+  await this.usuarioOposicionRepo.save(relacion);
+
+  return relacion;
+}
+
+async marcarOnboardingGeneral(usuarioId: string) {
+  await this.repo.update(usuarioId, {
+    onboardingGeneralCompletado: true,
+  });
+
+  return { ok: true };
+}
+
+async marcarOnboardingEntrenamiento(usuarioId: string) {
+  await this.repo.update(usuarioId, {
+    estado: EstadoUsuario.ACTIVO,
+  });
+
+  return this.findMe(usuarioId);
+}
+
+
+
+
+  // ---------------------------------------------------------
+  // MÉTODOS DE BÚSQUEDA (CORREGIDOS PARA LOGIN)
+  // ---------------------------------------------------------
+
+  async findByEmail(email: string): Promise<Usuario | null> {
+    return this.repo.findOne({
+      where: { email },
+      select: [
+        'id',
+        'email',
+        'nombre',
+        'apellidos',
+        'nick',
+        'rol',
+        'puntos',
+        'nivel',
+        'estado',
+        'onboardingGeneralCompletado',
+        'password', // ← NECESARIO PARA LOGIN
+      ],
+    });
+  }
+
+  async findByNick(nick: string): Promise<Usuario | null> {
+    return this.repo.findOne({
+      where: { nick },
+      select: [
+        'id',
+        'email',
+        'nombre',
+        'apellidos',
+        'nick',
+        'rol',
+        'puntos',
+        'nivel',
+        'estado',
+        'onboardingGeneralCompletado',
+        'password', // ← NECESARIO PARA LOGIN
+      ],
+    });
+  }
+
+  async findById(id: string): Promise<Usuario | null> {
+    return this.repo.findOne({ where: { id } });
+  }
+
+  // ---------------------------------------------------------
+  // CREAR USUARIO
+  // ---------------------------------------------------------
+
+  async crear(datos: {
+    email: string;
+    nombre: string;
+    apellidos?: string;
+    nick?: string;
+    password: string;
+    dni?: string;
+    notificacionesListas?: boolean;
+  }): Promise<Usuario> {
+    const existente = await this.findByEmail(datos.email);
+    if (existente) throw new ConflictException('Ya existe una cuenta con ese email');
+
+    if (datos.nick) {
+      const nickExistente = await this.findByNick(datos.nick);
+      if (nickExistente) throw new ConflictException('Ese nick ya está en uso');
+    }
+
+    const hash = await bcrypt.hash(datos.password, 10);
+
+    const usuario = this.repo.create({
+      ...datos,
+      password: hash,
+
+      
+    });
+
+    return this.repo.save(usuario);
+  }
+
+  // ---------------------------------------------------------
+  // VALIDAR PASSWORD (opcional)
+  // ---------------------------------------------------------
+
+  async validarPassword(email: string, password: string): Promise<Usuario | null> {
+    const usuario = await this.findByEmail(email);
+    if (!usuario) return null;
+
+    const ok = await bcrypt.compare(password, usuario.password);
+    return ok ? usuario : null;
+  }
+
+  // ---------------------------------------------------------
+  // ADMIN
+  // ---------------------------------------------------------
+
+  async findAll(): Promise<Usuario[]> {
+    return this.repo.find({ order: { creadoEn: 'DESC' } });
+  }
+
+  async count(): Promise<number> {
+    return this.repo.count();
+  }
+
+  async cambiarSuscripcion(id: string, suscripcion: string): Promise<void> {
+    await this.repo.update(id, {
+  suscripcion: suscripcion as SuscripcionUsuario,
+  });};
+
+  async desactivar(id: string): Promise<void> {
+    await this.repo.update(id, { activo: false });
+  }
+
+  async actualizarNivel(id: string, nivel: number) {
+  await this.repo.update(id, { nivel });
+  return this.findById(id);
+}
+
+  async guardarConsumo(usuario: Usuario): Promise<void> {
+  await this.repo.update(usuario.id, {
+    preguntasTestHoy: usuario.preguntasTestHoy,
+    flashcardsHoy: usuario.flashcardsHoy,
+    temasRevisadosHoy: usuario.temasRevisadosHoy,
+    fechaResetConsumo: usuario.fechaResetConsumo,
+    ultimaActividad: usuario.ultimaActividad,
+    rachaActual: usuario.rachaActual, 
+    rachaMaxima: usuario.rachaMaxima, 
+  });
+}
+  async actualizarObjetivo(
+  id: string,
+  objetivo: string,
+  nivel?: number,
+) {
+  await this.repo.update(id, {
+    objetivo,
+    ...(nivel && { nivel }),
+  });
+
+  return this.findById(id);
+}
+
+  
+  async actualizarCompromiso(id: string, compromiso: boolean) {
+  await this.repo.update(id, { compromiso });
+  return this.findById(id);
+}
+
+async findMe(id: string) {
+  const usuario = await this.repo.findOne({
+    where: { id },
+    relations: [
+      'usuarioOposiciones',
+      'usuarioOposiciones.oposicion',
+    ],
+  });
+
+  if (!usuario) throw new NotFoundException('Usuario no encontrado');
+
+  const activa = usuario.usuarioOposiciones?.find(o => o.activa) || null;
+  const { password, usuarioOposiciones, ...usuarioSeguro } = usuario;
+
+  return {
+    ...usuarioSeguro,
+    oposicionActiva: activa ? activa.oposicion : null,
+  };
+}
+
+
+async verificarLimiteTest(
+  usuarioId: string,
+  numPreguntas: number,
+  tipoTest: string,
+): Promise<{ permitido: boolean; motivo?: string; limite?: number }> {
+  const usuario = await this.findById(usuarioId);
+  if (!usuario) throw new NotFoundException('Usuario no encontrado');
+
+  // Reset diario si es nuevo día
+  const usuarioActualizado = resetearConsumosSiEsNuevoDia(usuario);
+  if (usuarioActualizado.fechaResetConsumo !== usuario.fechaResetConsumo) {
+    await this.repo.save(usuarioActualizado);
+  }
+
+  const limits = getSuscripcionLimits(usuario.suscripcion);
+
+  // Simulacros bloqueados
+  if (tipoTest === 'simulacro' && !limits.simulacros) {
+    return { permitido: false, motivo: 'simulacro_bloqueado', limite: 0 };
+  }
+
+  // Límite por test según tipo
+  const limitePorTest = tipoTest === 'tema'
+    ? limits.preguntasPorTema
+    : limits.preguntasPorTest;
+
+  if (numPreguntas > limitePorTest) {
+    return { permitido: false, motivo: 'limite_por_test', limite: limitePorTest };
+  }
+
+  // Límite diario
+  if (
+    limits.preguntasTestDia !== Infinity &&
+    haSuperadoLimite(usuario.suscripcion, 'preguntasTestDia', usuario.preguntasTestHoy + numPreguntas)
+  ) {
+    const restantes = limits.preguntasTestDia - usuario.preguntasTestHoy;
+    return { permitido: false, motivo: 'limite_diario', limite: Math.max(0, restantes) };
+  }
+
+  return { permitido: true };
+}
+
+async verificarLimiteFlashcards(
+  usuarioId: string,
+  cantidad: number,
+): Promise<{ permitido: boolean; motivo?: string; limite?: number }> {
+  const usuario = await this.findById(usuarioId);
+  if (!usuario) throw new NotFoundException('Usuario no encontrado');
+
+  const usuarioActualizado = resetearConsumosSiEsNuevoDia(usuario);
+  if (usuarioActualizado.fechaResetConsumo !== usuario.fechaResetConsumo) {
+    await this.repo.save(usuarioActualizado);
+  }
+
+  const limits = getSuscripcionLimits(usuario.suscripcion);
+
+  if (
+    limits.flashcardsDia !== Infinity &&
+    haSuperadoLimite(usuario.suscripcion, 'flashcardsDia', usuario.flashcardsHoy + cantidad)
+  ) {
+    const restantes = limits.flashcardsDia - usuario.flashcardsHoy;
+    return { permitido: false, motivo: 'limite_diario_flashcards', limite: Math.max(0, restantes) };
+  }
+
+  return { permitido: true };
+}
+
+  async getEstadisticas(): Promise<any> {
+    const total = await this.repo.count();
+    const conSuscripcion = await this.repo.count({ where: { suscripcion: Not(IsNull()) } });
+
+    const porSuscripcion = await this.repo
+      .createQueryBuilder('u')
+      .select('u.suscripcion', 'suscripcion')
+      .addSelect('COUNT(*)', 'total')
+      .where('u.suscripcion IS NOT NULL')
+      .groupBy('u.suscripcion')
+      .getRawMany();
+
+    const porNivel = await this.repo
+      .createQueryBuilder('u')
+      .select('u.nivel', 'nivel')
+      .addSelect('COUNT(*)', 'total')
+      .groupBy('u.nivel')
+      .orderBy('u.nivel', 'ASC')
+      .getRawMany();
+
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    const hace7dias = new Date(hoy);
+    hace7dias.setDate(hace7dias.getDate() - 7);
+
+    const hace30dias = new Date(hoy);
+    hace30dias.setDate(hace30dias.getDate() - 30);
+
+    const nuevosHoy = await this.repo
+      .createQueryBuilder('u')
+      .where('u.creadoEn >= :hoy', { hoy })
+      .getCount();
+
+    const nuevos7dias = await this.repo
+      .createQueryBuilder('u')
+      .where('u.creadoEn >= :fecha', { fecha: hace7dias })
+      .getCount();
+
+    const nuevos30dias = await this.repo
+      .createQueryBuilder('u')
+      .where('u.creadoEn >= :fecha', { fecha: hace30dias })
+      .getCount();
+
+      
+
+    return {
+      total,
+      conSuscripcion,
+      sinSuscripcion: total - conSuscripcion,
+      porSuscripcion,
+      porNivel,
+      nuevosHoy,
+      nuevos7dias,
+      nuevos30dias,
+    };
+  }
+
+  async subirAvatar(usuarioId: string, buffer: Buffer, mimeType: string): Promise<Usuario> {
+  const path = `usuarios/${usuarioId}/${Date.now()}.jpg`;
+
+  const { error } = await this.supabase.storage
+    .from('avatares')
+    .upload(path, buffer, { contentType: mimeType, upsert: false });
+
+  if (error) throw new Error(`Error subiendo avatar: ${error.message}`);
+
+  const { data: urlData } = await this.supabase.storage
+  .from('avatares')
+  .createSignedUrl(path, 60 * 60 * 24 * 365);
+
+  await this.repo.update(usuarioId, {
+    tipoAvatar: TipoAvatar.FOTO,
+    avatarUrl: urlData?.signedUrl,
+  });
+
+  return this.findById(usuarioId) as Promise<Usuario>;
+}
+
+async cambiarTipoAvatar(usuarioId: string, tipo: 'oplo' | 'foto'): Promise<Usuario> {
+  await this.repo.update(usuarioId, { tipoAvatar: tipo as TipoAvatar });
+  return this.findById(usuarioId) as Promise<Usuario>;
+}
+}
