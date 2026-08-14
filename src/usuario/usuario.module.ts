@@ -6,6 +6,7 @@ import { UsuarioController } from './usuario.controller';
 import { UsuarioOposicion } from './usuario-oposicion.entity';
 import { Oposicion } from '../oposicion/oposicion.entity';
 import { ConfiguracionModule } from '../config/configuracion.module';
+import { PasswordResetService } from './password-reset.service';
 
 @Module({
   imports: [
@@ -16,8 +17,8 @@ import { ConfiguracionModule } from '../config/configuracion.module';
     ]),
     ConfiguracionModule,
   ],
-  providers: [UsuarioService],
-  exports: [UsuarioService],
+ providers: [UsuarioService, PasswordResetService], 
+  exports: [UsuarioService, PasswordResetService], 
   controllers: [UsuarioController],
 })
 export class UsuarioModule {}

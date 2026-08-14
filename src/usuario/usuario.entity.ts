@@ -121,6 +121,12 @@ export class Usuario {
   @Column({ type: 'boolean', default: false })
   compromiso: boolean;
 
+  @Column({ type: 'varchar', nullable: true })
+  resetPasswordToken: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  resetPasswordExpira: Date | null;
+
  
   @Column({
     type: 'enum',

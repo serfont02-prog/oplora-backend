@@ -7,6 +7,8 @@ import { ConfiguracionService } from '../config/configuracion.service';
 import { Controller, Get, Post, Patch, Body, Param, UseGuards, Request, UseInterceptors, UploadedFile, Delete } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { PasswordResetService } from './password-reset.service';
+import { Public } from '../auth/public.decorator';
 
 @Controller('usuarios')
 @UseGuards(JwtAuthGuard)
@@ -14,6 +16,7 @@ export class UsuarioController {
   constructor(
     private readonly service: UsuarioService,
     private readonly configuracionService: ConfiguracionService,
+    private readonly passwordResetService: PasswordResetService,
   ) {}
 
   @Get()
@@ -87,6 +90,23 @@ desactivarOposicion(@Param('oposicionId') oposicionId: string, @Request() req: a
   return this.service.desactivarOposicion(req.user.id, oposicionId);
 }
 
+@Public()
+@Post('solicitar-reset-password')
+solicitarReset(@Body('email') email: string) {
+  return this.passwordResetService.solicitarReset(email);
+}
+
+@Public()
+@Get('validar-token-reset/:token')
+validarToken(@Param('token') token: string) {
+  return this.passwordResetService.validarToken(token);
+}
+
+@Public()
+@Post('resetear-password')
+resetearPassword(@Body('token') token: string, @Body('password') password: string) {
+  return this.passwordResetService.resetearPassword(token, password);
+}
   @Get('estadisticas')
   estadisticas() {
   return this.service.getEstadisticas();
