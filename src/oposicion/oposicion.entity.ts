@@ -23,14 +23,13 @@ export enum TurnoEnum {
   PROMOCION_INTERNA = 'promocion_interna',
 }
 
-/* 🔥 NUEVO */
+
 export enum TipoAdministracionEnum {
   ESTADO = 'estado',
   CCAA = 'ccaa',
   EMPRESA_PUBLICA = 'empresa_publica',
 }
 
-/* 🔥 NUEVO */
 export enum CategoriaEstadoEnum {
   ADMINISTRACION_GENERAL = 'administracion_general',
   SEGURIDAD = 'seguridad',
@@ -58,7 +57,7 @@ export class Oposicion {
   @Column({ default: false })
   activa: boolean;
 
-  // 🔥 NUEVO → NIVEL ALTO
+ 
   @Column({
     type: 'enum',
     enum: TipoAdministracionEnum,
@@ -68,25 +67,16 @@ export class Oposicion {
    @Column({
     type: 'enum',
     enum: CategoriaEstadoEnum,
-    nullable: false,
+    nullable: true,
   })
   categoria: CategoriaEstadoEnum;
 
- 
   @Column({
     type: 'enum',
     enum: SubgrupoEnum,
-    nullable: false,
+    nullable: true,
   })
   subgrupo: SubgrupoEnum;
-
-  @Column({
-    type: 'enum',
-    enum: TurnoEnum,
-    nullable: false,
-    default: TurnoEnum.LIBRE,
-  })
-  turno: TurnoEnum;
 
   @CreateDateColumn()
   creadoEn: Date;
