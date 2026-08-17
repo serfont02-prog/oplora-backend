@@ -1,14 +1,14 @@
 import { EstadoConvocatoria, TipoEjercicio, TurnoEnum } from './convocatoria.entity';
 
 export class CreateConvocatoriaDto {
-  anyo: number;
+  anyo!: number;
   plazas?: number;
   estado?: EstadoConvocatoria;
   turno?: TurnoEnum;
   fechaExamen?: Date;
   urlInap?: string;
   referenciaBoe?: string;
-  oposicionId: string;
+  oposicionId!: string;
   numEjercicios?: number;
   tipoEjercicio?: TipoEjercicio;
   numPreguntas?: number;
