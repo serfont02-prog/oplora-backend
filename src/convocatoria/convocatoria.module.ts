@@ -8,9 +8,10 @@ import { ScraperService } from './scraper.service';
 import { Oposicion } from 'src/oposicion/oposicion.entity';
 import { Tema } from '../tema/tema.entity';
 import { NotaArticulo } from '../normativa/nota-articulo.entity';
+import { TemaNormativa } from '../tema/tema-normativa.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Convocatoria, Oposicion, DocumentoConvocatoria, Tema, NotaArticulo])],
+  imports: [TypeOrmModule.forFeature([Convocatoria, Oposicion, DocumentoConvocatoria, Tema, TemaNormativa, NotaArticulo])],
   controllers: [ConvocatoriaController],
   providers: [ConvocatoriaService, ScraperService],
   exports: [ConvocatoriaService],

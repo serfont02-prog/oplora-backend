@@ -60,10 +60,16 @@ export class TemaService {
     return tema;
   }
 
-  async create(body: Partial<Tema>): Promise<Tema> {
-  const tema = this.temaRepo.create(body);
-  return this.temaRepo.save(tema);
-  }
+      async create(body: any): Promise<Tema> {
+      const { convocatoriaId, ...resto } = body;
+
+      const tema = this.temaRepo.create({
+        ...resto,
+        convocatoria: convocatoriaId ? { id: convocatoriaId } as any : undefined,
+      });
+
+      return this.temaRepo.save(tema);
+    }
 
   async update(id: string, body: any): Promise<Tema> {
     await this.temaRepo.update(id, body);

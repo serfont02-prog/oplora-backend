@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, JoinColumn } from 'typeorm';
 import { Usuario } from './usuario.entity';
 import { Oposicion } from '../oposicion/oposicion.entity';
-
+import { Convocatoria } from '../convocatoria/convocatoria.entity';
 
 @Entity('usuario_oposiciones')
 export class UsuarioOposicion {
@@ -21,4 +21,7 @@ export class UsuarioOposicion {
 
   @CreateDateColumn()
   creadoEn: Date;
+
+  @ManyToOne(() => Convocatoria, { nullable: true })
+  convocatoriaActiva: Convocatoria | null;
 }

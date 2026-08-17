@@ -7,6 +7,7 @@ import { CreateConvocatoriaDto, UpdateConvocatoriaDto } from './convocatoria.dto
 import { Oposicion } from '../oposicion/oposicion.entity';
 import { Tema } from '../tema/tema.entity';
 import { NotaArticulo } from '../normativa/nota-articulo.entity';
+import { TemaNormativa } from '../tema/tema-normativa.entity';
 
 
 @Injectable()
@@ -22,6 +23,8 @@ export class ConvocatoriaService {
     private readonly temaRepo: Repository<Tema>,
     @InjectRepository(NotaArticulo)
     private readonly notaRepo: Repository<NotaArticulo>,
+    @InjectRepository(TemaNormativa)
+    private readonly temaNormativaRepo: Repository<TemaNormativa>,
   ) {}
 
   findByOposicion(oposicionId: string): Promise<Convocatoria[]> {
@@ -156,6 +159,7 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
     plazas: original.plazas,
     estado: 'borrador' as any,
     urlInap: original.urlInap,
+    turno: original.turno,
     numEjercicios: original.numEjercicios,
     tipoEjercicio: original.tipoEjercicio,
     numPreguntas: original.numPreguntas,
@@ -163,12 +167,22 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
     penalizacion: original.penalizacion,
     fraccionPenalizacion: original.fraccionPenalizacion,
     notaMinimaAprobado: original.notaMinimaAprobado,
+    requisitos: original.requisitos,
+    formacionPosterior: original.formacionPosterior,
+    descripcionAdicional: original.descripcionAdicional,
+    generaBolsaEmpleo: original.generaBolsaEmpleo,
+    bolsaEmpleoDescripcion: original.bolsaEmpleoDescripcion,
+    plazasDesglose: original.plazasDesglose,
+    fasesAdicionales: original.fasesAdicionales,
+    puestos: original.puestos,
+    bloquesTemario: original.bloquesTemario,
     oposicion: { id: original.oposicion.id } as any,
   }));
 
   // Copiar temas
   const temas = await this.temaRepo.find({
     where: { convocatoria: { id } },
+    relations: ['normativas', 'normativas.articulo'],
     order: { numero: 'ASC' },
   });
 
@@ -183,6 +197,16 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
       convocatoria: { id: nueva.id } as any,
     }));
     mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
+
+    // ⭐ Copiar vinculación de artículos (TemaNormativa)
+    if (tema.normativas?.length) {
+      for (const tn of tema.normativas) {
+        await this.temaNormativaRepo.save(this.temaNormativaRepo.create({
+          tema: { id: nuevoTema.id } as any,
+          articulo: { id: (tn.articulo as any).id } as any,
+        }));
+      }
+    }
   }
 
   // Copiar datos de usuarios — notas de temas
