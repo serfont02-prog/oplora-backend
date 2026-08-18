@@ -9,12 +9,14 @@ export class CreateConvocatoriaDto {
   urlInap?: string;
   referenciaBoe?: string;
   oposicionId!: string;
-  numEjercicios?: number;
-  tipoEjercicio?: TipoEjercicio;
-  numPreguntas?: number;
-  tiempoMinutos?: number;
+  ejercicios?: {
+    numero: number;
+    tipo: TipoEjercicio;
+    numPreguntas?: number;
+    tiempoMinutos?: number;
+    descripcion?: string;
+  }[];
   permiteBlancos?: boolean;
-  penalizacion?: boolean;
   fraccionPenalizacion?: string;
   notaMinimaAprobado?: number;
   diferenciasAnterior?: string;
@@ -31,7 +33,7 @@ export class CreateConvocatoriaDto {
     otros?: number;
   };
   fasesAdicionales?: {
-    tipo: string;
+    tipo: 'fisica' | 'psicotecnico' | 'entrevista' | 'medico' | 'meritos' | 'otro';
     nombre: string;
     descripcion?: string;
     criterios?: string[];
@@ -59,12 +61,14 @@ export class UpdateConvocatoriaDto {
   fechaExamen?: Date;
   urlInap?: string;
   referenciaBoe?: string;
-  numEjercicios?: number;
-  tipoEjercicio?: TipoEjercicio;
-  numPreguntas?: number;
-  tiempoMinutos?: number;
+  ejercicios?: {
+    numero: number;
+    tipo: TipoEjercicio;
+    numPreguntas?: number;
+    tiempoMinutos?: number;
+    descripcion?: string;
+  }[];
   permiteBlancos?: boolean;
-  penalizacion?: boolean;
   fraccionPenalizacion?: string;
   notaMinimaAprobado?: number;
   diferenciasAnterior?: string;
@@ -81,7 +85,7 @@ export class UpdateConvocatoriaDto {
     otros?: number;
   };
   fasesAdicionales?: {
-    tipo: string;
+    tipo: 'fisica' | 'psicotecnico' | 'entrevista' | 'medico' | 'meritos' | 'otro';
     nombre: string;
     descripcion?: string;
     criterios?: string[];

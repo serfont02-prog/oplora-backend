@@ -31,6 +31,9 @@ export class Tema {
   @Column({ default: true })
   activo: boolean;
 
+  @Column({ nullable: true })
+  bloque: string; // nombre del bloque, debe coincidir con uno de los definidos en Convocatoria.bloquesTemario
+
   @CreateDateColumn()
   creadoEn: Date;
 

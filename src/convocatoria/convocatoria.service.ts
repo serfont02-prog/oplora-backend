@@ -101,10 +101,10 @@ private async actualizarEstadoOposicion(oposicionId: string): Promise<void> {
 }
 
   async update(id: string, dto: UpdateConvocatoriaDto): Promise<Convocatoria> {
-  await this.findOne(id);
-  await this.convocatoriaRepo.update(id, dto);
-  const convocatoria = await this.findOne(id);
-  await this.actualizarEstadoOposicion((convocatoria.oposicion as any).id);
+    await this.findOne(id);
+    await this.convocatoriaRepo.update(id, dto);
+    const convocatoria = await this.findOne(id);
+    await this.actualizarEstadoOposicion((convocatoria.oposicion as any).id);
   return convocatoria;
   }
 
@@ -160,11 +160,7 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
     estado: 'borrador' as any,
     urlInap: original.urlInap,
     turno: original.turno,
-    numEjercicios: original.numEjercicios,
-    tipoEjercicio: original.tipoEjercicio,
-    numPreguntas: original.numPreguntas,
-    tiempoMinutos: original.tiempoMinutos,
-    penalizacion: original.penalizacion,
+    ejercicios: original.ejercicios, 
     fraccionPenalizacion: original.fraccionPenalizacion,
     notaMinimaAprobado: original.notaMinimaAprobado,
     requisitos: original.requisitos,

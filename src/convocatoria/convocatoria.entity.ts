@@ -60,24 +60,17 @@ export class Convocatoria {
   @CreateDateColumn()
   creadoEn: Date;
 
-  // ── Prueba teórica ──
-  @Column({ nullable: true })
-  numEjercicios: number;
-
-  @Column({ type: 'enum', enum: TipoEjercicio, nullable: true })
-  tipoEjercicio: TipoEjercicio;
-
-  @Column({ nullable: true })
-  numPreguntas: number;
-
-  @Column({ nullable: true })
-  tiempoMinutos: number;
-
+  @Column({ type: 'jsonb', nullable: true })
+  ejercicios: {
+    numero: number;
+    tipo: TipoEjercicio;
+    numPreguntas?: number;
+    tiempoMinutos?: number;
+    descripcion?: string;
+  }[];
+  
   @Column({ default: true })
   permiteBlancos: boolean;
-
-  @Column({ default: false })
-  penalizacion: boolean;
 
   @Column({ nullable: true })
   fraccionPenalizacion: string;
