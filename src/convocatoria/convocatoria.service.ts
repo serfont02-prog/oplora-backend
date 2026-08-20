@@ -8,6 +8,10 @@ import { Oposicion } from '../oposicion/oposicion.entity';
 import { Tema } from '../tema/tema.entity';
 import { NotaArticulo } from '../normativa/nota-articulo.entity';
 import { TemaNormativa } from '../tema/tema-normativa.entity';
+import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { NotificacionService } from '../notificacion/notificacion.service';
+
+
 
 
 @Injectable()
@@ -25,6 +29,11 @@ export class ConvocatoriaService {
     private readonly notaRepo: Repository<NotaArticulo>,
     @InjectRepository(TemaNormativa)
     private readonly temaNormativaRepo: Repository<TemaNormativa>,
+    @InjectRepository(UsuarioOposicion) // ⭐ nuevo
+    private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
+
+    private readonly notificacionService: NotificacionService, 
+
   ) {}
 
   findByOposicion(oposicionId: string): Promise<Convocatoria[]> {
@@ -221,6 +230,25 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
     }
   }
 
+  // Notificar a usuarios vinculados a la convocatoria anterior
+const usuariosVinculados = await this.usuarioOposicionRepo.find({
+  where: { convocatoriaActiva: { id: original.id } },
+  relations: ['usuario'],
+});
+
+for (const uo of usuariosVinculados) {
+  await this.notificacionService.crear({
+    usuarioId: (uo.usuario as any).id,
+    tipo: 'nueva_convocatoria' as any,
+    titulo: `Nueva convocatoria ${nueva.anyo} disponible`, 
+    mensaje: `Ya está disponible la convocatoria ${nueva.anyo} de tu oposición. ¿Quieres cambiarte?`,
+    prioridad: 'alta' as any,
+    urlAccion: `/app/oposicion/${original.oposicion.id}/cambiar-convocatoria`,
+  });
+}
+
+
+
   return nueva;
 }
 
@@ -276,6 +304,33 @@ async getNoticiasByOposicion(oposicionId: string, limite: number = 3) {
       descripcion: doc.descripcion,
       tipo: doc.tipo,
       fecha: doc.fechaPublicacion ?? doc.detectadoEn, // ⭐ para mostrar, sí usa la real si existe
+      urlPdf: doc.urlPdf,
+    };
+  });
+}
+
+async getDocumentosCompletos(oposicionId: string) {
+  const convocatorias = await this.convocatoriaRepo.find({
+    where: { oposicion: { id: oposicionId } },
+    order: { anyo: 'DESC' },
+  });
+  if (convocatorias.length === 0) return [];
+
+  const convocatoriaRelevante = convocatorias.find((c) => c.estado === 'activa') ?? convocatorias[0];
+
+  const documentos = await this.documentoRepo.find({
+    where: { convocatoria: { id: convocatoriaRelevante.id } },
+    order: { detectadoEn: 'DESC' },
+  });
+
+  return documentos.map((doc) => {
+    const plantilla = this.plantillasNoticia[doc.tipo] ?? this.plantillasNoticia.otro;
+    return {
+      id: doc.id,
+      titular: plantilla(doc, convocatoriaRelevante.anyo),
+      descripcion: doc.descripcion,
+      tipo: doc.tipo,
+      fecha: doc.fechaPublicacion ?? doc.detectadoEn,
       urlPdf: doc.urlPdf,
     };
   });

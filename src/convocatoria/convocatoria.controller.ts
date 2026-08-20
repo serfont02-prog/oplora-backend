@@ -33,16 +33,20 @@ export class ConvocatoriaController {
   return this.service.getNoticiasByOposicion(oposicionId, limite ? Number(limite) : 3);
 }
 
+  @Get('oposicion/:oposicionId/documentos-completos')
+  getDocumentosCompletos(@Param('oposicionId') oposicionId: string) {
+    return this.service.getDocumentosCompletos(oposicionId);
+  }
 
-@Patch(':id/url-inap')
-async actualizarUrlInap(
-  @Param('id') id: string,
-  @Body('urlInap') urlInap: string,
-) {
-  await this.service.reprocesarUrlInap(id, urlInap);
-  await this.scraperService.scrapeConvocatoria(id, urlInap);
-  return { mensaje: 'URL actualizada y documentos reprocesados' };
-}
+  @Patch(':id/url-inap')
+  async actualizarUrlInap(
+    @Param('id') id: string,
+    @Body('urlInap') urlInap: string,
+  ) {
+    await this.service.reprocesarUrlInap(id, urlInap);
+    await this.scraperService.scrapeConvocatoria(id, urlInap);
+    return { mensaje: 'URL actualizada y documentos reprocesados' };
+  }
 
 
   @Post(':id/copiar')

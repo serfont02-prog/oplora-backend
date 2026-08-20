@@ -7,6 +7,8 @@ import { UsuarioOposicion } from './usuario-oposicion.entity';
 import { Oposicion } from '../oposicion/oposicion.entity';
 import { ConfiguracionModule } from '../config/configuracion.module';
 import { PasswordResetService } from './password-reset.service';
+import { UsuarioConvocatoriaHistorial } from './usuario-convocatoria-historial.entity';
+import { Convocatoria } from '../convocatoria/convocatoria.entity';
 
 @Module({
   imports: [
@@ -14,6 +16,8 @@ import { PasswordResetService } from './password-reset.service';
       Usuario,
       UsuarioOposicion,
       Oposicion,
+      UsuarioConvocatoriaHistorial,
+      Convocatoria,
     ]),
     ConfiguracionModule,
   ],

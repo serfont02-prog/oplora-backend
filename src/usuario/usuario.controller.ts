@@ -112,6 +112,20 @@ resetearPassword(@Body('token') token: string, @Body('password') password: strin
   return this.service.getEstadisticas();
 }
 
+@Get('convocatorias-disponibles/:oposicionId')
+getConvocatoriasDisponibles(@Param('oposicionId') oposicionId: string, @Request() req: any) {
+  return this.service.getConvocatoriasDisponibles(req.user.id, oposicionId);
+}
+
+@Post('cambiar-convocatoria')
+cambiarConvocatoria(
+  @Body('oposicionId') oposicionId: string,
+  @Body('convocatoriaId') convocatoriaId: string,
+  @Request() req: any,
+) {
+  return this.service.cambiarConvocatoria(req.user.id, oposicionId, convocatoriaId);
+}
+
   @Post('avatar')
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('archivo', { storage: memoryStorage() }))
@@ -169,4 +183,7 @@ async actualizarNivel(
   return this.service.actualizarNivel(req.user.id, nivel);
 }
 
+
 }
+
+

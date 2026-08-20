@@ -19,6 +19,7 @@ export class LeyService {
     private readonly diffRepo: Repository<DiffVersion>,
     @InjectRepository(OposicionLey)
     private readonly oposicionLeyRepo: Repository<OposicionLey>,
+    
   ) {}
 
   // ─── LEYES ───────────────────────────────────────────────
@@ -205,4 +206,33 @@ export class LeyService {
   async eliminar(id: string): Promise<void> {
   await this.leyRepo.delete(id);
 }
+
+async getNoticiasLegislacion(oposicionId: string, limite?: number) {
+  const oposicionLeyes = await this.oposicionLeyRepo.find({
+    where: { oposicion: { id: oposicionId } },
+    relations: ['ley'],
+  });
+
+  const leyIds = oposicionLeyes.map((ol) => ol.ley.id);
+  if (leyIds.length === 0) return [];
+
+  const query = this.versionRepo
+    .createQueryBuilder('v')
+    .leftJoinAndSelect('v.ley', 'ley')
+    .where('v.leyId IN (:...leyIds)', { leyIds })
+    .orderBy('v.fechaPublicacion', 'DESC');
+
+  if (limite) query.take(limite);
+
+  const versiones = await query.getMany();
+
+  return versiones.map((v) => ({
+    id: v.id,
+    titular: `${v.ley.nombre} — ${v.tipoCambio === 'inicial' ? 'Nueva versión publicada' : 'Actualización normativa'}`,
+    descripcion: v.notas || undefined,
+    fecha: v.fechaPublicacion,
+    leyId: v.ley.id,
+  }));
+}
+
 }

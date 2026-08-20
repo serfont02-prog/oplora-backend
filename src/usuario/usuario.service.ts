@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException  } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull } from 'typeorm';
 import { Usuario } from './usuario.entity';
@@ -10,6 +10,8 @@ import { resetearConsumosSiEsNuevoDia } from '../common/helpers/consumo.helper';
 import { getSuscripcionLimits, haSuperadoLimite } from '../common/helpers/plan.helper';
 import { createClient } from '@supabase/supabase-js';
 import { TipoAvatar } from './usuario.entity';
+import { Convocatoria } from 'src/convocatoria/convocatoria.entity';
+import { UsuarioConvocatoriaHistorial } from './usuario-convocatoria-historial.entity';
 
 
 
@@ -29,6 +31,12 @@ export class UsuarioService {
 
     @InjectRepository(Oposicion)
     private readonly oposicionRepo: Repository<Oposicion>,
+
+    @InjectRepository(Convocatoria)
+    private readonly convocatoriaRepo: Repository<Convocatoria>,
+
+    @InjectRepository(UsuarioConvocatoriaHistorial)
+    private readonly historialRepo: Repository<UsuarioConvocatoriaHistorial>,
   ) {}
 
   // ---------------------------------------------------------
@@ -80,6 +88,25 @@ export class UsuarioService {
 
   // 4. Guardar la relación
   await this.usuarioOposicionRepo.save(relacion);
+
+  // 5. Asignar convocatoria
+    const convocatorias = await this.convocatoriaRepo.find({
+      where: { oposicion: { id: oposicionId } },
+      order: { anyo: 'DESC' },
+    });
+    const convocatoriaActiva = convocatorias.find((c) => c.estado === 'activa') ?? convocatorias[0];
+
+    if (convocatoriaActiva) {
+      await this.usuarioOposicionRepo.update(
+        { usuario: { id: usuarioId }, oposicion: { id: oposicionId } } as any,
+        { convocatoriaActiva: { id: convocatoriaActiva.id } as any },
+      );
+
+      await this.historialRepo.save(this.historialRepo.create({
+        usuario: { id: usuarioId } as any,
+        convocatoria: { id: convocatoriaActiva.id } as any,
+      }));
+    }
 
   return relacion;
 }
@@ -436,5 +463,74 @@ async verificarLimiteFlashcards(
 async cambiarTipoAvatar(usuarioId: string, tipo: 'oplo' | 'foto'): Promise<Usuario> {
   await this.repo.update(usuarioId, { tipoAvatar: tipo as TipoAvatar });
   return this.findById(usuarioId) as Promise<Usuario>;
+}
+
+async getConvocatoriasDisponibles(usuarioId: string, oposicionId: string) {
+  const uo = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId }, oposicion: { id: oposicionId } },
+    relations: ['convocatoriaActiva'],
+  });
+
+  const historial = await this.historialRepo.find({
+    where: { usuario: { id: usuarioId }, convocatoria: { oposicion: { id: oposicionId } } as any },
+    relations: ['convocatoria'],
+  });
+
+  const anyosVisitados = historial.map((h) => h.convocatoria.anyo);
+  const anyoMinimo = anyosVisitados.length > 0 ? Math.min(...anyosVisitados) : (uo?.convocatoriaActiva?.anyo ?? 0);
+
+  const todasLasConvocatorias = await this.convocatoriaRepo.find({
+    where: { oposicion: { id: oposicionId } },
+    order: { anyo: 'DESC' },
+  });
+
+  return {
+    actual: uo?.convocatoriaActiva ?? null,
+    disponibles: todasLasConvocatorias.filter((c) => c.anyo >= anyoMinimo),
+  };
+}
+
+async cambiarConvocatoria(usuarioId: string, oposicionId: string, convocatoriaNuevaId: string): Promise<void> {
+  const uo = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId }, oposicion: { id: oposicionId } },
+    relations: ['convocatoriaActiva'],
+  });
+  if (!uo) throw new NotFoundException('No estás vinculado a esta oposición');
+
+  const nueva = await this.convocatoriaRepo.findOne({ where: { id: convocatoriaNuevaId } });
+  if (!nueva) throw new NotFoundException('Convocatoria no encontrada');
+
+  // Verificar límite: no puede ir a un año anterior al mínimo visitado
+  const historial = await this.historialRepo.find({
+    where: { usuario: { id: usuarioId }, convocatoria: { oposicion: { id: oposicionId } } as any },
+    relations: ['convocatoria'],
+  });
+  const anyosVisitados = historial.map((h) => h.convocatoria.anyo);
+  const anyoMinimo = anyosVisitados.length > 0 ? Math.min(...anyosVisitados) : (uo.convocatoriaActiva?.anyo ?? 0);
+
+  if (nueva.anyo < anyoMinimo) {
+    throw new BadRequestException('No puedes volver a una convocatoria anterior a la primera que visitaste');
+  }
+
+  const convocatoriaOrigenId = uo.convocatoriaActiva?.id;
+
+  // Cambiar convocatoria activa
+  await this.usuarioOposicionRepo.update(uo.id, {
+    convocatoriaActiva: { id: convocatoriaNuevaId } as any,
+  });
+
+  // Registrar en historial (si no estaba ya)
+  const yaVisitada = historial.some((h) => h.convocatoria.id === convocatoriaNuevaId);
+  if (!yaVisitada) {
+    await this.historialRepo.save(this.historialRepo.create({
+      usuario: { id: usuarioId } as any,
+      convocatoria: { id: convocatoriaNuevaId } as any,
+    }));
+  }
+
+  // Copiar progreso (siempre, en cada cambio, con los datos más recientes)
+  //if (convocatoriaOrigenId) {
+    //await this.copiarProgresoEntreConvocatorias(usuarioId, convocatoriaOrigenId, convocatoriaNuevaId);
+  //}
 }
 }

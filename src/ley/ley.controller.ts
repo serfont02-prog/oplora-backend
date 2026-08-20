@@ -24,6 +24,14 @@ export class LeyController {
     return this.service.findAll(search);
   }
 
+  @Get('oposicion/:oposicionId/noticias-legislacion')
+getNoticiasLegislacion(
+  @Param('oposicionId') oposicionId: string,
+  @Query('limite') limite: string,
+) {
+  return this.service.getNoticiasLegislacion(oposicionId, limite ? Number(limite) : undefined);
+}
+
   @Get('oposicion/:oposicionId')
   findByOposicion(@Param('oposicionId') oposicionId: string) {
     return this.service.findByOposicion(oposicionId);
