@@ -10,13 +10,15 @@
  *
  * Versión extensa con comentarios y formato legible.
  *
- * Cambios clave:
+ * Cambios clave en esta versión:
  * - esTituloNivel2 corregido (sin "|| true")
  * - bullets detectados por carácter + indentación
  * - subapartados A), B), ... añadidos como párrafo propio (salto de línea)
  * - títulos 1.1 / 1.2 generan salto de línea (flush antes y bloque propio)
  * - EJEMPLOS tratados de forma simple (sin caja especial)
  * - Cierre de párrafo por punto y aparte (regla estricta)
+ * - Eliminadas las entradas "EJEMPLO" / "EJEMPLOS" de TITULOS_DESTACADOS
+ * - Detección temprana de líneas de tipo "EJEMPLO" para añadirlas al bufferParrafo
  */
 
 import {
@@ -117,6 +119,11 @@ const REGEX_LISTA_NUMERADA = /^(\d+)\.\s+(.+)$/;
 const REGEX_LISTA_ORDINAL = /^(\d+)[.ºªº]\s+(.+)$/;
 const REGEX_ARTICULO_LEGAL = /^art[íi]culo\s+(\d+(?:\.\d+)?)/i;
 
+// =====================================================
+// TITULOS DESTACADOS (cajas tipo "IMPORTANTE", "ESQUEMA", etc.)
+// Nota: se han eliminado "EJEMPLO" y "EJEMPLOS" para evitar sombreado.
+// =====================================================
+
 const TITULOS_DESTACADOS = [
   'ESQUEMA',
   'ESQUEMA DE MEMORIZACIÓN',
@@ -132,8 +139,7 @@ const TITULOS_DESTACADOS = [
   'IMPORTANTE',
   'ATENCIÓN',
   'RECUERDA',
-  'EJEMPLO',
-  'EJEMPLOS',
+  // 'EJEMPLO', 'EJEMPLOS'  <-- eliminados intencionadamente
   'REQUISITOS',
   'PLAZOS'
 ];
@@ -345,7 +351,22 @@ export function clasificarDocumento(
         continue;
       }
 
-      // DESTACADOS
+      // -----------------------------
+      // TRATAR "EJEMPLO(S)" / "IDEA CLAVE" / "💡" COMO TEXTO NORMAL
+      // -----------------------------
+      // Si la línea empieza por "💡 EJEMPLOS", "EJEMPLOS", "EJEMPLO" o "IDEA CLAVE"
+      // la tratamos como parte del párrafo y NO la convertimos en destacado.
+      const RE_EJEMPLOS_SIMPLE = /^\s*(💡\s*)?(EJEMPLO|EJEMPLOS|IDEA CLAVE)\b[:\-]?\s*/i;
+      if (RE_EJEMPLOS_SIMPLE.test(texto)) {
+        // Quitamos el emoji si existe y añadimos al bufferParrafo
+        const textoLimpio = texto.replace(/^\s*💡\s*/,'').trim();
+        bufferParrafo.push(textoLimpio);
+        ultimoTipo = 'parrafo';
+        if (DEBUG) console.debug('EJEMPLO tratado como texto normal', { textoLimpio });
+        continue;
+      }
+
+      // DESTACADOS (otras etiquetas)
       if (esTituloDestacado(texto, linea, fontSizeBase)) {
         flushParrafo();
         flushLista();

@@ -12,7 +12,7 @@ import { NormativaModule } from '../normativa/normativa.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ApunteOplora, ProgresoLectura, SubrayadoApunte]),
+    TypeOrmModule.forFeature([ApunteOplora, ProgresoLectura, SubrayadoApunte, ProgresoLectura, SubrayadoApunte]),
     MulterModule.register({ storage: memoryStorage() }),
     forwardRef(() => NormativaModule),
   ],
