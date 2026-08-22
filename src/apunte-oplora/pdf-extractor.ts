@@ -29,71 +29,68 @@ export async function extraerLineasPDF(buffer: Buffer): Promise<PaginaExtraida[]
     const viewport = page.getViewport({ scale: 1 });
     const textContent = await page.getTextContent();
 
-    const itemsPorY: Map<number, any[]> = new Map();
+    const rawLines: { y: number; x: number; texto: string; fontSize: number; fontName: string; bold: boolean }[] = [];
 
     for (const item of textContent.items as any[]) {
       if (!item.str || item.str.trim() === '') continue;
 
-      const yReal = item.transform[5];
-      const fontSize = Math.abs(item.transform[3]);
-
-      // Tolerancia REAL basada en fontSize
-      const tolerancia = fontSize * 0.35; // este valor funciona perfecto en PDFs de apuntes
-
-      let yAgrupado: number | undefined;
-
-      for (const yExistente of itemsPorY.keys()) {
-        if (Math.abs(yExistente - yReal) <= tolerancia) {
-          yAgrupado = yExistente;
-          break;
-        }
-      }
-
-      if (yAgrupado === undefined) {
-        yAgrupado = yReal;
-        itemsPorY.set(yAgrupado, []);
-      }
-
-      itemsPorY.get(yAgrupado)!.push(item);
+      rawLines.push({
+        texto: item.str.trim(),
+        x: item.transform[4],
+        y: item.transform[5],
+        fontSize: Math.abs(item.transform[3]),
+        fontName: item.fontName ?? '',
+        bold: /bold|black|heavy|medium/i.test(item.fontName ?? '')
+      });
     }
 
-    const yOrdenados = Array.from(itemsPorY.keys()).sort((a, b) => b - a);
+    // Ordenar por Y descendente
+    rawLines.sort((a, b) => b.y - a.y);
 
     const lineas: LineaExtraida[] = [];
+    let buffer = '';
+    let lastY: number | undefined = undefined;
 
-    for (const y of yOrdenados) {
-      const items = itemsPorY.get(y)!.sort((a, b) => a.transform[4] - b.transform[4]);
-
-      let texto = '';
-      let lastX = null;
-
-      for (const it of items) {
-        const x = it.transform[4];
-
-        if (lastX !== null && x - lastX > it.width * 0.6) {
-          texto += ' ';
-        }
-
-        texto += it.str;
-        lastX = x + it.width;
+    for (const l of rawLines) {
+     if (lastY === undefined) {
+       buffer = l.texto;
+        lastY = l.y;
+        continue;
       }
 
-      texto = texto.trim();
-      if (!texto) continue;
+      const saltoY = Math.abs(l.y - lastY);
 
-      const primerItem = items[0];
-      const fontSize = Math.round(Math.abs(primerItem.transform[3]) * 10) / 10;
-      const fontName = primerItem.fontName ?? '';
-      const bold = /bold|black|heavy|medium/i.test(fontName);
+      // Si el salto vertical es pequeño → misma línea/párrafo
+      if (saltoY < 8) {
+        buffer += ' ' + l.texto;
+      } else {
+        // Nueva línea real
+        lineas.push({
+          texto: buffer.trim(),
+          x: 0,
+          y: lastY,
+          fontSize: l.fontSize,
+          fontName: l.fontName,
+          bold: l.bold,
+          pagina: numPagina
+        });
 
+        buffer = l.texto;
+      }
+
+      lastY = l.y;
+    }
+
+    // Última línea
+    if (buffer.trim().length > 0) {
       lineas.push({
-        texto,
-        x: primerItem.transform[4],
-        y,
-        fontSize,
-        fontName,
-        bold,
-        pagina: numPagina,
+        texto: buffer.trim(),
+        x: 0,
+        y: lastY!,
+        fontSize: rawLines[rawLines.length - 1].fontSize,
+        fontName: rawLines[rawLines.length - 1].fontName,
+        bold: rawLines[rawLines.length - 1].bold,
+        pagina: numPagina
       });
     }
 

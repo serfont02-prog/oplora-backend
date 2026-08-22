@@ -117,8 +117,6 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
 
   let destacadoAbierto: { titulo: string; contenido: Bloque[]; idInterno: number } | null = null;
 
-  let ultimaLineaY: number | null = null;
-
   const flushTitulo = () => {
     if (!bufferTitulo) return;
     const texto = normalizarEspacios(bufferTitulo.lineas.join(' '));
@@ -225,19 +223,6 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
             (REGEX_SUBTITULO_NUMERADO.test(texto) ||
              REGEX_SUBAPARTADO_LETRA.test(texto))));
 
-      // Detectar si esta línea continúa el párrafo anterior
-      const saltoY = Math.abs(linea.y - (ultimaLineaY ?? linea.y));
-
-      const esContinuacionParrafo =
-        saltoY < 12 &&
-        !esBulletPorIndentacion &&
-        !esTitulo1 &&
-        !esTitulo2 &&
-        !matchArticulo &&
-        !esCajaDestacado(texto);
-
-      ultimaLineaY = linea.y;
-
       // -------------------------------
       // LISTAS
       // -------------------------------
@@ -273,15 +258,22 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
       flushTitulo();
 
       // -------------------------------
-      // PÁRRAFOS (UNIFICADOS)
+      // PÁRRAFOS (solo punto y aparte)
       // -------------------------------
-      if (esContinuacionParrafo) {
+
+      const terminaEnPunto =
+        texto.endsWith('.') ||
+        texto.endsWith('.”') ||
+        texto.endsWith('".');
+
+      if (!terminaEnPunto) {
         bufferParrafo.push(texto);
         continue;
       }
 
-      flushParrafo();
       bufferParrafo.push(texto);
+      flushParrafo();
+      continue;
     }
   }
 
