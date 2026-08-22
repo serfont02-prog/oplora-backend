@@ -32,8 +32,8 @@ export interface BloqueArticuloLegal {
 export interface BloqueDestacado {
   id: number;
   tipo: 'destacado';
-  titulo: string; // ej: "ESQUEMA DE MEMORIZACIÓN"
-  contenido: Bloque[]; // párrafos/listas que van dentro de la caja
+  titulo: string;
+  contenido: Bloque[];
 }
 
 export type Bloque = BloqueTitulo | BloqueParrafo | BloqueLista | BloqueArticuloLegal | BloqueDestacado;
@@ -58,27 +58,37 @@ export interface DocumentoLectura {
   };
 }
 
-// Patrones de detección
-const REGEX_BULLET = /^[•\-\*▪◦]\s*/;
-const REGEX_NUMERADO_LISTA = /^(\d+[\.\)]|[a-z][\.\)])\s+/; // ⭐ quitado /i — letras minúsculas solo, para no chocar con subapartados en mayúscula
-const REGEX_ARTICULO_LEGAL = /^Art[íi]culo\s+(\d+[\.\d]*)/i;
-const REGEX_TITULO_NUMERADO = /^(\d+)\.\s+[A-ZÁÉÍÓÚÑ]/; // "1. La Constitución"
-const REGEX_SUBTITULO_NUMERADO = /^(\d+\.\d+)\.?\s+[A-ZÁÉÍÓÚÑ]/; // "1.1. Concepto"
-const REGEX_SUBAPARTADO_LETRA = /^[A-Z]\)\s+[A-ZÁÉÍÓÚÑ]/; // ⭐ nuevo: "A) Derecho objetivo"
+// -------------------------------
+// PATRONES OPTIMIZADOS
+// -------------------------------
 
-// ⭐ Palabras clave que identifican una caja de repaso/aviso (no un título de contenido normal)
-const PALABRAS_CLAVE_DESTACADO = ['ESQUEMA', 'MEMORIZA', 'PREGUNTA', 'FRECUENTE', 'TRUCO', 'RECUERDA', 'IMPORTANTE', 'ATENCIÓN', 'CLAVE'];
+// Añadido "·" del PDF
+const REGEX_BULLET = /^[•\-\*▪◦·]\s*/;
 
-function esTextoTodoMayusculas(texto: string): boolean {
-  const letras = texto.replace(/[^A-ZÁÉÍÓÚÑa-záéíóúñ]/g, '');
-  if (letras.length < 3) return false;
-  return letras === letras.toUpperCase() && letras !== letras.toLowerCase();
-}
+// Listas numeradas
+const REGEX_NUMERADO_LISTA = /^(\d+[\.\)]|[a-z][\.\)])\s+/;
+
+// Artículos legales del Código Civil
+const REGEX_ARTICULO_LEGAL = /art[íi]culo\s+(\d+)/i;
+
+// Títulos numerados (sin exigir mayúsculas)
+const REGEX_TITULO_NUMERADO = /^(\d+)\.\s+/;
+
+// Subtítulos tipo "1.1."
+const REGEX_SUBTITULO_NUMERADO = /^(\d+\.\d+)\.?\s+/;
+
+// Subapartados tipo "A) Derecho objetivo"
+const REGEX_SUBAPARTADO_LETRA = /^[A-Z]\)\s+/;
+
+// Palabras clave para cajas destacadas
+const PALABRAS_CLAVE_DESTACADO = [
+  'ESQUEMA', 'MEMORIZA', 'PREGUNTA', 'FRECUENTE',
+  'TRUCO', 'RECUERDA', 'IMPORTANTE', 'ATENCIÓN', 'CLAVE'
+];
 
 function esCajaDestacado(texto: string): boolean {
-  if (!esTextoTodoMayusculas(texto)) return false;
-  const textoUpper = texto.toUpperCase();
-  return PALABRAS_CLAVE_DESTACADO.some((palabra) => textoUpper.includes(palabra));
+  const upper = texto.toUpperCase();
+  return PALABRAS_CLAVE_DESTACADO.some((p) => upper.includes(p));
 }
 
 function limpiarTextoBullet(texto: string): string {
@@ -88,6 +98,19 @@ function limpiarTextoBullet(texto: string): string {
 function esLineaDeLista(texto: string): boolean {
   return REGEX_BULLET.test(texto) || REGEX_NUMERADO_LISTA.test(texto);
 }
+
+function normalizarEspacios(texto: string): string {
+  return texto
+    .replace(/([a-záéíóúñ])([A-ZÁÉÍÓÚÑ])/g, '$1 $2')
+    .replace(/(\d)([a-zA-ZáéíóúÁÉÍÓÚñÑ])/g, '$1 $2')
+    .replace(/([a-zA-ZáéíóúñÁÉÍÓÚÑ])(\()/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// -------------------------------
+// CLASIFICADOR PRINCIPAL
+// -------------------------------
 
 export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: string): DocumentoLectura {
   const fontSizeBase = calcularFontSizeBase(paginas);
@@ -105,27 +128,29 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
   let bufferTitulo: { nivel: number; lineas: string[] } | null = null;
   let ultimoFueItemLista = false;
 
-  // ⭐ Estado de "caja destacada" abierta — acumula bloques hasta que aparezca contenido nuevo de nivel normal
   let destacadoAbierto: { titulo: string; contenido: Bloque[]; idInterno: number } | null = null;
 
   const flushTitulo = () => {
     if (!bufferTitulo) return;
-    const texto = normalizarEspacios(bufferTitulo.lineas.join(' ').replace(/\s+/g, ' ').trim());
-    bloques.push({ id: idCounter++, tipo: 'titulo', nivel: bufferTitulo.nivel, texto });
-    indice.push({ titulo: texto, nivel: bufferTitulo.nivel, bloqueId: bloques[bloques.length - 1].id });
+    const texto = normalizarEspacios(bufferTitulo.lineas.join(' ').trim());
+    const bloque: BloqueTitulo = {
+      id: idCounter++,
+      tipo: 'titulo',
+      nivel: bufferTitulo.nivel,
+      texto
+    };
+    bloques.push(bloque);
+    indice.push({ titulo: texto, nivel: bufferTitulo.nivel, bloqueId: bloque.id });
     bufferTitulo = null;
   };
 
   const flushParrafo = () => {
     if (bufferParrafo.length === 0) return;
-    const texto = normalizarEspacios(bufferParrafo.join(' ').replace(/\s+/g, ' ').trim());
+    const texto = normalizarEspacios(bufferParrafo.join(' ').trim());
     if (texto.length > 0) {
       const bloque: BloqueParrafo = { id: idCounter++, tipo: 'parrafo', texto };
-      if (destacadoAbierto) {
-        destacadoAbierto.contenido.push(bloque);
-      } else {
-        bloques.push(bloque);
-      }
+      if (destacadoAbierto) destacadoAbierto.contenido.push(bloque);
+      else bloques.push(bloque);
     }
     bufferParrafo = [];
   };
@@ -136,13 +161,10 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
       id: idCounter++,
       tipo: 'lista',
       ordenada: bufferListaOrdenada,
-      items: bufferListaItems.map((item) => normalizarEspacios(item)),
+      items: bufferListaItems.map(normalizarEspacios)
     };
-    if (destacadoAbierto) {
-      destacadoAbierto.contenido.push(bloque);
-    } else {
-      bloques.push(bloque);
-    }
+    if (destacadoAbierto) destacadoAbierto.contenido.push(bloque);
+    else bloques.push(bloque);
     bufferListaItems = [];
     ultimoFueItemLista = false;
   };
@@ -153,30 +175,37 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
       id: destacadoAbierto.idInterno,
       tipo: 'destacado',
       titulo: destacadoAbierto.titulo,
-      contenido: destacadoAbierto.contenido,
+      contenido: destacadoAbierto.contenido
     });
     destacadoAbierto = null;
   };
+
+  // -------------------------------
+  // RECORRIDO DEL PDF
+  // -------------------------------
 
   for (const pagina of paginas) {
     for (const linea of pagina.lineas) {
       const texto = linea.texto.trim();
       if (!texto) continue;
 
-      if (pagina.pagina === 1 && linea.fontSize >= umbralPortada) {
-        continue;
-      }
+      if (pagina.pagina === 1 && linea.fontSize >= umbralPortada) continue;
 
-      // ⭐ Caja destacada: abre un nuevo bloque especial
+      // Caja destacada
       if (linea.bold && esCajaDestacado(texto)) {
         flushTitulo();
         flushParrafo();
         flushLista();
-        cerrarDestacado(); // cierra una anterior si la hubiera
-        destacadoAbierto = { titulo: normalizarEspacios(texto), contenido: [], idInterno: idCounter++ };
+        cerrarDestacado();
+        destacadoAbierto = {
+          titulo: normalizarEspacios(texto),
+          contenido: [],
+          idInterno: idCounter++
+        };
         continue;
       }
 
+      // Artículo legal
       const matchArticulo = texto.match(REGEX_ARTICULO_LEGAL);
       if (matchArticulo) {
         flushTitulo();
@@ -187,26 +216,30 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
           id: idCounter++,
           tipo: 'articulo_legal',
           numero: matchArticulo[1],
-          texto: normalizarEspacios(texto),
+          texto: normalizarEspacios(texto)
         });
         continue;
       }
 
-      // ⭐ Título: por tamaño de fuente OR por patrón+negrita (compatibilidad con ambos estilos de PDF)
-      const esTitulo1 = linea.fontSize >= umbralTitulo1
-        || (linea.bold && REGEX_TITULO_NUMERADO.test(texto));
-      const esTitulo2 = !esTitulo1 && (
-        linea.fontSize >= umbralTitulo2
-        || (linea.bold && (REGEX_SUBTITULO_NUMERADO.test(texto) || REGEX_SUBAPARTADO_LETRA.test(texto)))
-      );
+      // Títulos
+      const esTitulo1 =
+        linea.fontSize >= umbralTitulo1 ||
+        (linea.bold && REGEX_TITULO_NUMERADO.test(texto));
+
+      const esTitulo2 =
+        !esTitulo1 &&
+        (linea.fontSize >= umbralTitulo2 ||
+          (linea.bold &&
+            (REGEX_SUBTITULO_NUMERADO.test(texto) ||
+             REGEX_SUBAPARTADO_LETRA.test(texto))));
 
       if (esTitulo1 || esTitulo2) {
-        // Un título cierra cualquier caja destacada abierta (la caja terminó)
         cerrarDestacado();
-
-        const nivelActual = esTitulo1 ? 1 : (REGEX_SUBAPARTADO_LETRA.test(texto) ? 3 : 2);
         flushParrafo();
         flushLista();
+
+        const nivelActual = esTitulo1 ? 1 :
+          REGEX_SUBAPARTADO_LETRA.test(texto) ? 3 : 2;
 
         if (bufferTitulo && bufferTitulo.nivel === nivelActual) {
           bufferTitulo.lineas.push(texto);
@@ -219,28 +252,28 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
 
       flushTitulo();
 
+      // Listas
       if (esLineaDeLista(texto)) {
         flushParrafo();
         const esNumerada = REGEX_NUMERADO_LISTA.test(texto) && !REGEX_BULLET.test(texto);
-        if (bufferListaItems.length === 0) {
-          bufferListaOrdenada = esNumerada;
-        }
+        if (bufferListaItems.length === 0) bufferListaOrdenada = esNumerada;
         bufferListaItems.push(limpiarTextoBullet(texto));
         ultimoFueItemLista = true;
         continue;
       }
 
+      // Líneas que continúan el último item de lista
       if (ultimoFueItemLista && bufferListaItems.length > 0) {
-        const ultimoIndex = bufferListaItems.length - 1;
-        bufferListaItems[ultimoIndex] = bufferListaItems[ultimoIndex] + ' ' + texto;
+        const idx = bufferListaItems.length - 1;
+        bufferListaItems[idx] += ' ' + texto;
         continue;
       }
 
-      if (bufferListaItems.length > 0) {
-        flushLista();
-      }
+      if (bufferListaItems.length > 0) flushLista();
 
+      // Párrafos (optimización: cortar por puntos finales)
       bufferParrafo.push(texto);
+      if (texto.endsWith('.')) flushParrafo();
     }
   }
 
@@ -248,6 +281,10 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
   flushParrafo();
   flushLista();
   cerrarDestacado();
+
+  // -------------------------------
+  // ESTADÍSTICAS
+  // -------------------------------
 
   const textoTotal = bloques
     .map((b) => {
@@ -263,9 +300,10 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
   const tiempoLecturaMin = Math.max(1, Math.round(numPalabras / 200));
 
   const parrafos = bloques.filter((b) => b.tipo === 'parrafo') as BloqueParrafo[];
-  const longitudMediaParrafo = parrafos.length > 0
-    ? Math.round(parrafos.reduce((acc, p) => acc + p.texto.length, 0) / parrafos.length)
-    : 0;
+  const longitudMediaParrafo =
+    parrafos.length > 0
+      ? Math.round(parrafos.reduce((acc, p) => acc + p.texto.length, 0) / parrafos.length)
+      : 0;
 
   return {
     titulo: tituloDocumento,
@@ -277,16 +315,7 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
       numTitulos: bloques.filter((b) => b.tipo === 'titulo').length,
       numParrafos: parrafos.length,
       numListas: bloques.filter((b) => b.tipo === 'lista').length,
-      longitudMediaParrafo,
-    },
+      longitudMediaParrafo
+    }
   };
-}
-
-function normalizarEspacios(texto: string): string {
-  return texto
-    .replace(/([a-záéíóúñ])([A-ZÁÉÍÓÚÑ])/g, '$1 $2')
-    .replace(/(\d)([a-zA-ZáéíóúÁÉÍÓÚñÑ])/g, '$1 $2')
-    .replace(/([a-zA-ZáéíóúñÁÉÍÓÚÑ])(\()/g, '$1 $2')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
