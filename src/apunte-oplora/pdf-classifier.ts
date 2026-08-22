@@ -347,105 +347,61 @@ export function clasificarDocumento(
       }
 
       // -----------------------------
-// DETECCIÓN ROBUSTA DE MARCADORES EXPLÍCITOS [EJ], [ID], [ES]
-// -----------------------------
-// Normalizamos la línea para evitar NBSP, corchetes fullwidth, etc.
-const rawTexto = linea.texto || '';
-let textoNormalizado = rawTexto.replace(/\u00A0/g, ' ').replace(/[\uFF08\uFF09\uFF3B\uFF3D]/g, (c) => {
-  // normaliza paréntesis/corchetes fullwidth si aparecen
-  if (c === '\uFF3B' || c === '\uFF3D') return c; // fallback (no suele pasar)
-  return c;
-}).trim();
+      // DETECCIÓN DE MARCADORES EXPLÍCITOS [EJ ...], [ID ...], [ES ...]
+      // Formato: el contenido va DENTRO del corchete, que puede cerrarse
+      // en la misma línea o continuar en líneas siguientes hasta el "]"
+      // -----------------------------
+      const REGEX_APERTURA_MARCADOR = /\[(EJ|ID|ES)\b\s*(.*)$/i;
+      const matchMarcador = texto.match(REGEX_APERTURA_MARCADOR);
 
-// Reemplaza corchetes fullwidth y variantes por corchetes ASCII
-textoNormalizado = textoNormalizado
-  .replace(/［/g, '[')
-  .replace(/］/g, ']')
-  .replace(/（/g, '(')
-  .replace(/）/g, ')')
-  .replace(/\uFEFF/g, '') // BOM
-  .trim();
+      if (matchMarcador) {
+        const key = matchMarcador[1].toUpperCase();
+        let contenidoAcumulado = matchMarcador[2] || '';
+        let cerrado = contenidoAcumulado.includes(']');
 
-// Regex tolerante: acepta [EJ], [EJ ], [EJ:], [ej], etc.
-const RE_MARKER_ROBUST = /^\s*\[(EJ|ID|ES)\]\s*[:\-–—]?\s*(.*)$/i;
-let m = textoNormalizado.match(RE_MARKER_ROBUST);
+        let j = i;
+        const MAX_LINEAS_MARCADOR = 15;
+        let consumidas = 0;
 
-if (m) {
-  const key = m[1].toUpperCase(); // 'EJ' | 'ID' | 'ES'
-  let contenido = m[2] ? m[2].trim() : '';
+        while (!cerrado && consumidas < MAX_LINEAS_MARCADOR && j + 1 < lineas.length) {
+          j++;
+          const siguienteTexto = normalizarEspacios(lineas[j].texto || '');
+          if (siguienteTexto) {
+            contenidoAcumulado += ' ' + siguienteTexto;
+            if (siguienteTexto.includes(']')) cerrado = true;
+          }
+          consumidas++;
+        }
 
-  // Si la marca está sola (sin contenido en la misma línea), consumimos
-  // las siguientes líneas hasta encontrar una línea estructural o un límite.
-  if (!contenido) {
-    const contenidoBloques: string[] = [];
-    let j = i + 1;
-    const MAX_LINES_TO_CONSUME = 10; // evita consumir todo el documento por error
-    let consumed = 0;
+        const idxCierre = contenidoAcumulado.indexOf(']');
+        const contenidoFinal = idxCierre >= 0
+          ? contenidoAcumulado.slice(0, idxCierre)
+          : contenidoAcumulado;
 
-    while (j < lineas.length && consumed < MAX_LINES_TO_CONSUME) {
-      const lineaS = normalizarEspacios(lineas[j].texto || '');
-      if (!lineaS) { j++; consumed++; continue; }
+        const tituloMap: Record<string, string> = { EJ: 'EJEMPLO', ID: 'IDEA', ES: 'ESQUEMA' };
+        const titulo = tituloMap[key] || key;
 
-      // Si la siguiente línea es estructural, paramos (no la consumimos)
-      const siguienteEsEstructural =
-        esTituloNivel1(lineas[j], fontSizeBase) ||
-        esTituloNivel2(lineas[j], fontSizeBase) ||
-        REGEX_SUBAPARTADO_LETRA.test(lineaS) ||
-        REGEX_ARTICULO_LEGAL.test(lineaS) ||
-        esTituloDestacado(lineaS, lineas[j], fontSizeBase);
+        flushParrafo();
+        flushLista();
+        cerrarDestacado();
 
-      if (siguienteEsEstructural) break;
+        const contenidoBloques: Bloque[] = [];
+        const limpio = normalizarEspacios(contenidoFinal);
+        if (limpio.length > 0) {
+          contenidoBloques.push({ id: idCounter++, tipo: 'parrafo', texto: limpio });
+        }
 
-      // Si es bullet o numerada, limpiamos marcador y añadimos
-      if (/^[•▪◦·\-\–\—]\s*/.test(lineaS) || /^(\d+)[\.\ºªº]?\s+/.test(lineaS)) {
-        const limpio = lineaS.replace(/^[•▪◦·\-\–\—]\s*/,'').replace(/^(\d+)[\.\ºªº]?\s+/,'').trim();
-        if (limpio) contenidoBloques.push(limpio);
-        j++; consumed++; continue;
+        bloques.push({
+          id: idCounter++,
+          tipo: 'destacado',
+          titulo,
+          contenido: contenidoBloques,
+        });
+
+        ultimoTipo = 'parrafo';
+        i = j; // saltar las líneas ya consumidas por el marcador
+        continue;
       }
-
-      // Si no es estructural, lo añadimos como parte del contenido
-      contenidoBloques.push(lineaS);
-      j++; consumed++;
-    }
-
-    if (contenidoBloques.length > 0) {
-      contenido = contenidoBloques.join(' ');
-      // avanzamos el índice para saltarnos las líneas consumidas
-      i = j - 1;
-    }
-  }
-
-  // Mapeo de claves a títulos legibles
-  const tituloMap: Record<string, string> = {
-    'EJ': 'EJEMPLO',
-    'ID': 'IDEA',
-    'ES': 'ESQUEMA'
-  };
-  const titulo = tituloMap[key] || key;
-
-  // Cerramos buffers previos para garantizar salto de línea y aislamiento visual
-  flushParrafo();
-  flushLista();
-  cerrarDestacado();
-
-  // Construimos el contenido interno del destacado (eliminando la marca)
-  const contenidoBloques: Bloque[] = [];
-  if (contenido.length > 0) {
-    contenidoBloques.push({ id: idCounter++, tipo: 'parrafo', texto: normalizarEspacios(contenido) });
-  }
-
-  bloques.push({
-    id: idCounter++,
-    tipo: 'destacado',
-    titulo,
-    contenido: contenidoBloques
-  });
-
-  
-  ultimoTipo = 'parrafo';
-  continue;
-}
-
 
       // DESTACADOS (otras etiquetas)
       if (esTituloDestacado(texto, linea, fontSizeBase)) {
