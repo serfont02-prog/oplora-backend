@@ -29,20 +29,17 @@ export async function extraerLineasPDF(buffer: Buffer): Promise<PaginaExtraida[]
     const viewport = page.getViewport({ scale: 1 });
     const textContent = await page.getTextContent();
 
-    const rawLines: { y: number; x: number; texto: string; fontSize: number; fontName: string; bold: boolean }[] = [];
+    const rawItems = textContent.items as any[];
 
-    for (const item of textContent.items as any[]) {
-      if (!item.str || item.str.trim() === '') continue;
-
-      rawLines.push({
-        texto: item.str.trim(),
-        x: item.transform[4],
-        y: item.transform[5],
-        fontSize: Math.abs(item.transform[3]),
-        fontName: item.fontName ?? '',
-        bold: /bold|black|heavy|medium/i.test(item.fontName ?? '')
-      });
-    }
+    // Convertimos cada item en una línea base
+    const rawLines = rawItems.map((item) => ({
+      texto: item.str.trim(),
+      x: item.transform[4],
+      y: item.transform[5],
+      fontSize: Math.abs(item.transform[3]),
+      fontName: item.fontName ?? '',
+      bold: /bold|black|heavy|medium/i.test(item.fontName ?? '')
+    })).filter(l => l.texto.length > 0);
 
     // Ordenar por Y descendente
     rawLines.sort((a, b) => b.y - a.y);
@@ -52,8 +49,8 @@ export async function extraerLineasPDF(buffer: Buffer): Promise<PaginaExtraida[]
     let lastY: number | undefined = undefined;
 
     for (const l of rawLines) {
-     if (lastY === undefined) {
-       buffer = l.texto;
+      if (lastY === undefined) {
+        buffer = l.texto;
         lastY = l.y;
         continue;
       }
@@ -61,7 +58,7 @@ export async function extraerLineasPDF(buffer: Buffer): Promise<PaginaExtraida[]
       const saltoY = Math.abs(l.y - lastY);
 
       // Si el salto vertical es pequeño → misma línea/párrafo
-      if (saltoY < 8) {
+      if (saltoY < 12) {
         buffer += ' ' + l.texto;
       } else {
         // Nueva línea real
@@ -83,13 +80,14 @@ export async function extraerLineasPDF(buffer: Buffer): Promise<PaginaExtraida[]
 
     // Última línea
     if (buffer.trim().length > 0) {
+      const last = rawLines[rawLines.length - 1];
       lineas.push({
         texto: buffer.trim(),
         x: 0,
         y: lastY!,
-        fontSize: rawLines[rawLines.length - 1].fontSize,
-        fontName: rawLines[rawLines.length - 1].fontName,
-        bold: rawLines[rawLines.length - 1].bold,
+        fontSize: last.fontSize,
+        fontName: last.fontName,
+        bold: last.bold,
         pagina: numPagina
       });
     }
@@ -104,6 +102,7 @@ export async function extraerLineasPDF(buffer: Buffer): Promise<PaginaExtraida[]
 
   return paginas;
 }
+
 
 
 // FontSize base = moda ponderada por longitud del texto
