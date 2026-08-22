@@ -59,28 +59,28 @@ export interface DocumentoLectura {
 }
 
 // -------------------------------
-// PATRONES OPTIMIZADOS
+// PATRONES
 // -------------------------------
 
-// Añadido "·" del PDF
+// Desactivamos listas numeradas (tu PDF no las usa)
+const REGEX_NUMERADO_LISTA = /^$/;
+
+// Bullets reales (si el extractor los detecta)
 const REGEX_BULLET = /^[•\-\*▪◦·]\s*/;
 
-// Listas numeradas
-const REGEX_NUMERADO_LISTA = /^(\d+[\.\)]|[a-z][\.\)])\s+/;
-
-// Artículos legales del Código Civil
+// Artículos legales
 const REGEX_ARTICULO_LEGAL = /art[íi]culo\s+(\d+)/i;
 
-// Títulos numerados (sin exigir mayúsculas)
+// Títulos numerados
 const REGEX_TITULO_NUMERADO = /^(\d+)\.\s+/;
 
-// Subtítulos tipo "1.1."
+// Subtítulos tipo 1.1
 const REGEX_SUBTITULO_NUMERADO = /^(\d+\.\d+)\.?\s+/;
 
-// Subapartados tipo "A) Derecho objetivo"
+// Subapartados tipo A)
 const REGEX_SUBAPARTADO_LETRA = /^[A-Z]\)\s+/;
 
-// Palabras clave para cajas destacadas
+// Cajas destacadas
 const PALABRAS_CLAVE_DESTACADO = [
   'ESQUEMA', 'MEMORIZA', 'PREGUNTA', 'FRECUENTE',
   'TRUCO', 'RECUERDA', 'IMPORTANTE', 'ATENCIÓN', 'CLAVE'
@@ -91,25 +91,12 @@ function esCajaDestacado(texto: string): boolean {
   return PALABRAS_CLAVE_DESTACADO.some((p) => upper.includes(p));
 }
 
-function limpiarTextoBullet(texto: string): string {
-  return texto.replace(REGEX_BULLET, '').replace(REGEX_NUMERADO_LISTA, '').trim();
-}
-
-function esLineaDeLista(texto: string): boolean {
-  return REGEX_BULLET.test(texto) || REGEX_NUMERADO_LISTA.test(texto);
-}
-
 function normalizarEspacios(texto: string): string {
-  return texto
-    .replace(/([a-záéíóúñ])([A-ZÁÉÍÓÚÑ])/g, '$1 $2')
-    .replace(/(\d)([a-zA-ZáéíóúÁÉÍÓÚñÑ])/g, '$1 $2')
-    .replace(/([a-zA-ZáéíóúñÁÉÍÓÚÑ])(\()/g, '$1 $2')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return texto.replace(/\s+/g, ' ').trim();
 }
 
 // -------------------------------
-// CLASIFICADOR PRINCIPAL
+// CLASIFICADOR
 // -------------------------------
 
 export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: string): DocumentoLectura {
@@ -132,7 +119,7 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
 
   const flushTitulo = () => {
     if (!bufferTitulo) return;
-    const texto = normalizarEspacios(bufferTitulo.lineas.join(' ').trim());
+    const texto = normalizarEspacios(bufferTitulo.lineas.join(' '));
     const bloque: BloqueTitulo = {
       id: idCounter++,
       tipo: 'titulo',
@@ -146,7 +133,7 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
 
   const flushParrafo = () => {
     if (bufferParrafo.length === 0) return;
-    const texto = normalizarEspacios(bufferParrafo.join(' ').trim());
+    const texto = normalizarEspacios(bufferParrafo.join(' '));
     if (texto.length > 0) {
       const bloque: BloqueParrafo = { id: idCounter++, tipo: 'parrafo', texto };
       if (destacadoAbierto) destacadoAbierto.contenido.push(bloque);
@@ -221,6 +208,18 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
         continue;
       }
 
+      // Detectar lista por indentación (muy fiable)
+      const esBulletPorIndentacion = linea.x < 40;
+
+      if (esBulletPorIndentacion) {
+        flushTitulo();
+        flushParrafo();
+        bufferListaOrdenada = false;
+        bufferListaItems.push(texto);
+        ultimoFueItemLista = true;
+        continue;
+      }
+
       // Títulos
       const esTitulo1 =
         linea.fontSize >= umbralTitulo1 ||
@@ -241,40 +240,22 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
         const nivelActual = esTitulo1 ? 1 :
           REGEX_SUBAPARTADO_LETRA.test(texto) ? 3 : 2;
 
-        if (bufferTitulo) {
-          flushTitulo();
-        }
-
+        // Nunca concatenar títulos
+        flushTitulo();
         bufferTitulo = { nivel: nivelActual, lineas: [texto] };
-
         continue;
       }
 
       flushTitulo();
 
-      // Listas
-      if (esLineaDeLista(texto)) {
-        flushParrafo();
-        const esNumerada = REGEX_NUMERADO_LISTA.test(texto) && !REGEX_BULLET.test(texto);
-        if (bufferListaItems.length === 0) bufferListaOrdenada = esNumerada;
-        bufferListaItems.push(limpiarTextoBullet(texto));
-        ultimoFueItemLista = true;
-        continue;
-      }
-
-      // Líneas que continúan el último item de lista
+      // Si venimos de lista y esta línea no es lista → cerrar lista
       if (ultimoFueItemLista && bufferListaItems.length > 0) {
-        const idx = bufferListaItems.length - 1;
-        bufferListaItems[idx] += ' ' + texto;
-        continue;
+        flushLista();
       }
 
-      if (bufferListaItems.length > 0) flushLista();
-
-      // Párrafos (optimización: cortar por puntos finales)
+      // Párrafo (siempre separado)
       bufferParrafo.push(texto);
       flushParrafo();
-
     }
   }
 
