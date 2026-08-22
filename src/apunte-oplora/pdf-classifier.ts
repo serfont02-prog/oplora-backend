@@ -8,17 +8,13 @@
  * - artículos legales
  * - cajas destacadas
  *
- * Versión extensa con comentarios y formato legible.
+ * Versión con detección de marcadores:
+ * - [EJ] -> EJEMPLO  (destacado)
+ * - [ID] -> IDEA     (destacado)
+ * - [ES] -> ESQUEMA  (destacado)
  *
- * Cambios clave en esta versión:
- * - esTituloNivel2 corregido (sin "|| true")
- * - bullets detectados por carácter + indentación
- * - subapartados A), B), ... añadidos como párrafo propio (salto de línea)
- * - títulos 1.1 / 1.2 generan salto de línea (flush antes y bloque propio)
- * - EJEMPLOS tratados de forma simple (sin caja especial)
- * - Cierre de párrafo por punto y aparte (regla estricta)
- * - Eliminadas las entradas "EJEMPLO" / "EJEMPLOS" de TITULOS_DESTACADOS
- * - Detección temprana de líneas de tipo "EJEMPLO" para añadirlas al bufferParrafo
+ * Las marcas se eliminan del texto final y se crean bloques 'destacado'
+ * para que el renderer aplique sombreado especial.
  */
 
 import {
@@ -121,7 +117,7 @@ const REGEX_ARTICULO_LEGAL = /^art[íi]culo\s+(\d+(?:\.\d+)?)/i;
 
 // =====================================================
 // TITULOS DESTACADOS (cajas tipo "IMPORTANTE", "ESQUEMA", etc.)
-// Nota: se han eliminado "EJEMPLO" y "EJEMPLOS" para evitar sombreado.
+// Nota: no incluimos EJEMPLO/EJEMPLOS aquí porque ahora usamos marcadores explícitos.
 // =====================================================
 
 const TITULOS_DESTACADOS = [
@@ -139,7 +135,6 @@ const TITULOS_DESTACADOS = [
   'IMPORTANTE',
   'ATENCIÓN',
   'RECUERDA',
-  // 'EJEMPLO', 'EJEMPLOS'  <-- eliminados intencionadamente
   'REQUISITOS',
   'PLAZOS'
 ];
@@ -352,17 +347,49 @@ export function clasificarDocumento(
       }
 
       // -----------------------------
-      // TRATAR "EJEMPLO(S)" / "IDEA CLAVE" / "💡" COMO TEXTO NORMAL
+      // DETECCIÓN DE MARCADORES EXPLÍCITOS [EJ], [ID], [ES]
       // -----------------------------
-      // Si la línea empieza por "💡 EJEMPLOS", "EJEMPLOS", "EJEMPLO" o "IDEA CLAVE"
-      // la tratamos como parte del párrafo y NO la convertimos en destacado.
-      const RE_EJEMPLOS_SIMPLE = /^\s*(💡\s*)?(EJEMPLO|EJEMPLOS|IDEA CLAVE)\b[:\-]?\s*/i;
-      if (RE_EJEMPLOS_SIMPLE.test(texto)) {
-        // Quitamos el emoji si existe y añadimos al bufferParrafo
-        const textoLimpio = texto.replace(/^\s*💡\s*/,'').trim();
-        bufferParrafo.push(textoLimpio);
+      // Formato: [EJ] texto..., [ID] texto..., [ES] texto...
+      // Eliminamos la marca y creamos un bloque 'destacado' con título según el marcador.
+      const RE_MARKER = /^\s*
+
+\[(EJ|ID|ES)\]
+
+\s*(.+)$/i;
+      const m = texto.match(RE_MARKER);
+      if (m) {
+        const key = m[1].toUpperCase();
+        const contenido = m[2].trim();
+
+        // Mapeo de claves a títulos legibles
+        const tituloMap: Record<string, string> = {
+          'EJ': 'EJEMPLO',
+          'ID': 'IDEA',
+          'ES': 'ESQUEMA'
+        };
+
+        const titulo = tituloMap[key] || key;
+
+        // Cerramos buffers previos para garantizar salto de línea y aislamiento visual
+        flushParrafo();
+        flushLista();
+        cerrarDestacado();
+
+        // Añadimos un bloque destacado con el contenido como párrafo interno
+        const contenidoBloques: Bloque[] = [];
+        if (contenido.length > 0) {
+          contenidoBloques.push({ id: idCounter++, tipo: 'parrafo', texto: contenido });
+        }
+
+        bloques.push({
+          id: idCounter++,
+          tipo: 'destacado',
+          titulo,
+          contenido: contenidoBloques
+        });
+
+        if (DEBUG) console.debug('MARKER DETECTADO', { key, titulo, contenido });
         ultimoTipo = 'parrafo';
-        if (DEBUG) console.debug('EJEMPLO tratado como texto normal', { textoLimpio });
         continue;
       }
 
@@ -399,12 +426,10 @@ export function clasificarDocumento(
       }
 
       // SUBAPARTADOS tipo A) B) C)
-      // Ahora: tratamos A) como párrafo propio (salto de línea).
+      // Tratamos A) como párrafo propio (salto de línea).
       if (REGEX_SUBAPARTADO_LETRA.test(texto)) {
-        // Cerramos buffers previos para garantizar salto de línea
         flushParrafo();
         flushLista();
-        // Añadimos el subapartado como párrafo independiente (no título)
         añadirBloque({ id: idCounter++, tipo: 'parrafo', texto });
         ultimoTipo = 'parrafo';
         if (DEBUG) console.debug('SUBAPARTADO como parrafo (salto)', { texto });
