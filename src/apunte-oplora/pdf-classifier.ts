@@ -117,6 +117,8 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
 
   let destacadoAbierto: { titulo: string; contenido: Bloque[]; idInterno: number } | null = null;
 
+  let ultimaLineaY: number | null = null;
+
   const flushTitulo = () => {
     if (!bufferTitulo) return;
     const texto = normalizarEspacios(bufferTitulo.lineas.join(' '));
@@ -208,19 +210,10 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
         continue;
       }
 
-      // Detectar lista por indentación (muy fiable)
+      // Detectar lista por indentación
       const esBulletPorIndentacion = linea.x < 40;
 
-      if (esBulletPorIndentacion) {
-        flushTitulo();
-        flushParrafo();
-        bufferListaOrdenada = false;
-        bufferListaItems.push(texto);
-        ultimoFueItemLista = true;
-        continue;
-      }
-
-      // Títulos
+      // Detectar títulos
       const esTitulo1 =
         linea.fontSize >= umbralTitulo1 ||
         (linea.bold && REGEX_TITULO_NUMERADO.test(texto));
@@ -232,6 +225,38 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
             (REGEX_SUBTITULO_NUMERADO.test(texto) ||
              REGEX_SUBAPARTADO_LETRA.test(texto))));
 
+      // Detectar si esta línea continúa el párrafo anterior
+      const saltoY = Math.abs(linea.y - (ultimaLineaY ?? linea.y));
+
+      const esContinuacionParrafo =
+        saltoY < 12 &&
+        !esBulletPorIndentacion &&
+        !esTitulo1 &&
+        !esTitulo2 &&
+        !matchArticulo &&
+        !esCajaDestacado(texto);
+
+      ultimaLineaY = linea.y;
+
+      // -------------------------------
+      // LISTAS
+      // -------------------------------
+      if (esBulletPorIndentacion) {
+        flushTitulo();
+        flushParrafo();
+        bufferListaOrdenada = false;
+        bufferListaItems.push(texto);
+        ultimoFueItemLista = true;
+        continue;
+      }
+
+      if (ultimoFueItemLista && bufferListaItems.length > 0) {
+        flushLista();
+      }
+
+      // -------------------------------
+      // TÍTULOS
+      // -------------------------------
       if (esTitulo1 || esTitulo2) {
         cerrarDestacado();
         flushParrafo();
@@ -240,7 +265,6 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
         const nivelActual = esTitulo1 ? 1 :
           REGEX_SUBAPARTADO_LETRA.test(texto) ? 3 : 2;
 
-        // Nunca concatenar títulos
         flushTitulo();
         bufferTitulo = { nivel: nivelActual, lineas: [texto] };
         continue;
@@ -248,14 +272,16 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
 
       flushTitulo();
 
-      // Si venimos de lista y esta línea no es lista → cerrar lista
-      if (ultimoFueItemLista && bufferListaItems.length > 0) {
-        flushLista();
+      // -------------------------------
+      // PÁRRAFOS (UNIFICADOS)
+      // -------------------------------
+      if (esContinuacionParrafo) {
+        bufferParrafo.push(texto);
+        continue;
       }
 
-      // Párrafo (siempre separado)
-      bufferParrafo.push(texto);
       flushParrafo();
+      bufferParrafo.push(texto);
     }
   }
 
