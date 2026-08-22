@@ -556,43 +556,34 @@ export function clasificarDocumento(
         continue;
       }
 
-      // ---------------------------------------------
-      // 4. SUBAPARTADOS tipo A) B) C) -> NO tratarlos como título
-      // ---------------------------------------------
-      // Antes tratábamos A) como título nivel 3; eso provocaba que el texto
-      // siguiente se perdiera o se aislara. Ahora los añadimos como párrafo
-      // normal, y si la siguiente línea no es estructural la unimos.
+      
 
+            // 4 SUBAPARTADOS tipo A) B) C)
+      // Nuevo enfoque:
+      // - No los convertimos en título.
+      // - No añadimos un bloque independiente que provoque salto visual.
+      // - Añadimos el prefijo "A) ..." al bufferParrafo para que el texto siguiente
+      //   (si no es estructural) quede en la misma unidad textual.
+      // - No consumimos la siguiente línea (no i++), así evitamos reordenados.
       if (REGEX_SUBAPARTADO_LETRA.test(texto)) {
-        // No forzamos flush agresivo que pueda descartar la siguiente línea.
-        const prefijo = texto; // mantiene "A) ..." intacto
-        const siguienteTexto = siguiente ? normalizarEspacios(siguiente.texto) : '';
-        const siguienteEsEstructural =
-          siguiente &&
-          (
-            esTituloNivel1(siguiente, fontSizeBase) ||
-            esTituloNivel2(siguiente, fontSizeBase) ||
-            esListaNumerada(siguienteTexto) ||
-            esBullet(siguienteTexto) ||
-            esTituloDestacado(siguienteTexto, siguiente, fontSizeBase)
-          );
-
-        if (siguiente && !siguienteEsEstructural) {
-          // Unimos prefijo + siguiente y consumimos la siguiente línea
-          const combinado = normalizarEspacios(prefijo + ' ' + siguienteTexto);
-          añadirBloque({ id: idCounter++, tipo: 'parrafo', texto: combinado });
-          ultimoTipo = 'parrafo';
-          if (DEBUG) console.debug('SUBAPARTADO + siguiente unido', { combinado });
-          i++; // consumimos la siguiente línea manualmente
-          continue;
+        // Si la línea coincide también con un título numerado (raro), respetamos el título.
+        // Esto protege el orden: 1.1 / 1.2 siempre tienen prioridad.
+        if (esTituloNivel2(linea, fontSizeBase) || esTituloNivel1(linea, fontSizeBase)) {
+          // Dejar que la lógica de títulos la procese (no interferimos).
         } else {
-          // No hay siguiente útil: añadimos solo el prefijo como párrafo
-          añadirBloque({ id: idCounter++, tipo: 'parrafo', texto: prefijo });
+          // No forzamos flushParrafo() ni flushLista() aquí.
+          // Añadimos el subapartado al bufferParrafo para que se renderice como parte del párrafo.
+          // Ejemplo resultante: "A) Derecho objetivo El Derecho es..." (si la siguiente línea no es estructural).
+          bufferParrafo.push(texto);
           ultimoTipo = 'parrafo';
-          if (DEBUG) console.debug('SUBAPARTADO solo', { prefijo });
+
+          // No consumimos la siguiente línea aquí. La siguiente iteración decidirá si unirla
+          // (si no es estructural) o si provoca flush por su propia naturaleza.
+          if (DEBUG) console.debug('SUBAPARTADO añadido a bufferParrafo', { texto });
           continue;
         }
       }
+
 
       // ---------------------------------------------
       // 5. ARTÍCULO LEGAL
