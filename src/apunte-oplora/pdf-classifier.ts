@@ -241,12 +241,12 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
         const nivelActual = esTitulo1 ? 1 :
           REGEX_SUBAPARTADO_LETRA.test(texto) ? 3 : 2;
 
-        if (bufferTitulo && bufferTitulo.nivel === nivelActual) {
-          bufferTitulo.lineas.push(texto);
-        } else {
+        if (bufferTitulo) {
           flushTitulo();
-          bufferTitulo = { nivel: nivelActual, lineas: [texto] };
         }
+
+        bufferTitulo = { nivel: nivelActual, lineas: [texto] };
+
         continue;
       }
 
@@ -273,7 +273,8 @@ export function clasificarDocumento(paginas: PaginaExtraida[], tituloDocumento: 
 
       // Párrafos (optimización: cortar por puntos finales)
       bufferParrafo.push(texto);
-      if (texto.endsWith('.')) flushParrafo();
+      flushParrafo();
+
     }
   }
 
