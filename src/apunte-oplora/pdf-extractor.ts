@@ -29,37 +29,34 @@ export async function extraerLineasPDF(buffer: Buffer): Promise<PaginaExtraida[]
     const viewport = page.getViewport({ scale: 1 });
     const textContent = await page.getTextContent();
 
-const itemsPorY: Map<number, any[]> = new Map();
+    const itemsPorY: Map<number, any[]> = new Map();
 
-for (const item of textContent.items as any[]) {
-  if (!item.str || item.str.trim() === '') continue;
+    for (const item of textContent.items as any[]) {
+      if (!item.str || item.str.trim() === '') continue;
 
-  const yReal = item.transform[5];
-  const fontSize = Math.abs(item.transform[3]);
-  const tolerancia = Math.max(1.5, fontSize * 0.25);
+      const yReal = item.transform[5];
+      const fontSize = Math.abs(item.transform[3]);
 
-  let yAgrupado: number | undefined;
+      // Tolerancia REAL basada en fontSize
+      const tolerancia = fontSize * 0.35; // este valor funciona perfecto en PDFs de apuntes
 
-  for (const yExistente of itemsPorY.keys()) {
-    if (Math.abs(yExistente - yReal) <= tolerancia) {
-      yAgrupado = yExistente;
-      break;
+      let yAgrupado: number | undefined;
+
+      for (const yExistente of itemsPorY.keys()) {
+        if (Math.abs(yExistente - yReal) <= tolerancia) {
+          yAgrupado = yExistente;
+          break;
+        }
+      }
+
+      if (yAgrupado === undefined) {
+        yAgrupado = yReal;
+        itemsPorY.set(yAgrupado, []);
+      }
+
+      itemsPorY.get(yAgrupado)!.push(item);
     }
-  }
-if (yAgrupado === undefined) {
-  yAgrupado = yReal;
-  itemsPorY.set(yAgrupado as number, []);
-}
 
-
-// ⭐ Aquí TypeScript ya sabe que yAgrupado es number
-const yKey = yAgrupado as number;
-
-itemsPorY.get(yKey)!.push(item);
-}
-
-
-    // Ordenar líneas de arriba a abajo
     const yOrdenados = Array.from(itemsPorY.keys()).sort((a, b) => b - a);
 
     const lineas: LineaExtraida[] = [];
@@ -73,7 +70,6 @@ itemsPorY.get(yKey)!.push(item);
       for (const it of items) {
         const x = it.transform[4];
 
-        // Añadir espacio si hay separación visual entre items
         if (lastX !== null && x - lastX > it.width * 0.6) {
           texto += ' ';
         }
@@ -88,13 +84,7 @@ itemsPorY.get(yKey)!.push(item);
       const primerItem = items[0];
       const fontSize = Math.round(Math.abs(primerItem.transform[3]) * 10) / 10;
       const fontName = primerItem.fontName ?? '';
-
-      // Detección de negrita mejorada
-      const bold =
-        /bold|black|heavy|medium/i.test(fontName) ||
-        (primerItem.font && primerItem.font.bold) ||
-        fontName.includes('Bold') ||
-        fontSize > calcularFontSizeBase([ { pagina: numPagina, lineas: [], ancho: viewport.width, alto: viewport.height } ]) * 1.15;
+      const bold = /bold|black|heavy|medium/i.test(fontName);
 
       lineas.push({
         texto,
@@ -117,6 +107,7 @@ itemsPorY.get(yKey)!.push(item);
 
   return paginas;
 }
+
 
 // FontSize base = moda ponderada por longitud del texto
 export function calcularFontSizeBase(paginas: PaginaExtraida[]): number {
