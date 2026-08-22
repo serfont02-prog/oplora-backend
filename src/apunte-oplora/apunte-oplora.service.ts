@@ -146,14 +146,9 @@ if (tipo === 'pdf') {
     const apunte = await this.repo.findOne({ where: { id } });
     if (!apunte) return;
 
-      // Borrar progreso de lectura de todos los usuarios para este apunte
-    await this.progresoLecturaRepo.delete({ apunte: { id } as any });
-
-    // Borrar subrayados de todos los usuarios para este apunte
-    await this.subrayadoRepo.delete({ apunte: { id } as any });
-
-    // Finalmente, el apunte
-    await this.apunteRepo.delete(id);
+     await this.progresoRepo.delete({ apunte: { id } as any });
+     await this.subrayadoRepo.delete({ apunte: { id } as any });
+     await this.repo.delete(id);
 
     // Extraer path del archivo de la URL
     const url = new URL(apunte.urlArchivo);
