@@ -351,57 +351,68 @@ export function clasificarDocumento(
       // Formato: el contenido va DENTRO del corchete, que puede cerrarse
       // en la misma línea o continuar en líneas siguientes hasta el "]"
       // -----------------------------
-      const REGEX_APERTURA_MARCADOR = /\[(EJ|ID|ES)\b\s*(.*)$/i;
+      const REGEX_APERTURA_MARCADOR = /\[(EJ|ID|ES|TR|RE)\b\s*(.*)$/i;
       const matchMarcador = texto.match(REGEX_APERTURA_MARCADOR);
 
       if (matchMarcador) {
-        const key = matchMarcador[1].toUpperCase();
-        let contenidoAcumulado = matchMarcador[2] || '';
-        let cerrado = contenidoAcumulado.includes(']');
+      const key = matchMarcador[1].toUpperCase();
+      const lineasContenido: string[] = [];
+      const primerSegmento = (matchMarcador[2] || '').trim();
 
-        let j = i;
-        const MAX_LINEAS_MARCADOR = 15;
-        let consumidas = 0;
-
-        while (!cerrado && consumidas < MAX_LINEAS_MARCADOR && j + 1 < lineas.length) {
-          j++;
-          const siguienteTexto = normalizarEspacios(lineas[j].texto || '');
-          if (siguienteTexto) {
-            contenidoAcumulado += ' ' + siguienteTexto;
-            if (siguienteTexto.includes(']')) cerrado = true;
-          }
-          consumidas++;
-        }
-
-        const idxCierre = contenidoAcumulado.indexOf(']');
-        const contenidoFinal = idxCierre >= 0
-          ? contenidoAcumulado.slice(0, idxCierre)
-          : contenidoAcumulado;
-
-        const tituloMap: Record<string, string> = { EJ: 'EJEMPLO', ID: 'IDEA', ES: 'ESQUEMA' };
-        const titulo = tituloMap[key] || key;
-
-        flushParrafo();
-        flushLista();
-        cerrarDestacado();
-
-        const contenidoBloques: Bloque[] = [];
-        const limpio = normalizarEspacios(contenidoFinal);
-        if (limpio.length > 0) {
-          contenidoBloques.push({ id: idCounter++, tipo: 'parrafo', texto: limpio });
-        }
-
-        bloques.push({
-          id: idCounter++,
-          tipo: 'destacado',
-          titulo,
-          contenido: contenidoBloques,
-        });
-
-        ultimoTipo = 'parrafo';
-        i = j; // saltar las líneas ya consumidas por el marcador
-        continue;
+      let cerrado = primerSegmento.includes(']');
+      if (cerrado) {
+        const idxCierre = primerSegmento.indexOf(']');
+        const trozo = primerSegmento.slice(0, idxCierre).trim();
+        if (trozo) lineasContenido.push(trozo);
+      } else if (primerSegmento) {
+        lineasContenido.push(primerSegmento);
       }
+
+      let j = i;
+      const MAX_LINEAS_MARCADOR = 15;
+      let consumidas = 0;
+
+      while (!cerrado && consumidas < MAX_LINEAS_MARCADOR && j + 1 < lineas.length) {
+        j++;
+        const siguienteTexto = normalizarEspacios(lineas[j].texto || '');
+        if (siguienteTexto) {
+          if (siguienteTexto.includes(']')) {
+            const idxCierre = siguienteTexto.indexOf(']');
+            const trozo = siguienteTexto.slice(0, idxCierre).trim();
+            if (trozo) lineasContenido.push(trozo);
+            cerrado = true;
+          } else {
+            lineasContenido.push(siguienteTexto);
+          }
+        }
+        consumidas++;
+      }
+
+      const tituloMap: Record<string, string> = {
+        EJ: 'EJEMPLO', ID: 'IDEA', ES: 'ESQUEMA', TR: 'TRAMPA DE EXAMEN', RE: 'REGLA DE EXAMEN',
+      };
+      const titulo = tituloMap[key] || key;
+
+      flushParrafo();
+      flushLista();
+      cerrarDestacado();
+
+      // ⭐ cada línea original se conserva como su propio párrafo dentro de la caja
+      const contenidoBloques: Bloque[] = lineasContenido
+        .filter(Boolean)
+        .map((linea) => ({ id: idCounter++, tipo: 'parrafo' as const, texto: normalizarEspacios(linea) }));
+
+      bloques.push({
+        id: idCounter++,
+        tipo: 'destacado',
+        titulo,
+        contenido: contenidoBloques,
+      });
+
+      ultimoTipo = 'parrafo';
+      i = j;
+      continue;
+    }
 
       // DESTACADOS (otras etiquetas)
       if (esTituloDestacado(texto, linea, fontSizeBase)) {
