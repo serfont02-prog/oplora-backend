@@ -351,17 +351,13 @@ export function clasificarDocumento(
       // -----------------------------
       // Formato: [EJ] texto..., [ID] texto..., [ES] texto...
       // Eliminamos la marca y creamos un bloque 'destacado' con título según el marcador.
-      const RE_MARKER = /^\s*
-
-\[(EJ|ID|ES)\]
-
-\s*(.+)$/i;
+      const RE_MARKER = /^\s*\[(EJ|ID|ES)\]\s*(.+)$/i;
+      
       const m = texto.match(RE_MARKER);
       if (m) {
-        const key = m[1].toUpperCase();
+        const key = m[1].toUpperCase(); // 'EJ' | 'ID' | 'ES'
         const contenido = m[2].trim();
 
-        // Mapeo de claves a títulos legibles
         const tituloMap: Record<string, string> = {
           'EJ': 'EJEMPLO',
           'ID': 'IDEA',
@@ -375,7 +371,7 @@ export function clasificarDocumento(
         flushLista();
         cerrarDestacado();
 
-        // Añadimos un bloque destacado con el contenido como párrafo interno
+        // Construimos el contenido interno del destacado
         const contenidoBloques: Bloque[] = [];
         if (contenido.length > 0) {
           contenidoBloques.push({ id: idCounter++, tipo: 'parrafo', texto: contenido });
