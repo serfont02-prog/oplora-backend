@@ -88,8 +88,7 @@ export interface DocumentoLectura {
  * Ejemplo:
  * 1. EL DERECHO: CONCEPTO Y ACEPCIONES
  */
-const REGEX_TITULO_NIVEL_1 =
-  /^(\d+)\.\s+(.+)$/;
+const REGEX_TITULO_NIVEL_1 = /^(\d+)\.\s+(.+)$/;
 
 /**
  * 1.1. Subtítulo
@@ -97,8 +96,7 @@ const REGEX_TITULO_NIVEL_1 =
  * Ejemplo:
  * 1.1. Concepto de Derecho
  */
-const REGEX_TITULO_NIVEL_2 =
-  /^(\d+\.\d+)\.?\s+(.+)$/;
+const REGEX_TITULO_NIVEL_2 = /^(\d+\.\d+)\.?\s+(.+)$/;
 
 /**
  * A) Subapartado
@@ -106,14 +104,12 @@ const REGEX_TITULO_NIVEL_2 =
  * Ejemplo:
  * A) Derecho objetivo
  */
-const REGEX_SUBAPARTADO_LETRA =
-  /^[A-ZÁÉÍÓÚÑ]\)\s+(.+)$/;
+const REGEX_SUBAPARTADO_LETRA = /^[A-ZÁÉÍÓÚÑ]\)\s+(.+)$/;
 
 /**
- * • Bullet
+ * • Bullet (más estricta: no incluimos guiones)
  */
-const REGEX_BULLET =
-  /^[•▪◦·\-–—]\s*/;
+const REGEX_BULLET = /^[•▪◦·]\s*/;
 
 /**
  * Lista:
@@ -121,8 +117,7 @@ const REGEX_BULLET =
  * 1. Texto
  * 2. Texto
  */
-const REGEX_LISTA_NUMERADA =
-  /^(\d+)\.\s+(.+)$/;
+const REGEX_LISTA_NUMERADA = /^(\d+)\.\s+(.+)$/;
 
 /**
  * Lista ordinal:
@@ -130,8 +125,7 @@ const REGEX_LISTA_NUMERADA =
  * 1.º Constitución
  * 2.º Derecho UE
  */
-const REGEX_LISTA_ORDINAL =
-  /^(\d+)[.ºªº]\s+(.+)$/;
+const REGEX_LISTA_ORDINAL = /^(\d+)[.ºªº]\s+(.+)$/;
 
 /**
  * Artículo legal real.
@@ -141,8 +135,7 @@ const REGEX_LISTA_ORDINAL =
  * Artículo 30
  * Artículo 30.
  */
-const REGEX_ARTICULO_LEGAL =
-  /^art[íi]culo\s+(\d+(?:\.\d+)?)/i;
+const REGEX_ARTICULO_LEGAL = /^art[íi]culo\s+(\d+(?:\.\d+)?)/i;
 
 // =====================================================
 // DESTACADOS
@@ -152,29 +145,20 @@ const TITULOS_DESTACADOS = [
   'ESQUEMA',
   'ESQUEMA DE MEMORIZACIÓN',
   'ESQUEMA DE ESTUDIO',
-
   'IDEA CLAVE',
-
   'REGLA DE EXAMEN',
   'REGLA GENERAL',
-
   'TRAMPA DE EXAMEN',
   'TRAMPA FRECUENTE',
-
   'MNEMOTECNIA',
   'MNEMOTECNIA DE LOS PLAZOS',
-
   'FÓRMULA BÁSICA',
-
   'IMPORTANTE',
   'ATENCIÓN',
   'RECUERDA',
-
   'EJEMPLO',
   'EJEMPLOS',
-
   'REQUISITOS',
-
   'PLAZOS'
 ];
 
@@ -200,11 +184,9 @@ function esTituloDestacado(
   fontSizeBase: number
 ): boolean {
 
-  const normalizado =
-    normalizarComparacion(texto);
+  const normalizado = normalizarComparacion(texto);
 
-  const coincideExactamente =
-    TITULOS_DESTACADOS.includes(normalizado);
+  const coincideExactamente = TITULOS_DESTACADOS.includes(normalizado);
 
   if (coincideExactamente) {
     return true;
@@ -262,21 +244,17 @@ function esTituloNivel1(
   fontSizeBase: number
 ): boolean {
 
-  const texto =
-    linea.texto.trim();
+  const texto = linea.texto.trim();
 
   if (!REGEX_TITULO_NIVEL_1.test(texto)) {
     return false;
   }
 
-  const contenido =
-    texto.replace(/^\d+\.\s+/, '');
+  const contenido = texto.replace(/^\d+\.\s+/, '');
 
-  const esGrande =
-    linea.fontSize >= fontSizeBase * 1.2;
+  const esGrande = linea.fontSize >= fontSizeBase * 1.2;
 
-  const esMayusculas =
-    esTodoMayusculas(contenido);
+  const esMayusculas = esTodoMayusculas(contenido);
 
   /**
    * En este tipo de temario,
@@ -301,18 +279,14 @@ function esTituloNivel2(
   fontSizeBase: number
 ): boolean {
 
-  const texto =
-    linea.texto.trim();
+  const texto = linea.texto.trim();
 
   if (!REGEX_TITULO_NIVEL_2.test(texto)) {
     return false;
   }
 
-  return (
-    linea.fontSize >= fontSizeBase * 1.05 ||
-    linea.bold ||
-    true
-  );
+  // Eliminado el "|| true" que forzaba siempre true
+  return linea.fontSize >= fontSizeBase * 1.05 || linea.bold;
 }
 
 /**
@@ -323,8 +297,7 @@ function esTituloNivel3(
   fontSizeBase: number
 ): boolean {
 
-  const texto =
-    linea.texto.trim();
+  const texto = linea.texto.trim();
 
   if (!REGEX_SUBAPARTADO_LETRA.test(texto)) {
     return false;
@@ -345,33 +318,20 @@ function esBullet(texto: string): boolean {
   return REGEX_BULLET.test(texto);
 }
 
-function esListaNumerada(texto: string): boolean {
+function esBulletPorIndentacion(linea: LineaExtraida, margen = 40): boolean {
+  return typeof linea.x === 'number' && linea.x < margen;
+}
 
-  /**
-   * Evitamos confundir:
-   *
-   * 1. EL DERECHO...
-   *
-   * con una lista.
-   */
-  return (
-    REGEX_LISTA_NUMERADA.test(texto) ||
-    REGEX_LISTA_ORDINAL.test(texto)
-  );
+function esListaNumerada(texto: string): boolean {
+  return REGEX_LISTA_NUMERADA.test(texto) || REGEX_LISTA_ORDINAL.test(texto);
 }
 
 function limpiarBullet(texto: string): string {
-  return texto
-    .replace(REGEX_BULLET, '')
-    .trim();
+  return texto.replace(REGEX_BULLET, '').trim();
 }
 
 function limpiarNumeroLista(texto: string): string {
-
-  return texto
-    .replace(REGEX_LISTA_NUMERADA, '$2')
-    .replace(REGEX_LISTA_ORDINAL, '$2')
-    .trim();
+  return texto.replace(/^(\d+)[\.\ºªº]?\s+/, '').trim();
 }
 
 // =====================================================
@@ -384,8 +344,7 @@ function esContinuacionLista(
   fontSizeBase: number
 ): boolean {
 
-  const texto =
-    linea.texto.trim();
+  const texto = linea.texto.trim();
 
   if (!texto) return false;
 
@@ -399,20 +358,33 @@ function esContinuacionLista(
     esTituloNivel3(linea, fontSizeBase) ||
     esBullet(texto) ||
     esListaNumerada(texto) ||
-    esTituloDestacado(
-      texto,
-      linea,
-      fontSizeBase
-    )
+    esTituloDestacado(texto, linea, fontSizeBase)
   ) {
     return false;
   }
 
   /**
-   * Si la línea anterior estaba en una lista,
-   * el clasificador decidirá si añadirla
-   * al último item.
+   * Evitamos unir líneas que están claramente indentadas
+   * hacia la derecha (probablemente no pertenecen al item).
    */
+  if (typeof linea.x === 'number' && linea.x > 40) {
+    return false;
+  }
+
+  /**
+   * Si la siguiente línea es un título o artículo, no continuamos.
+   */
+  if (siguiente) {
+    if (
+      esTituloNivel1(siguiente, fontSizeBase) ||
+      esTituloNivel2(siguiente, fontSizeBase) ||
+      esTituloNivel3(siguiente, fontSizeBase) ||
+      esTituloDestacado(siguiente.texto, siguiente, fontSizeBase)
+    ) {
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -425,8 +397,7 @@ export function clasificarDocumento(
   tituloDocumento: string
 ): DocumentoLectura {
 
-  const fontSizeBase =
-    calcularFontSizeBase(paginas);
+  const fontSizeBase = calcularFontSizeBase(paginas);
 
   const bloques: Bloque[] = [];
 
@@ -582,25 +553,15 @@ export function clasificarDocumento(
 
   for (const pagina of paginas) {
 
-    const lineas =
-      pagina.lineas;
+    const lineas = pagina.lineas;
 
-    for (
-      let i = 0;
-      i < lineas.length;
-      i++
-    ) {
+    for (let i = 0; i < lineas.length; i++) {
 
-      const linea =
-        lineas[i];
+      const linea = lineas[i];
 
-      const siguiente =
-        lineas[i + 1];
+      const siguiente = lineas[i + 1];
 
-      const texto =
-        normalizarEspacios(
-          linea.texto
-        );
+      const texto = normalizarEspacios(linea.texto);
 
       if (!texto) {
         continue;
@@ -610,21 +571,15 @@ export function clasificarDocumento(
       // IGNORAR PORTADA
       // ---------------------------------------------
 
-      const esPrimeraPagina =
-        pagina.pagina === 1;
+      const esPrimeraPagina = pagina.pagina === 1;
 
-      const esTextoMuyGrande =
-        linea.fontSize >=
-        fontSizeBase * 1.8;
+      const esTextoMuyGrande = linea.fontSize >= fontSizeBase * 1.8;
 
       /**
        * Esto evita meter como contenido
        * el título gigante de portada.
        */
-      if (
-        esPrimeraPagina &&
-        esTextoMuyGrande
-      ) {
+      if (esPrimeraPagina && esTextoMuyGrande) {
         continue;
       }
 
@@ -632,13 +587,7 @@ export function clasificarDocumento(
       // 1. DESTACADOS
       // ---------------------------------------------
 
-      if (
-        esTituloDestacado(
-          texto,
-          linea,
-          fontSizeBase
-        )
-      ) {
+      if (esTituloDestacado(texto, linea, fontSizeBase)) {
 
         flushParrafo();
         flushLista();
@@ -663,21 +612,13 @@ export function clasificarDocumento(
       // 2. TÍTULO NIVEL 1
       // ---------------------------------------------
 
-      if (
-        esTituloNivel1(
-          linea,
-          fontSizeBase
-        )
-      ) {
+      if (esTituloNivel1(linea, fontSizeBase)) {
 
         flushParrafo();
         flushLista();
         cerrarDestacado();
 
-        añadirTitulo(
-          texto,
-          1
-        );
+        añadirTitulo(texto, 1);
 
         continue;
       }
@@ -686,21 +627,13 @@ export function clasificarDocumento(
       // 3. TÍTULO NIVEL 2
       // ---------------------------------------------
 
-      if (
-        esTituloNivel2(
-          linea,
-          fontSizeBase
-        )
-      ) {
+      if (esTituloNivel2(linea, fontSizeBase)) {
 
         flushParrafo();
         flushLista();
         cerrarDestacado();
 
-        añadirTitulo(
-          texto,
-          2
-        );
+        añadirTitulo(texto, 2);
 
         continue;
       }
@@ -709,20 +642,12 @@ export function clasificarDocumento(
       // 4. TÍTULO NIVEL 3
       // ---------------------------------------------
 
-      if (
-        esTituloNivel3(
-          linea,
-          fontSizeBase
-        )
-      ) {
+      if (esTituloNivel3(linea, fontSizeBase)) {
 
         flushParrafo();
         flushLista();
 
-        añadirTitulo(
-          texto,
-          3
-        );
+        añadirTitulo(texto, 3);
 
         continue;
       }
@@ -731,10 +656,7 @@ export function clasificarDocumento(
       // 5. ARTÍCULO LEGAL
       // ---------------------------------------------
 
-      const matchArticulo =
-        texto.match(
-          REGEX_ARTICULO_LEGAL
-        );
+      const matchArticulo = texto.match(REGEX_ARTICULO_LEGAL);
 
       if (matchArticulo) {
 
@@ -763,10 +685,12 @@ export function clasificarDocumento(
       }
 
       // ---------------------------------------------
-      // 6. BULLETS
+      // 6. BULLETS (carácter o indentación)
       // ---------------------------------------------
 
-      if (esBullet(texto)) {
+      const esBulletLinea = esBullet(texto) || esBulletPorIndentacion(linea, 40);
+
+      if (esBulletLinea) {
 
         flushParrafo();
 
@@ -774,18 +698,13 @@ export function clasificarDocumento(
          * Si veníamos de una lista numerada,
          * cerramos esa lista.
          */
-        if (
-          bufferListaItems.length > 0 &&
-          bufferListaOrdenada
-        ) {
+        if (bufferListaItems.length > 0 && bufferListaOrdenada) {
           flushLista();
         }
 
         bufferListaOrdenada = false;
 
-        bufferListaItems.push(
-          limpiarBullet(texto)
-        );
+        bufferListaItems.push(limpiarBullet(texto));
 
         ultimoTipo = 'lista';
 
@@ -796,17 +715,12 @@ export function clasificarDocumento(
       // 7. LISTAS NUMERADAS
       // ---------------------------------------------
 
-      if (
-        esListaNumerada(texto)
-      ) {
+      if (esListaNumerada(texto)) {
 
         /**
          * Cerramos una lista bullet anterior.
          */
-        if (
-          bufferListaItems.length > 0 &&
-          !bufferListaOrdenada
-        ) {
+        if (bufferListaItems.length > 0 && !bufferListaOrdenada) {
           flushLista();
         }
 
@@ -814,9 +728,7 @@ export function clasificarDocumento(
 
         bufferListaOrdenada = true;
 
-        bufferListaItems.push(
-          limpiarNumeroLista(texto)
-        );
+        bufferListaItems.push(limpiarNumeroLista(texto));
 
         ultimoTipo = 'lista';
 
@@ -830,11 +742,7 @@ export function clasificarDocumento(
       if (
         bufferListaItems.length > 0 &&
         ultimoTipo === 'lista' &&
-        esContinuacionLista(
-          linea,
-          siguiente,
-          fontSizeBase
-        )
+        esContinuacionLista(linea, siguiente, fontSizeBase)
       ) {
 
         /**
@@ -845,19 +753,10 @@ export function clasificarDocumento(
          * • La Administración y los ciudadanos
          *   cuando aquella actúa...
          */
-        const ultimoIndice =
-          bufferListaItems.length - 1;
+        const ultimoIndice = bufferListaItems.length - 1;
 
-        bufferListaItems[
-          ultimoIndice
-        ] =
-          normalizarEspacios(
-            bufferListaItems[
-              ultimoIndice
-            ] +
-            ' ' +
-            texto
-          );
+        bufferListaItems[ultimoIndice] =
+          normalizarEspacios(bufferListaItems[ultimoIndice] + ' ' + texto);
 
         continue;
       }
@@ -866,9 +765,7 @@ export function clasificarDocumento(
       // 9. CERRAR LISTA SI EMPIEZA PÁRRAFO
       // ---------------------------------------------
 
-      if (
-        bufferListaItems.length > 0
-      ) {
+      if (bufferListaItems.length > 0) {
         flushLista();
       }
 
@@ -881,15 +778,10 @@ export function clasificarDocumento(
       ultimoTipo = 'parrafo';
 
       /**
-       * He mantenido el punto como señal
-       * para cerrar el párrafo, pero NO es
-       * el único mecanismo.
-       *
-       * Los cambios estructurales anteriores
-       * también hacen flush.
+       * Cierre de párrafo: solo punto y aparte (regla estricta).
+       * Si prefieres aceptar ?, ! o puntos suspensivos, cambia la regex.
        */
-      const termina =
-        /[.!?…]["»”']?$/.test(texto);
+      const termina = /\.\s*$/.test(texto);
 
       if (termina) {
         flushParrafo();
@@ -917,9 +809,7 @@ export function clasificarDocumento(
   // ESTADÍSTICAS
   // =================================================
 
-  function extraerTextoBloques(
-    bloques: Bloque[]
-  ): string {
+  function extraerTextoBloques(bloques: Bloque[]): string {
 
     return bloques
       .map((bloque) => {
@@ -942,9 +832,7 @@ export function clasificarDocumento(
             return (
               bloque.titulo +
               ' ' +
-              extraerTextoBloques(
-                bloque.contenido
-              )
+              extraerTextoBloques(bloque.contenido)
             );
 
           default:
@@ -954,58 +842,35 @@ export function clasificarDocumento(
       .join(' ');
   }
 
-  const textoTotal =
-    extraerTextoBloques(bloques);
+  const textoTotal = extraerTextoBloques(bloques);
 
-  const numPalabras =
-    textoTotal
-      .split(/\s+/)
-      .filter(Boolean)
-      .length;
+  const numPalabras = textoTotal.split(/\s+/).filter(Boolean).length;
 
-  const tiempoLecturaMin =
-    Math.max(
-      1,
-      Math.ceil(numPalabras / 200)
-    );
+  const tiempoLecturaMin = Math.max(1, Math.ceil(numPalabras / 200));
 
   /**
    * Buscamos párrafos también dentro
    * de los destacados.
    */
-  function obtenerParrafos(
-    bloques: Bloque[]
-  ): BloqueParrafo[] {
+  function obtenerParrafos(bloques: Bloque[]): BloqueParrafo[] {
 
-    const resultado:
-      BloqueParrafo[] = [];
+    const resultado: BloqueParrafo[] = [];
 
     for (const bloque of bloques) {
 
-      if (
-        bloque.tipo === 'parrafo'
-      ) {
+      if (bloque.tipo === 'parrafo') {
         resultado.push(bloque);
       }
 
-      if (
-        bloque.tipo === 'destacado'
-      ) {
-        resultado.push(
-          ...obtenerParrafos(
-            bloque.contenido
-          )
-        );
+      if (bloque.tipo === 'destacado') {
+        resultado.push(...obtenerParrafos(bloque.contenido));
       }
     }
 
     return resultado;
   }
 
-  function contarBloques(
-    bloques: Bloque[],
-    tipo: Bloque['tipo']
-  ): number {
+  function contarBloques(bloques: Bloque[], tipo: Bloque['tipo']): number {
 
     let contador = 0;
 
@@ -1015,32 +880,19 @@ export function clasificarDocumento(
         contador++;
       }
 
-      if (
-        bloque.tipo === 'destacado'
-      ) {
-        contador += contarBloques(
-          bloque.contenido,
-          tipo
-        );
+      if (bloque.tipo === 'destacado') {
+        contador += contarBloques(bloque.contenido, tipo);
       }
     }
 
     return contador;
   }
 
-  const parrafos =
-    obtenerParrafos(bloques);
+  const parrafos = obtenerParrafos(bloques);
 
   const longitudMediaParrafo =
     parrafos.length > 0
-      ? Math.round(
-          parrafos.reduce(
-            (acc, parrafo) =>
-              acc +
-              parrafo.texto.length,
-            0
-          ) / parrafos.length
-        )
+      ? Math.round(parrafos.reduce((acc, parrafo) => acc + parrafo.texto.length, 0) / parrafos.length)
       : 0;
 
   return {
@@ -1055,20 +907,11 @@ export function clasificarDocumento(
 
       tiempoLecturaMin,
 
-      numTitulos:
-        contarBloques(
-          bloques,
-          'titulo'
-        ),
+      numTitulos: contarBloques(bloques, 'titulo'),
 
-      numParrafos:
-        parrafos.length,
+      numParrafos: parrafos.length,
 
-      numListas:
-        contarBloques(
-          bloques,
-          'lista'
-        ),
+      numListas: contarBloques(bloques, 'lista'),
 
       longitudMediaParrafo
     }
