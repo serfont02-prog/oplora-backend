@@ -18,16 +18,17 @@ async function test() {
 
   console.log('\n=== PRIMEROS 15 BLOQUES ===');
   for (const bloque of documento.bloques.slice(0, 15)) {
-    if (bloque.tipo === 'lista') {
-      console.log(`[LISTA ${bloque.ordenada ? 'ordenada' : 'viñetas'}]`);
-      bloque.items.forEach((it) => console.log(`   - ${it.slice(0, 60)}`));
-    } else if (bloque.tipo === 'titulo') {
-      console.log(`[TITULO nivel ${bloque.nivel}] ${bloque.texto}`);
-    } else if (bloque.tipo === 'articulo_legal') {
-      console.log(`[ARTICULO ${bloque.numero}] ${bloque.texto.slice(0, 80)}`);
-    } else {
-      console.log(`[PARRAFO] ${bloque.texto.slice(0, 100)}...`);
-    }
+    if (bloque.tipo === 'parrafo') {
+  console.log(`[PARRAFO] ${bloque.texto.slice(0, 100)}...`);
+} else if (bloque.tipo === 'titulo') {
+  console.log(`[TITULO nivel ${bloque.nivel}] ${bloque.texto}`);
+} else if (bloque.tipo === 'lista') {
+  console.log(`[LISTA] ${bloque.items.length} items`);
+} else if (bloque.tipo === 'articulo_legal') {
+  console.log(`[ARTÍCULO ${bloque.numero}] ${bloque.texto.slice(0, 100)}...`);
+} else if (bloque.tipo === 'destacado') {
+  console.log(`[DESTACADO: ${bloque.titulo}] ${bloque.contenido.length} bloques dentro`);
+}
   }
 }
 
