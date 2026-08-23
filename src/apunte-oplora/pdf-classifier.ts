@@ -389,7 +389,7 @@ export function clasificarDocumento(
       }
 
       const tituloMap: Record<string, string> = {
-        EJ: 'EJEMPLO', ID: 'IDEA', ES: 'ESQUEMA', TR: 'TRAMPA DE EXAMEN', RE: 'REGLA DE EXAMEN',
+        EJ: 'EJEMPLO', ID: 'IDEA', ES: 'ESQUEMA', TR: 'TRAMPA DE EXAMEN', RE: 'REGLA DE EXAMEN', PR: 'PREGUNTA FRECUENTE',
       };
       const titulo = tituloMap[key] || key;
 
@@ -423,6 +423,11 @@ export function clasificarDocumento(
         if (DEBUG) console.debug('DESTACADO OPEN', { texto });
         continue;
       }
+
+      // ⭐ LOG TEMPORAL DE DEPURACIÓN
+        if (/^\d+\.\d+/.test(texto)) {
+          console.log('CANDIDATO 1.1:', JSON.stringify(texto), 'esTitulo1:', esTituloNivel1(linea, fontSizeBase), 'esTitulo2:', esTituloNivel2(linea, fontSizeBase), 'fontSize:', linea.fontSize, 'bold:', linea.bold);
+        }
 
       // TITULO NIVEL 1
       if (esTituloNivel1(linea, fontSizeBase)) {
