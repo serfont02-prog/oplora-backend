@@ -110,8 +110,8 @@ export interface DocumentoLectura {
 // PATRONES (regex y constantes)
 // =====================================================
 
-const REGEX_TITULO_NIVEL_1 = /^(\d+)\.-\s*(.+)$/;
-const REGEX_TITULO_NIVEL_2 = /^(\d+\.\d+)\.?\s+(.+)$/;
+const REGEX_TITULO_NIVEL_1 = /^(\d+)\.-\s*(.+)$/; // requiere guion: "1.- El derecho"
+const REGEX_TITULO_NIVEL_2 = /^(\d+\.\d+)\.?\s+(.+)$/; // sin guion, como antes: "1.1. Concepto"
 const REGEX_TITULO_ORDINAL = /^(\d+)\.[oº]\s+(.+)$/i; // "1.º", "2.º" (o "1.o" si el PDF exporta la º como "o")
 const REGEX_SUBAPARTADO_LETRA = /^[A-ZÁÉÍÓÚÑ]\)\s+(.+)$/;
 const REGEX_BULLET = /^[•▪◦·]\s*/;
