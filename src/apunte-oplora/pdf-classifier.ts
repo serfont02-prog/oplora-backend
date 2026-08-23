@@ -78,12 +78,20 @@ export interface BloqueDestacado {
   contenido: Bloque[];
 }
 
+export interface BloqueReferenciaArticulo {
+  id: number;
+  tipo: 'referencia_articulo';
+  siglas: string; // "CE", "LOFCS"...
+  numeroArticulo: string; // "1.1", "5"...
+}
+
 export type Bloque =
   | BloqueTitulo
   | BloqueParrafo
   | BloqueLista
   | BloqueArticuloLegal
-  | BloqueDestacado;
+  | BloqueDestacado
+  | BloqueReferenciaArticulo; 
 
 export interface ItemIndice {
   titulo: string;

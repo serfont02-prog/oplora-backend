@@ -10,6 +10,9 @@ export class Ley {
   @Column()
   nombre: string;
 
+  @Column({ nullable: true, unique: true })
+  siglas: string;
+
   @Column({ nullable: true })
   descripcion: string;
 

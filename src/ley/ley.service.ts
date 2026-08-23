@@ -44,12 +44,12 @@ export class LeyService {
     return ley;
   }
 
-  async create(nombre: string, descripcion?: string): Promise<Ley> {
-    const ley = this.leyRepo.create({ nombre, descripcion });
-    return this.leyRepo.save(ley);
-  }
+async create(nombre: string, siglas?: string, descripcion?: string): Promise<Ley> {
+  const ley = this.leyRepo.create({ nombre, siglas, descripcion });
+  return this.leyRepo.save(ley);
+}
 
-  async update(id: string, datos: Partial<{ nombre: string; descripcion: string }>): Promise<Ley> {
+  async update(id: string, datos: Partial<{ nombre: string; siglas: string; descripcion: string }>): Promise<Ley> {
     await this.findOne(id);
     await this.leyRepo.update(id, datos);
     return this.findOne(id);
