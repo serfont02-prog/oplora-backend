@@ -7,46 +7,22 @@ import { Capitulo } from '../normativa/capitulo.entity';
 import { Articulo } from '../normativa/articulo.entity';
 import { Seccion } from '../normativa/seccion.entity';
 import { Libro } from '../normativa/libro.entity';
-import { IaService } from '../ia/ia.service';
 
-interface ArticuloParseado {
-  numero: string;
-  titulo?: string;
-  contenido: string;
-}
-
-interface SeccionParseada {
+interface NodoParseado {
+  tipo: 'libro' | 'titulo' | 'capitulo' | 'seccion' | 'articulo';
   numero?: string;
-  nombre: string;
-  articulos: ArticuloParseado[];
+  nombre?: string;
+  numeroArticulo?: string;
+  tituloArticulo?: string;
+  contenido?: string;
 }
 
-interface CapituloParseado {
-  numero?: string;
-  nombre: string;
-  secciones?: SeccionParseada[];
-  articulos?: ArticuloParseado[];
-}
-
-interface TituloParseado {
-  numero?: string;
-  nombre: string;
-  capitulos?: CapituloParseado[];
-  articulos?: ArticuloParseado[];
-}
-
-interface LibroParseado {
-  numero?: string;
-  nombre: string;
-  titulos: TituloParseado[];
-}
-
-interface EstructuraParseada {
-  tieneLibros: boolean;
-  preambulo?: string;
-  libros?: LibroParseado[];
-  titulos?: TituloParseado[];
-}
+// Patrones típicos de textos legales españoles (mayúsculas, con o sin tildes)
+const REGEX_LIBRO = /^LIBRO\s+([IVXLCDM]+|PRELIMINAR|\d+)\.?\s*[-–—]?\s*(.*)$/i;
+const REGEX_TITULO = /^T[ÍI]TULO\s+([IVXLCDM]+|PRELIMINAR|\d+)\.?\s*[-–—]?\s*(.*)$/i;
+const REGEX_CAPITULO = /^CAP[ÍI]TULO\s+([IVXLCDM]+|\d+)\.?\s*[-–—]?\s*(.*)$/i;
+const REGEX_SECCION = /^SECCI[ÓO]N\s+([IVXLCDMª\d]+)\.?\s*[-–—]?\s*(.*)$/i;
+const REGEX_ARTICULO = /^Art[íi]culo\s+(\d+(?:\.\d+)?)\.?\s*[-–—]?\s*(.*)$/i;
 
 @Injectable()
 export class ParseoService {
@@ -65,7 +41,6 @@ export class ParseoService {
     private readonly seccionRepo: Repository<Seccion>,
     @InjectRepository(Libro)
     private readonly libroRepo: Repository<Libro>,
-    private readonly iaService: IaService,
   ) {}
 
   async parsearVersion(versionId: string): Promise<{ ok: boolean; resumen: any }> {
@@ -76,173 +51,191 @@ export class ParseoService {
     if (!version) throw new NotFoundException(`Versión ${versionId} no encontrada`);
     if (!version.textoCompleto) throw new Error('La versión no tiene texto extraído');
 
-    this.logger.log(`Iniciando parseo de ${version.ley.nombre} v${version.version}`);
+    this.logger.log(`Iniciando parseo (sin IA) de ${version.ley.nombre} v${version.version}`);
 
-    const chunks = this.dividirTexto(version.textoCompleto, 3000);
-    this.logger.log(`Texto dividido en ${chunks.length} fragmentos`);
+    // Limpiar estructura previa por si se reparsea
+    await this.limpiarEstructuraAnterior(versionId);
 
-    const estructura = await this.detectarEstructura(chunks[0], version.ley.nombre);
-    this.logger.log(`Estructura detectada: ${JSON.stringify(estructura)}`);
+    const nodos = this.parsearTextoARegex(version.textoCompleto);
+    this.logger.log(`Detectados ${nodos.length} nodos estructurales`);
 
-    const contenido = await this.parsearContenido(version.textoCompleto, estructura);
-
-    const resumen = await this.guardarEstructura(versionId, contenido);
+    const resumen = await this.guardarNodos(versionId, nodos);
 
     this.logger.log(`Parseo completado: ${JSON.stringify(resumen)}`);
     return { ok: true, resumen };
   }
 
-  private dividirTexto(texto: string, maxCaracteres: number): string[] {
-    const chunks: string[] = [];
-    for (let i = 0; i < texto.length; i += maxCaracteres) {
-      chunks.push(texto.slice(i, i + maxCaracteres));
+  private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
+    const titulos = await this.tituloRepo.find({ where: { versionLey: { id: versionId } as any } });
+    for (const t of titulos) {
+      const capitulos = await this.capituloRepo.find({ where: { tituloRef: { id: t.id } as any } });
+      for (const c of capitulos) {
+        await this.articuloRepo.delete({ capitulo: { id: c.id } as any });
+        await this.seccionRepo.delete({ capitulo: { id: c.id } as any });
+      }
+      await this.capituloRepo.delete({ tituloRef: { id: t.id } as any });
     }
-    return chunks;
+    await this.tituloRepo.delete({ versionLey: { id: versionId } as any });
   }
 
-  private async detectarEstructura(muestra: string, _nombreLey: string): Promise<{ tieneLibros: boolean; tieneTitulos: boolean; tieneCapitulos: boolean; tieneSecciones: boolean }> {
-    const texto = muestra.toLowerCase();
-    return {
-      tieneLibros: texto.includes('libro ') || texto.includes('libro i') || texto.includes('libro ii'),
-      tieneTitulos: texto.includes('título ') || texto.includes('titulo ') || texto.includes('título i'),
-      tieneCapitulos: texto.includes('capítulo ') || texto.includes('capitulo ') || texto.includes('capítulo i'),
-      tieneSecciones: texto.includes('sección ') || texto.includes('seccion '),
-    };
-  }
+  /**
+   * Recorre el texto línea a línea detectando la jerarquía legal
+   * (Libro > Título > Capítulo > Sección > Artículo) mediante patrones.
+   */
+  private parsearTextoARegex(texto: string): NodoParseado[] {
+    const lineas = texto.split('\n').map((l) => l.trim()).filter(Boolean);
+    const nodos: NodoParseado[] = [];
 
-  private async parsearContenido(texto: string, _estructura: any): Promise<EstructuraParseada> {
-    const system = `Eres un parser de textos legales españoles. 
-Responde ÚNICAMENTE con JSON válido. Sin texto adicional. Sin markdown. Solo JSON.`;
+    let articuloActual: { numero: string; titulo?: string; lineas: string[] } | null = null;
 
-    const prompt = `Extrae los artículos de este texto legal español.
-Devuelve SOLO este JSON, nada más:
-{
-  "tieneLibros": false,
-  "titulos": [
-    {
-      "numero": "I",
-      "nombre": "nombre del titulo",
-      "capitulos": [
-        {
-          "numero": "I",
-          "nombre": "nombre del capitulo",
-          "articulos": [
-            {
-              "numero": "1",
-              "titulo": "rubrica del articulo o null",
-              "contenido": "texto completo del articulo"
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-
-TEXTO:
-${texto.slice(0, 3000)}`;
-
-    try {
-      return await this.iaService.chatJson<EstructuraParseada>(prompt, system);
-    } catch (e) {
-      this.logger.error(`Error parseando: ${e.message}`);
-      return { tieneLibros: false, titulos: [] };
-    }
-  }
-
-  private async guardarEstructura(versionId: string, estructura: EstructuraParseada): Promise<any> {
-    let totalTitulos = 0;
-    let totalCapitulos = 0;
-    let totalArticulos = 0;
-
-    const titulos = estructura.titulos ?? [];
-
-    for (let ti = 0; ti < titulos.length; ti++) {
-      const tData = titulos[ti];
-
-      const titulo = this.tituloRepo.create({
-        orden: ti + 1,
-        numero: tData.numero,
-        nombre: tData.nombre,
-        versionLey: { id: versionId } as any,
+    const flushArticulo = () => {
+      if (!articuloActual) return;
+      nodos.push({
+        tipo: 'articulo',
+        numeroArticulo: articuloActual.numero,
+        tituloArticulo: articuloActual.titulo,
+        contenido: articuloActual.lineas.join(' ').replace(/\s+/g, ' ').trim(),
       });
-      const tituloGuardado = await this.tituloRepo.save(titulo);
-      totalTitulos++;
+      articuloActual = null;
+    };
 
-      const capitulos = tData.capitulos ?? [];
-      for (let ci = 0; ci < capitulos.length; ci++) {
-        const cData = capitulos[ci];
-
-        const capitulo = this.capituloRepo.create({
-          orden: ci + 1,
-          numero: cData.numero,
-          nombre: cData.nombre,
-          tituloRef: { id: tituloGuardado.id } as any,
-        });
-        const capituloGuardado = await this.capituloRepo.save(capitulo);
-        totalCapitulos++;
-
-        const articulos = cData.articulos ?? [];
-        for (let ai = 0; ai < articulos.length; ai++) {
-          const aData = articulos[ai];
-          const articulo = this.articuloRepo.create({
-            orden: ai + 1,
-            numero: aData.numero,
-            titulo: aData.titulo,
-            contenido: aData.contenido,
-            vigente: true,
-            pesoExamen: 1,
-            capitulo: { id: capituloGuardado.id } as any,
-          });
-          await this.articuloRepo.save(articulo);
-          totalArticulos++;
-        }
-
-        const secciones = cData.secciones ?? [];
-        for (let si = 0; si < secciones.length; si++) {
-          const sData = secciones[si];
-          const seccion = this.seccionRepo.create({
-            orden: si + 1,
-            numero: sData.numero,
-            nombre: sData.nombre,
-            capitulo: { id: capituloGuardado.id } as any,
-          });
-          const seccionGuardada = await this.seccionRepo.save(seccion);
-
-          const articulosSeccion = sData.articulos ?? [];
-          for (let ai = 0; ai < articulosSeccion.length; ai++) {
-            const aData = articulosSeccion[ai];
-            const articulo = this.articuloRepo.create({
-              orden: ai + 1,
-              numero: aData.numero,
-              titulo: aData.titulo,
-              contenido: aData.contenido,
-              vigente: true,
-              pesoExamen: 1,
-              seccion: { id: seccionGuardada.id } as any,
-            });
-            await this.articuloRepo.save(articulo);
-            totalArticulos++;
-          }
-        }
+    for (const linea of lineas) {
+      const mLibro = linea.match(REGEX_LIBRO);
+      if (mLibro) {
+        flushArticulo();
+        nodos.push({ tipo: 'libro', numero: mLibro[1], nombre: mLibro[2] || undefined });
+        continue;
       }
 
-      const articulosTitulo = tData.articulos ?? [];
-      for (let ai = 0; ai < articulosTitulo.length; ai++) {
-        const aData = articulosTitulo[ai];
+      const mTitulo = linea.match(REGEX_TITULO);
+      if (mTitulo) {
+        flushArticulo();
+        nodos.push({ tipo: 'titulo', numero: mTitulo[1], nombre: mTitulo[2] || undefined });
+        continue;
+      }
+
+      const mCapitulo = linea.match(REGEX_CAPITULO);
+      if (mCapitulo) {
+        flushArticulo();
+        nodos.push({ tipo: 'capitulo', numero: mCapitulo[1], nombre: mCapitulo[2] || undefined });
+        continue;
+      }
+
+      const mSeccion = linea.match(REGEX_SECCION);
+      if (mSeccion) {
+        flushArticulo();
+        nodos.push({ tipo: 'seccion', numero: mSeccion[1], nombre: mSeccion[2] || undefined });
+        continue;
+      }
+
+      const mArticulo = linea.match(REGEX_ARTICULO);
+      if (mArticulo) {
+        flushArticulo();
+        articuloActual = { numero: mArticulo[1], titulo: mArticulo[2] || undefined, lineas: [] };
+        continue;
+      }
+
+      // Línea de contenido: se acumula en el artículo actual, si lo hay
+      if (articuloActual) {
+        articuloActual.lineas.push(linea);
+      }
+    }
+
+    flushArticulo();
+    return nodos;
+  }
+
+  /**
+   * Recorre la lista lineal de nodos y va creando la jerarquía en BD,
+   * manteniendo referencias al libro/título/capítulo/sección "actuales".
+   */
+  private async guardarNodos(versionId: string, nodos: NodoParseado[]): Promise<any> {
+    let totalLibros = 0, totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0;
+
+    let libroActualId: string | null = null;
+    let tituloActualId: string | null = null;
+    let capituloActualId: string | null = null;
+    let seccionActualId: string | null = null;
+
+    let ordenLibro = 0, ordenTitulo = 0, ordenCapitulo = 0, ordenSeccion = 0, ordenArticulo = 0;
+
+    for (const nodo of nodos) {
+      if (nodo.tipo === 'libro') {
+        const libro = this.libroRepo.create({
+          orden: ++ordenLibro,
+          numero: nodo.numero,
+          nombre: nodo.nombre || `Libro ${nodo.numero}`,
+        } as any);
+        const guardado = await this.libroRepo.save(libro);
+        libroActualId = (guardado as any).id;
+        tituloActualId = null;
+        capituloActualId = null;
+        seccionActualId = null;
+        totalLibros++;
+        continue;
+      }
+
+      if (nodo.tipo === 'titulo') {
+        const titulo = this.tituloRepo.create({
+          orden: ++ordenTitulo,
+          numero: nodo.numero,
+          nombre: nodo.nombre || `Título ${nodo.numero}`,
+          versionLey: { id: versionId } as any,
+          libro: libroActualId ? ({ id: libroActualId } as any) : undefined,
+        });
+        const guardado = await this.tituloRepo.save(titulo);
+        tituloActualId = guardado.id;
+        capituloActualId = null;
+        seccionActualId = null;
+        totalTitulos++;
+        continue;
+      }
+
+      if (nodo.tipo === 'capitulo') {
+        const capitulo = this.capituloRepo.create({
+          orden: ++ordenCapitulo,
+          numero: nodo.numero,
+          nombre: nodo.nombre || `Capítulo ${nodo.numero}`,
+          tituloRef: tituloActualId ? ({ id: tituloActualId } as any) : undefined,
+        });
+        const guardado = await this.capituloRepo.save(capitulo);
+        capituloActualId = guardado.id;
+        seccionActualId = null;
+        totalCapitulos++;
+        continue;
+      }
+
+      if (nodo.tipo === 'seccion') {
+        const seccion = this.seccionRepo.create({
+          orden: ++ordenSeccion,
+          numero: nodo.numero,
+          nombre: nodo.nombre || `Sección ${nodo.numero}`,
+          capitulo: capituloActualId ? ({ id: capituloActualId } as any) : undefined,
+        });
+        const guardado = await this.seccionRepo.save(seccion);
+        seccionActualId = guardado.id;
+        totalSecciones++;
+        continue;
+      }
+
+      if (nodo.tipo === 'articulo') {
         const articulo = this.articuloRepo.create({
-          orden: ai + 1,
-          numero: aData.numero,
-          titulo: aData.titulo,
-          contenido: aData.contenido,
+          orden: ++ordenArticulo,
+          numero: nodo.numeroArticulo,
+          titulo: nodo.tituloArticulo || undefined,
+          contenido: nodo.contenido || '',
           vigente: true,
           pesoExamen: 1,
-        });
+          seccion: seccionActualId ? ({ id: seccionActualId } as any) : undefined,
+          capitulo: !seccionActualId && capituloActualId ? ({ id: capituloActualId } as any) : undefined,
+          tituloRef: !seccionActualId && !capituloActualId && tituloActualId ? ({ id: tituloActualId } as any) : undefined,
+        } as any);
         await this.articuloRepo.save(articulo);
         totalArticulos++;
+        continue;
       }
     }
 
-    return { totalTitulos, totalCapitulos, totalArticulos };
+    return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos };
   }
 }

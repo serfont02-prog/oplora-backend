@@ -51,7 +51,7 @@ async create(nombre: string, siglas?: string, descripcion?: string): Promise<Ley
 
   async update(id: string, datos: Partial<{ nombre: string; siglas: string; descripcion: string }>): Promise<Ley> {
     await this.findOne(id);
-    await this.leyRepo.update(id, datos);
+    await this.leyRepo.update(id, datos); 
     return this.findOne(id);
   }
 

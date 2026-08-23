@@ -7,7 +7,6 @@ import { OposicionLey } from './oposicion-ley.entity';
 import { LeyService } from './ley.service';
 import { LeyController } from './ley.controller';
 import { ParseoService } from './parseo.service';
-import { IaModule } from '../ia/ia.module';
 import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
@@ -23,7 +22,6 @@ import { Libro } from '../normativa/libro.entity';
       Ley, VersionLey, DiffVersion, OposicionLey,
       Titulo, Capitulo, Articulo, Seccion, Libro,
     ]),
-    IaModule,
     MulterModule.register({
       storage: diskStorage({
         destination: './uploads',
