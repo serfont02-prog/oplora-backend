@@ -198,4 +198,12 @@ getNoticiasLegislacion(
   eliminar(@Param('id') id: string) {
   return this.service.eliminar(id);
   }
+
+  @Post(':id/versiones/:versionId/importar-json')
+importarJson(
+  @Param('versionId') versionId: string,
+  @Body('estructura') estructura: { titulos: any[] },
+) {
+  return this.parseoService.importarEstructuraJson(versionId, estructura);
+}
 }

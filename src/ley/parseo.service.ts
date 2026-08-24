@@ -238,4 +238,88 @@ export class ParseoService {
 
     return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos };
   }
+
+  async importarEstructuraJson(versionId: string, estructura: { titulos: any[] }): Promise<any> {
+  await this.limpiarEstructuraAnterior(versionId);
+
+  let totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0;
+
+  for (let ti = 0; ti < estructura.titulos.length; ti++) {
+    const tData = estructura.titulos[ti];
+    const titulo = await this.tituloRepo.save(this.tituloRepo.create({
+      orden: ti + 1,
+      numero: tData.numero,
+      nombre: tData.nombre,
+      versionLey: { id: versionId } as any,
+    }));
+    totalTitulos++;
+
+    // Artículos directos del título (sin capítulo)
+    for (let ai = 0; ai < (tData.articulos ?? []).length; ai++) {
+      const aData = tData.articulos[ai];
+      await this.articuloRepo.save(this.articuloRepo.create({
+        orden: ai + 1,
+        numero: aData.numero,
+        titulo: aData.titulo || undefined,
+        contenido: aData.contenido,
+        vigente: true,
+        pesoExamen: 1,
+        tituloRef: { id: titulo.id } as any,
+      } as any));
+      totalArticulos++;
+    }
+
+    for (let ci = 0; ci < (tData.capitulos ?? []).length; ci++) {
+      const cData = tData.capitulos[ci];
+      const capitulo = await this.capituloRepo.save(this.capituloRepo.create({
+        orden: ci + 1,
+        numero: cData.numero,
+        nombre: cData.nombre,
+        tituloRef: { id: titulo.id } as any,
+      }));
+      totalCapitulos++;
+
+      for (let ai = 0; ai < (cData.articulos ?? []).length; ai++) {
+        const aData = cData.articulos[ai];
+        await this.articuloRepo.save(this.articuloRepo.create({
+          orden: ai + 1,
+          numero: aData.numero,
+          titulo: aData.titulo || undefined,
+          contenido: aData.contenido,
+          vigente: true,
+          pesoExamen: 1,
+          capitulo: { id: capitulo.id } as any,
+        } as any));
+        totalArticulos++;
+      }
+
+      for (let si = 0; si < (cData.secciones ?? []).length; si++) {
+        const sData = cData.secciones[si];
+        const seccion = await this.seccionRepo.save(this.seccionRepo.create({
+          orden: si + 1,
+          numero: sData.numero,
+          nombre: sData.nombre,
+          capitulo: { id: capitulo.id } as any,
+        }));
+        totalSecciones++;
+
+        for (let ai = 0; ai < (sData.articulos ?? []).length; ai++) {
+          const aData = sData.articulos[ai];
+          await this.articuloRepo.save(this.articuloRepo.create({
+            orden: ai + 1,
+            numero: aData.numero,
+            titulo: aData.titulo || undefined,
+            contenido: aData.contenido,
+            vigente: true,
+            pesoExamen: 1,
+            seccion: { id: seccion.id } as any,
+          } as any));
+          totalArticulos++;
+        }
+      }
+    }
+  }
+
+  return { totalTitulos, totalCapitulos, totalSecciones, totalArticulos };
+}
 }
