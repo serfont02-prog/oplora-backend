@@ -65,18 +65,27 @@ export class ParseoService {
     return { ok: true, resumen };
   }
 
-  private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
-    const titulos = await this.tituloRepo.find({ where: { versionLey: { id: versionId } as any } });
-    for (const t of titulos) {
-      const capitulos = await this.capituloRepo.find({ where: { tituloRef: { id: t.id } as any } });
-      for (const c of capitulos) {
-        await this.articuloRepo.delete({ capitulo: { id: c.id } as any });
-        await this.seccionRepo.delete({ capitulo: { id: c.id } as any });
+private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
+  const titulos = await this.tituloRepo.find({ where: { versionLey: { id: versionId } as any } });
+  for (const t of titulos) {
+    // ⭐ borrar artículos que cuelgan directamente del título (sin capítulo)
+    await this.articuloRepo.delete({ tituloRef: { id: t.id } as any });
+
+    const capitulos = await this.capituloRepo.find({ where: { tituloRef: { id: t.id } as any } });
+    for (const c of capitulos) {
+      await this.articuloRepo.delete({ capitulo: { id: c.id } as any });
+
+      const secciones = await this.seccionRepo.find({ where: { capitulo: { id: c.id } as any } });
+      for (const s of secciones) {
+        await this.articuloRepo.delete({ seccion: { id: s.id } as any });
       }
-      await this.capituloRepo.delete({ tituloRef: { id: t.id } as any });
+
+      await this.seccionRepo.delete({ capitulo: { id: c.id } as any });
     }
-    await this.tituloRepo.delete({ versionLey: { id: versionId } as any });
+    await this.capituloRepo.delete({ tituloRef: { id: t.id } as any });
   }
+  await this.tituloRepo.delete({ versionLey: { id: versionId } as any });
+}
 
   /**
    * Recorre el texto línea a línea detectando la jerarquía legal
