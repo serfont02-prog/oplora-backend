@@ -1,8 +1,11 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { json } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // ... dentro de bootstrap(), después de crear la app:
+app.use(json({ limit: '5mb' })); // ⭐ aumenta el límite de payload JSON
   
 app.enableCors({
   origin: [
