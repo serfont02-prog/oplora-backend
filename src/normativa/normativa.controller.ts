@@ -6,6 +6,7 @@ import { Capitulo } from './capitulo.entity';
 import { Articulo } from './articulo.entity';
 import { NormativaService } from './normativa.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { Seccion } from './seccion.entity';
 
 @Controller('normativa')
 @UseGuards(JwtAuthGuard)
@@ -17,7 +18,10 @@ export class NormativaController {
     private readonly capituloRepo: Repository<Capitulo>,
     @InjectRepository(Articulo)
     private readonly articuloRepo: Repository<Articulo>,
+    @InjectRepository(Seccion) 
+    private readonly seccionRepo: Repository<Seccion>,
     private readonly normativaService: NormativaService,
+    
   ) {}
 
   @Get('nota/:articuloId')
@@ -108,21 +112,42 @@ borrarSubrayado(@Param('id') id: string, @Request() req: any) {
     });
   }
 
-  @Get('articulo/:id')
-  getArticulo(@Param('id') id: string) {
-    return this.articuloRepo.findOne({
-      where: { id },
-      relations: [
-        'capitulo',
-        'capitulo.tituloRef',
-        'capitulo.tituloRef.versionLey',
-        'capitulo.tituloRef.versionLey.ley',
-        'tituloRef',
-        'tituloRef.versionLey',
-        'tituloRef.versionLey.ley',
-      ],
-    });
-  }
+  @Get('secciones/:capituloId')
+getSecciones(@Param('capituloId') capituloId: string) {
+  return this.seccionRepo.find({
+    where: { capitulo: { id: capituloId } },
+    order: { orden: 'ASC' },
+  });
+}
+
+    @Get('articulos-seccion/:seccionId')
+    getArticulosSeccion(@Param('seccionId') seccionId: string) {
+      return this.articuloRepo.find({
+        where: { seccion: { id: seccionId } },
+        order: { orden: 'ASC' },
+      });
+    }
+
+    @Get('articulo/:id')
+    getArticulo(@Param('id') id: string) {
+      return this.articuloRepo.findOne({
+        where: { id },
+        relations: [
+          'capitulo',
+          'capitulo.tituloRef',
+          'capitulo.tituloRef.versionLey',
+          'capitulo.tituloRef.versionLey.ley',
+          'tituloRef',
+          'tituloRef.versionLey',
+          'tituloRef.versionLey.ley',
+          'seccion', // ⭐ añadir
+          'seccion.capitulo', // ⭐ añadir
+          'seccion.capitulo.tituloRef', // ⭐ añadir
+          'seccion.capitulo.tituloRef.versionLey', // ⭐ añadir
+          'seccion.capitulo.tituloRef.versionLey.ley', // ⭐ añadir
+        ],
+      });
+    }
 
 @Get('articulo/:id/anterior-siguiente')
 async anteriorSiguiente(@Param('id') id: string) {

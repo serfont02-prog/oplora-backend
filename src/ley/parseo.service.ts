@@ -7,6 +7,7 @@ import { Capitulo } from '../normativa/capitulo.entity';
 import { Articulo } from '../normativa/articulo.entity';
 import { Seccion } from '../normativa/seccion.entity';
 import { Libro } from '../normativa/libro.entity';
+import { Disposicion } from '../normativa/disposicion.entity';
 
 interface NodoParseado {
   tipo: 'libro' | 'titulo' | 'capitulo' | 'seccion' | 'articulo';
@@ -41,6 +42,8 @@ export class ParseoService {
     private readonly seccionRepo: Repository<Seccion>,
     @InjectRepository(Libro)
     private readonly libroRepo: Repository<Libro>,
+    @InjectRepository(Disposicion)
+    private readonly disposicionRepo: Repository<Disposicion>,
   ) {}
 
   async parsearVersion(versionId: string): Promise<{ ok: boolean; resumen: any }> {
@@ -85,6 +88,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     await this.capituloRepo.delete({ tituloRef: { id: t.id } as any });
   }
   await this.tituloRepo.delete({ versionLey: { id: versionId } as any });
+  await this.disposicionRepo.delete({ versionLey: { id: versionId } as any });
 }
 
   /**
@@ -248,10 +252,10 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos };
   }
 
-  async importarEstructuraJson(versionId: string, estructura: { titulos: any[] }): Promise<any> {
+  async importarEstructuraJson(versionId: string, estructura: { titulos: any[]; disposiciones?: any[] }): Promise<any> {
   await this.limpiarEstructuraAnterior(versionId);
 
-  let totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0;
+  let totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0, totalDisposiciones = 0;
 
   for (let ti = 0; ti < estructura.titulos.length; ti++) {
     const tData = estructura.titulos[ti];
@@ -327,8 +331,19 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
         }
       }
     }
+      for (let di = 0; di < (estructura.disposiciones ?? []).length; di++) {
+          const dData = estructura.disposiciones?.[di];
+          await this.disposicionRepo.save(this.disposicionRepo.create({
+            orden: di + 1,
+            categoria: dData.categoria,
+            etiqueta: dData.etiqueta || undefined,
+            contenido: dData.contenido,
+            versionLey: { id: versionId } as any,
+          }));
+          totalDisposiciones++;
+        }
+    
   }
-
-  return { totalTitulos, totalCapitulos, totalSecciones, totalArticulos };
+  return { totalTitulos, totalCapitulos, totalSecciones, totalArticulos, totalDisposiciones };
 }
 }

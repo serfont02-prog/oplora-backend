@@ -12,13 +12,14 @@ import { PreguntaBanco } from '../tema/pregunta-banco.entity';
 import { NormativaController } from './normativa.controller';
 import { NormativaService } from './normativa.service';
 import { NotificacionModule } from '../notificacion/notificacion.module';
+import { Seccion } from './seccion.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Titulo, Capitulo, Articulo, PreguntaCorta,
       NotaArticulo, SubrayadoArticulo,
-      VersionLey, Flashcard, PreguntaBanco,
+      VersionLey, Flashcard, PreguntaBanco, Seccion
     ]),
     NotificacionModule,
   ],

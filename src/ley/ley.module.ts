@@ -15,12 +15,13 @@ import { Capitulo } from '../normativa/capitulo.entity';
 import { Articulo } from '../normativa/articulo.entity';
 import { Seccion } from '../normativa/seccion.entity';
 import { Libro } from '../normativa/libro.entity';
+import { Disposicion } from 'src/normativa/disposicion.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Ley, VersionLey, DiffVersion, OposicionLey,
-      Titulo, Capitulo, Articulo, Seccion, Libro,
+      Titulo, Capitulo, Articulo, Seccion, Libro, Disposicion
     ]),
     MulterModule.register({
       storage: diskStorage({
