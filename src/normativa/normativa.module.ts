@@ -13,13 +13,14 @@ import { NormativaController } from './normativa.controller';
 import { NormativaService } from './normativa.service';
 import { NotificacionModule } from '../notificacion/notificacion.module';
 import { Seccion } from './seccion.entity';
+import { Disposicion } from './disposicion.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Titulo, Capitulo, Articulo, PreguntaCorta,
       NotaArticulo, SubrayadoArticulo,
-      VersionLey, Flashcard, PreguntaBanco, Seccion
+      VersionLey, Flashcard, PreguntaBanco, Seccion, Disposicion
     ]),
     NotificacionModule,
   ],

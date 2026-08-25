@@ -7,6 +7,7 @@ import { Articulo } from './articulo.entity';
 import { NormativaService } from './normativa.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { Seccion } from './seccion.entity';
+import { Disposicion } from './disposicion.entity';
 
 @Controller('normativa')
 @UseGuards(JwtAuthGuard)
@@ -20,6 +21,8 @@ export class NormativaController {
     private readonly articuloRepo: Repository<Articulo>,
     @InjectRepository(Seccion) 
     private readonly seccionRepo: Repository<Seccion>,
+    @InjectRepository(Disposicion) 
+    private readonly disposicionRepo: Repository<Seccion>,
     private readonly normativaService: NormativaService,
     
   ) {}
@@ -116,6 +119,14 @@ borrarSubrayado(@Param('id') id: string, @Request() req: any) {
 getSecciones(@Param('capituloId') capituloId: string) {
   return this.seccionRepo.find({
     where: { capitulo: { id: capituloId } },
+    order: { orden: 'ASC' },
+  });
+}
+
+@Get('disposiciones/:versionLeyId')
+getDisposiciones(@Param('versionLeyId') versionLeyId: string) {
+  return this.disposicionRepo.find({
+    where: { versionLey: { id: versionLeyId } },
     order: { orden: 'ASC' },
   });
 }
