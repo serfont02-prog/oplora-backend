@@ -8,6 +8,7 @@ import { NormativaService } from './normativa.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { Seccion } from './seccion.entity';
 import { Disposicion } from './disposicion.entity';
+import { In } from 'typeorm';
 
 @Controller('normativa')
 @UseGuards(JwtAuthGuard)
@@ -22,10 +23,41 @@ export class NormativaController {
     @InjectRepository(Seccion) 
     private readonly seccionRepo: Repository<Seccion>,
     @InjectRepository(Disposicion) 
-    private readonly disposicionRepo: Repository<Seccion>,
+    private readonly disposicionRepo: Repository<Disposicion>,
     private readonly normativaService: NormativaService,
     
   ) {}
+
+  
+  @Get('estadisticas/:versionLeyId')
+  async getEstadisticas(@Param('versionLeyId') versionLeyId: string) {
+    const titulos = await this.tituloRepo.count({ where: { versionLey: { id: versionLeyId } } });
+    const tituloIds = (await this.tituloRepo.find({ where: { versionLey: { id: versionLeyId } }, select: ['id'] })).map((t) => t.id);
+
+    const capitulos = tituloIds.length ? await this.capituloRepo.count({ where: { tituloRef: { id: In(tituloIds) } } }) : 0;
+    const capituloIds = tituloIds.length
+      ? (await this.capituloRepo.find({ where: { tituloRef: { id: In(tituloIds) } }, select: ['id'] })).map((c) => c.id)
+      : [];
+
+    const secciones = capituloIds.length ? await this.seccionRepo.count({ where: { capitulo: { id: In(capituloIds) } } }) : 0;
+    const seccionIds = secciones
+      ? (await this.seccionRepo.find({ where: { capitulo: { id: In(capituloIds) } }, select: ['id'] })).map((s) => s.id)
+      : [];
+
+    const articulosDirectosTitulo = tituloIds.length ? await this.articuloRepo.count({ where: { tituloRef: { id: In(tituloIds) } } }) : 0;
+    const articulosDirectosCapitulo = capituloIds.length ? await this.articuloRepo.count({ where: { capitulo: { id: In(capituloIds) } } }) : 0;
+    const articulosEnSecciones = seccionIds.length ? await this.articuloRepo.count({ where: { seccion: { id: In(seccionIds) } } }) : 0;
+
+    const disposiciones = await this.disposicionRepo.count({ where: { versionLey: { id: versionLeyId } } });
+
+    return {
+      titulos,
+      capitulos,
+      secciones,
+      articulos: articulosDirectosTitulo + articulosDirectosCapitulo + articulosEnSecciones,
+      disposiciones,
+    };
+  }
 
   @Get('nota/:articuloId')
 getNota(@Param('articuloId') articuloId: string, @Request() req: any) {
