@@ -331,7 +331,11 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
         }
       }
     }
-      for (let di = 0; di < (estructura.disposiciones ?? []).length; di++) {
+      
+    
+  }
+
+  for (let di = 0; di < (estructura.disposiciones ?? []).length; di++) {
           const dData = estructura.disposiciones?.[di];
           await this.disposicionRepo.save(this.disposicionRepo.create({
             orden: di + 1,
@@ -342,8 +346,6 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
           }));
           totalDisposiciones++;
         }
-    
-  }
   return { totalTitulos, totalCapitulos, totalSecciones, totalArticulos, totalDisposiciones };
 }
 }
