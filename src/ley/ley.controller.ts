@@ -112,53 +112,42 @@ getNoticiasLegislacion(
 
   // ─── SUBIR LEY NUEVA (crea ley + primera versión) ────────
 
-    @Post('subir')
-    @UseInterceptors(FileInterceptor('archivo'))
-    async subirLeyNueva(
-      @UploadedFile() file: Express.Multer.File,
-      @Body('nombre') nombre: string,
-      @Body('siglas') siglas: string, 
-      @Body('descripcion') descripcion: string,
-      @Body('referenciaBoe') referenciaBoe: string,
-      @Body('tipoNorma') tipoNorma: string,
-      @Body('fechaPublicacion') fechaPublicacion: string,
-      @Body('oposicionIds') oposicionIdsRaw: string,
-    ) {
-      const ext = extname(file.originalname).toLowerCase();
-      const texto = await this.service.procesarArchivo(file.path, ext);
+ @Post('subir')
+@UseInterceptors(FileInterceptor('archivo'))
+async subirLeyNueva(
+  @UploadedFile() file: Express.Multer.File,
+  @Body('nombre') nombre: string,
+  @Body('siglas') siglas: string, 
+  @Body('descripcion') descripcion: string,
+  @Body('referenciaBoe') referenciaBoe: string,
+  @Body('tipoNorma') tipoNorma: string,
+  @Body('fechaPublicacion') fechaPublicacion: string,
+  @Body('oposicionIds') oposicionIdsRaw: string,
+) {
+  const ext = extname(file.originalname).toLowerCase();
+  const texto = await this.service.procesarArchivo(file.path, ext);
 
-      // Crear la ley
-      const ley = await this.service.create(nombre, siglas || undefined, descripcion || undefined); // ⭐ añadido siglas
+  const ley = await this.service.create(nombre, siglas || undefined, descripcion || undefined); // ⭐ corregido orden
 
-      // Crear la primera versión
-      const version = await this.service.crearVersion(
-        ley.id,
-        {
-          version: '1.0',
-          referenciaBoe: referenciaBoe || undefined,
-          tipoNorma: tipoNorma || undefined,
-          fechaPublicacion: fechaPublicacion || undefined,
-          tipoCambio: TipoCambio.INICIAL,
-        },
-        texto,
-      );
+  const version = await this.service.crearVersion(
+    ley.id,
+    {
+      version: '1.0',
+      referenciaBoe: referenciaBoe || undefined,
+      tipoNorma: tipoNorma || undefined,
+      fechaPublicacion: fechaPublicacion || undefined,
+      tipoCambio: TipoCambio.INICIAL,
+    },
+    texto,
+  );
 
-    // Vincular a oposiciones si se indicaron
-    const oposicionIds: string[] = oposicionIdsRaw
-      ? JSON.parse(oposicionIdsRaw)
-      : [];
-
-    for (const oposicionId of oposicionIds) {
-      await this.service.vincular(ley.id, oposicionId, version.id);
-    }
-
-    return {
-      ley,
-      version,
-      textoExtraido: texto.substring(0, 500),
-      totalCaracteres: texto.length,
-    };
+  const oposicionIds: string[] = oposicionIdsRaw ? JSON.parse(oposicionIdsRaw) : [];
+  for (const oposicionId of oposicionIds) {
+    await this.service.vincular(ley.id, oposicionId, version.id); 
   }
+
+  return { ley, version, textoExtraido: texto.substring(0, 500), totalCaracteres: texto.length };
+}
 
   // ─── VINCULACIÓN ─────────────────────────────────────────
 
