@@ -110,6 +110,20 @@ getNoticiasLegislacion(
     return this.service.activarVersion(versionId);
   }
 
+    @Patch('versiones/:versionId')
+  async editarVersion(
+    @Param('versionId') versionId: string,
+    @Body() datos: {
+      referenciaBoe?: string;
+      tipoNorma?: string;
+      fechaPublicacion?: string;
+      fechaVigencia?: string;
+      notas?: string;
+    },
+  ) {
+    return this.service.editarVersion(versionId, datos);
+  }
+
   // ─── SUBIR LEY NUEVA (crea ley + primera versión) ────────
 
  @Post('subir')

@@ -235,6 +235,23 @@ async getNoticiasLegislacion(oposicionId: string, limite?: number) {
   }));
 }
 
+async editarVersion(versionId: string, datos: {
+  referenciaBoe?: string;
+  tipoNorma?: string;
+  fechaPublicacion?: string;
+  fechaVigencia?: string;
+  notas?: string;
+}): Promise<VersionLey> {
+  const payload: any = { ...datos };
+  if (datos.fechaPublicacion) payload.fechaPublicacion = new Date(datos.fechaPublicacion);
+  if (datos.fechaVigencia) payload.fechaVigencia = new Date(datos.fechaVigencia);
+
+  await this.versionRepo.update(versionId, payload);
+  const version = await this.versionRepo.findOne({ where: { id: versionId } });
+  if (!version) throw new NotFoundException('Versión no encontrada');
+  return version;
+}
+
 
 
 }
