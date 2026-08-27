@@ -209,4 +209,12 @@ importarJson(
 ) {
   return this.parseoService.importarEstructuraJson(versionId, estructura);
 }
+
+@Post('versiones/:versionId/copiar')
+copiarVersion(
+  @Param('versionId') versionId: string,
+  @Body() datos: { version: string; referenciaBoe?: string; tipoNorma?: string; fechaVigencia?: string; notas?: string },
+) {
+  return this.parseoService.copiarVersion(versionId, datos);
+}
 }

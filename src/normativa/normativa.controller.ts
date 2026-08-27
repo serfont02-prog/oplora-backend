@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Param, Body, UseGuards, Request, Query } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Param, Body, UseGuards, Request, Query, Patch } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Titulo } from './titulo.entity';
@@ -427,5 +427,15 @@ importarArticulosTitulo(
   @Body('tituloId') tituloId: string,
 ) {
   return this.normativaService.importarArticulosEnTitulo(articulos, tituloId);
+}
+
+// En normativa.service.ts o directamente en el controller si sigues ese patrón
+@Patch('articulo/:id')
+async editarArticulo(
+  @Param('id') id: string,
+  @Body() datos: { contenido?: string; titulo?: string; vigente?: boolean },
+) {
+  await this.articuloRepo.update(id, datos);
+  return this.articuloRepo.findOne({ where: { id } });
 }
 }

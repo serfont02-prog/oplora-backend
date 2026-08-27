@@ -8,6 +8,7 @@ import { Articulo } from '../normativa/articulo.entity';
 import { Seccion } from '../normativa/seccion.entity';
 import { Libro } from '../normativa/libro.entity';
 import { Disposicion } from '../normativa/disposicion.entity';
+import { TipoCambio } from '../ley/version-ley.entity'; // ajusta la ruta si el enum está en otro archivo
 
 interface NodoParseado {
   tipo: 'libro' | 'titulo' | 'capitulo' | 'seccion' | 'articulo';
@@ -252,48 +253,24 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos };
   }
 
-  async importarEstructuraJson(versionId: string, estructura: { titulos: any[]; disposiciones?: any[] }): Promise<any> {
-  await this.limpiarEstructuraAnterior(versionId);
+    async importarEstructuraJson(versionId: string, estructura: { titulos: any[]; disposiciones?: any[] }): Promise<any> {
+    await this.limpiarEstructuraAnterior(versionId);
 
-  let totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0, totalDisposiciones = 0;
+    let totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0, totalDisposiciones = 0;
 
-  for (let ti = 0; ti < estructura.titulos.length; ti++) {
-    const tData = estructura.titulos[ti];
-    const titulo = await this.tituloRepo.save(this.tituloRepo.create({
-      orden: ti + 1,
-      numero: tData.numero,
-      nombre: tData.nombre,
-      versionLey: { id: versionId } as any,
-    }));
-    totalTitulos++;
-
-    // Artículos directos del título (sin capítulo)
-    for (let ai = 0; ai < (tData.articulos ?? []).length; ai++) {
-      const aData = tData.articulos[ai];
-      await this.articuloRepo.save(this.articuloRepo.create({
-        orden: ai + 1,
-        numero: aData.numero,
-        titulo: aData.titulo || undefined,
-        contenido: aData.contenido,
-        vigente: true,
-        pesoExamen: 1,
-        tituloRef: { id: titulo.id } as any,
-      } as any));
-      totalArticulos++;
-    }
-
-    for (let ci = 0; ci < (tData.capitulos ?? []).length; ci++) {
-      const cData = tData.capitulos[ci];
-      const capitulo = await this.capituloRepo.save(this.capituloRepo.create({
-        orden: ci + 1,
-        numero: cData.numero,
-        nombre: cData.nombre,
-        tituloRef: { id: titulo.id } as any,
+    for (let ti = 0; ti < estructura.titulos.length; ti++) {
+      const tData = estructura.titulos[ti];
+      const titulo = await this.tituloRepo.save(this.tituloRepo.create({
+        orden: ti + 1,
+        numero: tData.numero,
+        nombre: tData.nombre,
+        versionLey: { id: versionId } as any,
       }));
-      totalCapitulos++;
+      totalTitulos++;
 
-      for (let ai = 0; ai < (cData.articulos ?? []).length; ai++) {
-        const aData = cData.articulos[ai];
+      // Artículos directos del título (sin capítulo)
+      for (let ai = 0; ai < (tData.articulos ?? []).length; ai++) {
+        const aData = tData.articulos[ai];
         await this.articuloRepo.save(this.articuloRepo.create({
           orden: ai + 1,
           numero: aData.numero,
@@ -301,23 +278,23 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
           contenido: aData.contenido,
           vigente: true,
           pesoExamen: 1,
-          capitulo: { id: capitulo.id } as any,
+          tituloRef: { id: titulo.id } as any,
         } as any));
         totalArticulos++;
       }
 
-      for (let si = 0; si < (cData.secciones ?? []).length; si++) {
-        const sData = cData.secciones[si];
-        const seccion = await this.seccionRepo.save(this.seccionRepo.create({
-          orden: si + 1,
-          numero: sData.numero,
-          nombre: sData.nombre,
-          capitulo: { id: capitulo.id } as any,
+      for (let ci = 0; ci < (tData.capitulos ?? []).length; ci++) {
+        const cData = tData.capitulos[ci];
+        const capitulo = await this.capituloRepo.save(this.capituloRepo.create({
+          orden: ci + 1,
+          numero: cData.numero,
+          nombre: cData.nombre,
+          tituloRef: { id: titulo.id } as any,
         }));
-        totalSecciones++;
+        totalCapitulos++;
 
-        for (let ai = 0; ai < (sData.articulos ?? []).length; ai++) {
-          const aData = sData.articulos[ai];
+        for (let ai = 0; ai < (cData.articulos ?? []).length; ai++) {
+          const aData = cData.articulos[ai];
           await this.articuloRepo.save(this.articuloRepo.create({
             orden: ai + 1,
             numero: aData.numero,
@@ -325,27 +302,183 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
             contenido: aData.contenido,
             vigente: true,
             pesoExamen: 1,
-            seccion: { id: seccion.id } as any,
+            capitulo: { id: capitulo.id } as any,
           } as any));
           totalArticulos++;
         }
+
+        for (let si = 0; si < (cData.secciones ?? []).length; si++) {
+          const sData = cData.secciones[si];
+          const seccion = await this.seccionRepo.save(this.seccionRepo.create({
+            orden: si + 1,
+            numero: sData.numero,
+            nombre: sData.nombre,
+            capitulo: { id: capitulo.id } as any,
+          }));
+          totalSecciones++;
+
+          for (let ai = 0; ai < (sData.articulos ?? []).length; ai++) {
+            const aData = sData.articulos[ai];
+            await this.articuloRepo.save(this.articuloRepo.create({
+              orden: ai + 1,
+              numero: aData.numero,
+              titulo: aData.titulo || undefined,
+              contenido: aData.contenido,
+              vigente: true,
+              pesoExamen: 1,
+              seccion: { id: seccion.id } as any,
+            } as any));
+            totalArticulos++;
+          }
+        }
       }
-    }
+        
       
-    
+    }
+
+    for (let di = 0; di < (estructura.disposiciones ?? []).length; di++) {
+            const dData = estructura.disposiciones?.[di];
+            await this.disposicionRepo.save(this.disposicionRepo.create({
+              orden: di + 1,
+              categoria: dData.categoria,
+              etiqueta: dData.etiqueta || undefined,
+              contenido: dData.contenido,
+              versionLey: { id: versionId } as any,
+            }));
+            totalDisposiciones++;
+          }
+    return { totalTitulos, totalCapitulos, totalSecciones, totalArticulos, totalDisposiciones };
   }
 
-  for (let di = 0; di < (estructura.disposiciones ?? []).length; di++) {
-          const dData = estructura.disposiciones?.[di];
-          await this.disposicionRepo.save(this.disposicionRepo.create({
-            orden: di + 1,
-            categoria: dData.categoria,
-            etiqueta: dData.etiqueta || undefined,
-            contenido: dData.contenido,
-            versionLey: { id: versionId } as any,
-          }));
-          totalDisposiciones++;
+  async copiarVersion(versionOrigenId: string, datosNuevaVersion: {
+  version: string;
+  referenciaBoe?: string;
+  tipoNorma?: string;
+  fechaPublicacion?: string;
+  fechaVigencia?: string;
+  notas?: string;
+}): Promise<VersionLey> {
+  const origen = await this.versionRepo.findOne({
+    where: { id: versionOrigenId },
+    relations: ['ley'],
+  });
+  if (!origen) throw new NotFoundException('Versión origen no encontrada');
+
+  // Desactivar la versión actual (la nueva pasará a ser la activa)
+  await this.versionRepo.update({ ley: { id: origen.ley.id } as any, activa: true }, { activa: false });
+
+  const nuevaVersion = await this.versionRepo.save(this.versionRepo.create({
+    version: datosNuevaVersion.version,
+    referenciaBoe: datosNuevaVersion.referenciaBoe || undefined,
+    tipoNorma: datosNuevaVersion.tipoNorma || origen.tipoNorma,
+    fechaPublicacion: origen.fechaPublicacion, // se mantiene la fecha original de la ley
+    fechaVigencia: datosNuevaVersion.fechaVigencia ? new Date(datosNuevaVersion.fechaVigencia) : undefined,
+    tipoCambio: TipoCambio.MODIFICACION_PARCIAL,
+    notas: datosNuevaVersion.notas || undefined,
+    activa: true,
+    textoCompleto: origen.textoCompleto, // se conserva el texto plano original
+    ley: { id: origen.ley.id } as any,
+  }));
+
+  // Copiar toda la jerarquía: títulos -> capítulos -> secciones -> artículos
+  const titulosOrigen = await this.tituloRepo.find({
+    where: { versionLey: { id: versionOrigenId } },
+    order: { orden: 'ASC' },
+  });
+
+  for (const tituloOrigen of titulosOrigen) {
+    const nuevoTitulo = await this.tituloRepo.save(this.tituloRepo.create({
+      orden: tituloOrigen.orden,
+      numero: tituloOrigen.numero,
+      nombre: tituloOrigen.nombre,
+      versionLey: { id: nuevaVersion.id } as any,
+      libro: tituloOrigen.libro ? { id: (tituloOrigen.libro as any).id } as any : undefined,
+    }));
+
+    // Artículos directos del título (sin capítulo)
+    const articulosDelTitulo = await this.articuloRepo.find({ where: { tituloRef: { id: tituloOrigen.id } } });
+    for (const art of articulosDelTitulo) {
+      await this.articuloRepo.save(this.articuloRepo.create({
+        orden: art.orden,
+        numero: art.numero,
+        titulo: art.titulo,
+        contenido: art.contenido,
+        vigente: art.vigente,
+        pesoExamen: art.pesoExamen,
+        tituloRef: { id: nuevoTitulo.id } as any,
+      } as any));
+    }
+
+    const capitulosOrigen = await this.capituloRepo.find({
+      where: { tituloRef: { id: tituloOrigen.id } },
+      order: { orden: 'ASC' },
+    });
+
+    for (const capOrigen of capitulosOrigen) {
+      const nuevoCapitulo = await this.capituloRepo.save(this.capituloRepo.create({
+        orden: capOrigen.orden,
+        numero: capOrigen.numero,
+        nombre: capOrigen.nombre,
+        tituloRef: { id: nuevoTitulo.id } as any,
+      }));
+
+      const articulosDelCapitulo = await this.articuloRepo.find({ where: { capitulo: { id: capOrigen.id } } });
+      for (const art of articulosDelCapitulo) {
+        await this.articuloRepo.save(this.articuloRepo.create({
+          orden: art.orden,
+          numero: art.numero,
+          titulo: art.titulo,
+          contenido: art.contenido,
+          vigente: art.vigente,
+          pesoExamen: art.pesoExamen,
+          capitulo: { id: nuevoCapitulo.id } as any,
+        } as any));
+      }
+
+      const seccionesOrigen = await this.seccionRepo.find({
+        where: { capitulo: { id: capOrigen.id } },
+        order: { orden: 'ASC' },
+      });
+
+      for (const secOrigen of seccionesOrigen) {
+        const nuevaSeccion = await this.seccionRepo.save(this.seccionRepo.create({
+          orden: secOrigen.orden,
+          numero: secOrigen.numero,
+          nombre: secOrigen.nombre,
+          capitulo: { id: nuevoCapitulo.id } as any,
+        }));
+
+        const articulosDeSeccion = await this.articuloRepo.find({ where: { seccion: { id: secOrigen.id } } });
+        for (const art of articulosDeSeccion) {
+          await this.articuloRepo.save(this.articuloRepo.create({
+            orden: art.orden,
+            numero: art.numero,
+            titulo: art.titulo,
+            contenido: art.contenido,
+            vigente: art.vigente,
+            pesoExamen: art.pesoExamen,
+            seccion: { id: nuevaSeccion.id } as any,
+          } as any));
         }
-  return { totalTitulos, totalCapitulos, totalSecciones, totalArticulos, totalDisposiciones };
+      }
+    }
+  }
+
+  // Copiar disposiciones
+  const disposicionesOrigen = await this.disposicionRepo.find({
+    where: { versionLey: { id: versionOrigenId } },
+    order: { orden: 'ASC' },
+  });
+  for (const disp of disposicionesOrigen) {
+    await this.disposicionRepo.save(this.disposicionRepo.create({
+      orden: disp.orden,
+      categoria: disp.categoria,
+      etiqueta: disp.etiqueta,
+      contenido: disp.contenido,
+      versionLey: { id: nuevaVersion.id } as any,
+    }));
+  }
+
+  return nuevaVersion;
 }
 }
