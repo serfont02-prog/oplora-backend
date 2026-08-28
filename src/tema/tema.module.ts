@@ -20,6 +20,8 @@ import { FlashcardModule } from '../flashcard/flashcard.module';
 import { ApunteOploraModule } from '../apunte-oplora/apunte-oplora.module';
 import { PreguntaTest } from 'src/test/pregunta-test.entity';
 import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity'; // ajusta la ruta si tu archivo está en otra carpeta
+import { Flashcard } from '../flashcard/flashcard.entity'; // ⭐ nuevo
+import { RepasoFC } from '../flashcard/repaso-fc.entity'; // ⭐ nuevo
 
 
 @Module({
@@ -27,9 +29,9 @@ import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity'; // ajusta 
     TypeOrmModule.forFeature([
       Tema, TemaNormativa, PreguntaBanco,
       ExamenAnterior,
-      Articulo, Capitulo, Titulo, Convocatoria, Usuario, PreguntaTest, ApunteOplora
+      Articulo, Capitulo, Titulo, Convocatoria, Usuario, PreguntaTest, ApunteOplora, Flashcard, RepasoFC,
     ]),
-    IaModule,
+    IaModule, ApunteOploraModule,
     forwardRef(() => TestModule),
     forwardRef(() => FlashcardModule),
     forwardRef(() => ApunteOploraModule),
