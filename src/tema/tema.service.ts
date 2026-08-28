@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { Tema } from './tema.entity';
 import { TemaNormativa } from './tema-normativa.entity';
 import { Articulo } from '../normativa/articulo.entity';
@@ -10,7 +10,10 @@ import { NivelNormativa } from './tema-normativa.entity';
 import { ApunteOploraService } from '../apunte-oplora/apunte-oplora.service';
 import { FlashcardService } from '../flashcard/flashcard.service';
 import { TestService } from '../test/test.service';
-import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity'; // ajusta la ruta si tu archivo está en otra carpeta
+import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
+import { Flashcard } from '../flashcard/flashcard.entity'; 
+import { RepasoFC } from '../flashcard/repaso-fc.entity';
+
 
 @Injectable()
 export class TemaService {
@@ -30,6 +33,10 @@ export class TemaService {
     private readonly testService: TestService,
     @InjectRepository(ApunteOplora)
     private readonly apunteOploraRepo: Repository<ApunteOplora>,
+    @InjectRepository(Flashcard)
+    private readonly flashcardRepo: Repository<Flashcard>,
+    @InjectRepository(RepasoFC)
+    private readonly repasoFcRepo: Repository<RepasoFC>,
   ) {}
 
   async findByConvocatoria(convocatoriaId: string): Promise<Tema[]> {
@@ -81,13 +88,20 @@ export class TemaService {
     return actualizado;
   }
 
-  async remove(id: string) {
+async remove(id: string) {
   await this.temaNormativaRepo.delete({ tema: { id } as any });
 
   const apuntes = await this.apunteOploraRepo.find({ where: { tema: { id } as any } });
   for (const apunte of apuntes) {
-    await this.apunteOploraService.eliminar(apunte.id); // ⭐ reutiliza la limpieza completa que ya existe
+    await this.apunteOploraService.eliminar(apunte.id);
   }
+
+  const flashcardsDelTema = await this.flashcardRepo.find({ where: { tema: { id } as any }, select: ['id'] });
+  const flashcardIds = flashcardsDelTema.map((f) => f.id);
+  if (flashcardIds.length > 0) {
+    await this.repasoFcRepo.delete({ flashcard: { id: In(flashcardIds) } as any });
+  }
+  await this.flashcardRepo.delete({ tema: { id } as any });
 
   return this.temaRepo.delete(id);
 }
