@@ -438,4 +438,13 @@ async editarArticulo(
   await this.articuloRepo.update(id, datos);
   return this.articuloRepo.findOne({ where: { id } });
 }
+
+  @Patch('disposicion/:id')
+  async editarDisposicion(
+    @Param('id') id: string,
+    @Body() datos: { contenido?: string; etiqueta?: string },
+  ) {
+    await this.disposicionRepo.update(id, datos);
+    return this.disposicionRepo.findOne({ where: { id } });
+  }
 }
