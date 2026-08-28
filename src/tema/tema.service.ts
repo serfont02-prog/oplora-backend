@@ -13,6 +13,7 @@ import { TestService } from '../test/test.service';
 import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
 import { Flashcard } from '../flashcard/flashcard.entity'; 
 import { RepasoFC } from '../flashcard/repaso-fc.entity';
+import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity'; // ajusta la ruta real
 
 
 @Injectable()
@@ -37,6 +38,8 @@ export class TemaService {
     private readonly flashcardRepo: Repository<Flashcard>,
     @InjectRepository(RepasoFC)
     private readonly repasoFcRepo: Repository<RepasoFC>,
+    @InjectRepository(ApunteUsuario)
+    private readonly apunteUsuarioRepo: Repository<ApunteUsuario>,
   ) {}
 
   async findByConvocatoria(convocatoriaId: string): Promise<Tema[]> {
@@ -103,9 +106,10 @@ async remove(id: string) {
   }
   await this.flashcardRepo.delete({ tema: { id } as any });
 
+  await this.apunteUsuarioRepo.delete({ tema: { id } as any }); // ⭐ nuevo
+
   return this.temaRepo.delete(id);
 }
-
   async getNormativa(temaId: string): Promise<TemaNormativa[]> {
     return this.temaNormativaRepo.find({
       where: { tema: { id: temaId } },
