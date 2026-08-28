@@ -19,13 +19,15 @@ import { TestModule } from '../test/test.module';
 import { FlashcardModule } from '../flashcard/flashcard.module';
 import { ApunteOploraModule } from '../apunte-oplora/apunte-oplora.module';
 import { PreguntaTest } from 'src/test/pregunta-test.entity';
+import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity'; // ajusta la ruta si tu archivo está en otra carpeta
+
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Tema, TemaNormativa, PreguntaBanco,
       ExamenAnterior,
-      Articulo, Capitulo, Titulo, Convocatoria, Usuario, PreguntaTest
+      Articulo, Capitulo, Titulo, Convocatoria, Usuario, PreguntaTest, ApunteOplora
     ]),
     IaModule,
     forwardRef(() => TestModule),
