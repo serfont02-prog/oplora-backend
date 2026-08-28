@@ -79,8 +79,9 @@ export class TemaService {
   }
 
   async remove(id: string) {
-    return this.temaRepo.delete(id);
-  }
+  await this.temaNormativaRepo.delete({ tema: { id } as any });
+  return this.temaRepo.delete(id);
+}
 
   async getNormativa(temaId: string): Promise<TemaNormativa[]> {
     return this.temaNormativaRepo.find({
