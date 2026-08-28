@@ -10,6 +10,7 @@ import { NivelNormativa } from './tema-normativa.entity';
 import { ApunteOploraService } from '../apunte-oplora/apunte-oplora.service';
 import { FlashcardService } from '../flashcard/flashcard.service';
 import { TestService } from '../test/test.service';
+import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity'; // ajusta la ruta si tu archivo está en otra carpeta
 
 @Injectable()
 export class TemaService {
@@ -27,6 +28,8 @@ export class TemaService {
     private readonly apunteOploraService: ApunteOploraService,
     private readonly flashcardService: FlashcardService,
     private readonly testService: TestService,
+    @InjectRepository(ApunteOplora)
+    private readonly apunteOploraRepo: Repository<ApunteOplora>,
   ) {}
 
   async findByConvocatoria(convocatoriaId: string): Promise<Tema[]> {
@@ -80,6 +83,7 @@ export class TemaService {
 
   async remove(id: string) {
   await this.temaNormativaRepo.delete({ tema: { id } as any });
+  await this.apunteOploraRepo.delete({ tema: { id } as any });
   return this.temaRepo.delete(id);
 }
 
