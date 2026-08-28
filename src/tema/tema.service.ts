@@ -83,7 +83,12 @@ export class TemaService {
 
   async remove(id: string) {
   await this.temaNormativaRepo.delete({ tema: { id } as any });
-  await this.apunteOploraRepo.delete({ tema: { id } as any });
+
+  const apuntes = await this.apunteOploraRepo.find({ where: { tema: { id } as any } });
+  for (const apunte of apuntes) {
+    await this.apunteOploraService.eliminar(apunte.id); // ⭐ reutiliza la limpieza completa que ya existe
+  }
+
   return this.temaRepo.delete(id);
 }
 
