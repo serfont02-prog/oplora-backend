@@ -297,7 +297,7 @@ async borrarSubrayado(id: string, usuarioId: string): Promise<void> {
 
 async buscarArticulos(versionLeyId: string, q: string): Promise<Articulo[]> {
   if (!q || q.trim().length < 1) return [];
-  
+
   return this.articuloRepo
     .createQueryBuilder('a')
     .leftJoin('a.capitulo', 'c')
@@ -306,10 +306,15 @@ async buscarArticulos(versionLeyId: string, q: string): Promise<Articulo[]> {
     .where('(t.versionLey = :vId OR tr.versionLey = :vId)', { vId: versionLeyId })
     .andWhere('a.vigente = true')
     .andWhere(
-      '(a.numero ILIKE :q OR a.contenido ILIKE :q OR a.titulo ILIKE :q)',
-      { q: `%${q.trim()}%` }
+      '(a.numero ILIKE :q OR a.contenido ILIKE :qWild OR a.titulo ILIKE :qWild)',
+      { q: q.trim(), qWild: `%${q.trim()}%` }
     )
-    .orderBy('a.orden', 'ASC')
+    .orderBy(
+      `CASE WHEN a.numero = :qExact THEN 0 ELSE 1 END`,
+      'ASC'
+    )
+    .addOrderBy('a.orden', 'ASC')
+    .setParameter('qExact', q.trim())
     .limit(20)
     .getMany();
 }
