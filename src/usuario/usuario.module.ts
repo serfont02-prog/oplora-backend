@@ -15,6 +15,7 @@ import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
 import { ProgresoLectura } from '../apunte-oplora/progreso-lectura.entity';
 import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity';
 import { Tema } from '../tema/tema.entity';
+import { ResultadoTest } from '../test/resultado-test.entity';
 
 @Module({
   imports: [
@@ -23,7 +24,7 @@ import { Tema } from '../tema/tema.entity';
       UsuarioOposicion,
       Oposicion,
       UsuarioConvocatoriaHistorial,
-      Convocatoria, RepasoFC, Flashcard, ApunteOplora, ProgresoLectura, ApunteUsuario, Tema, 
+      Convocatoria, RepasoFC, Flashcard, ApunteOplora, ProgresoLectura, ApunteUsuario, Tema, ResultadoTest,
     ]),
     ConfiguracionModule,
   ],

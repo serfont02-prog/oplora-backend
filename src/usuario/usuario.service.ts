@@ -18,6 +18,7 @@ import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
 import { ProgresoLectura } from '../apunte-oplora/progreso-lectura.entity'; // ajusta la ruta real
 import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity';
 import { Tema } from '../tema/tema.entity';
+import { ResultadoTest } from '../test/resultado-test.entity';
 
 
 
@@ -61,6 +62,9 @@ export class UsuarioService {
 
     @InjectRepository(Tema)
     private readonly temaRepo: Repository<Tema>,
+
+    @InjectRepository(ResultadoTest)
+    private readonly resultadoTestRepo: Repository<ResultadoTest>,
   ) {}
 
   // ---------------------------------------------------------
@@ -556,13 +560,20 @@ async getConvocatoriasDisponibles(usuarioId: string, oposicionId: string) {
 
   // Copiar progreso (siempre, en cada cambio, con los datos más recientes)
   if (convocatoriaOrigenId) {
-    await this.migrarProgreso(usuarioId, convocatoriaOrigenId, convocatoriaNuevaId);
+  await this.migrarProgreso(usuarioId, oposicionId, convocatoriaOrigenId, convocatoriaNuevaId);
   }
 }
 
-private async migrarProgreso(usuarioId: string, origenId: string, destinoId: string): Promise<void> {
+private async migrarProgreso(usuarioId: string, oposicionId: string, origenId: string, destinoId: string): Promise<void> {
   const temasOrigen = await this.temaRepo.find({ where: { convocatoria: { id: origenId } as any } });
   const temasDestino = await this.temaRepo.find({ where: { convocatoria: { id: destinoId } as any } });
+
+  // Mapa origen -> destino por número de tema (se reutiliza también para ResultadoTest)
+  const mapaTemaId: Record<string, string> = {};
+  for (const temaOrigen of temasOrigen) {
+    const temaDestino = temasDestino.find((t) => t.numero === temaOrigen.numero);
+    if (temaDestino) mapaTemaId[temaOrigen.id] = temaDestino.id;
+  }
 
   for (const temaOrigen of temasOrigen) {
     const temaDestino = temasDestino.find((t) => t.numero === temaOrigen.numero);
@@ -581,10 +592,10 @@ private async migrarProgreso(usuarioId: string, origenId: string, destinoId: str
       });
       if (!repasoOrigen) continue;
 
-      const yaExiste = await this.repasoFcRepo.findOne({
+      const yaExisteRepaso = await this.repasoFcRepo.findOne({
         where: { usuario: { id: usuarioId } as any, flashcard: { id: fcD.id } as any },
       });
-      if (yaExiste) continue; // no sobrescribir si ya tenía progreso propio ahí
+      if (yaExisteRepaso) continue;
 
       await this.repasoFcRepo.save(this.repasoFcRepo.create({
         usuario: { id: usuarioId } as any,
@@ -599,32 +610,61 @@ private async migrarProgreso(usuarioId: string, origenId: string, destinoId: str
       } as any));
     }
 
-    // --- Progreso de lectura de apuntes: emparejar por tema (asumiendo 1 apunte principal por tema) ---
+    // --- Progreso de lectura de apuntes ---
     const apunteOrigen = await this.apunteOploraRepo.findOne({ where: { tema: { id: temaOrigen.id } as any } });
     const apunteDestino = await this.apunteOploraRepo.findOne({ where: { tema: { id: temaDestino.id } as any } });
 
-      if (apunteOrigen && apunteDestino) {
-        const progresoOrigen = await this.progresoLecturaRepo.findOne({
-          where: { usuario: { id: usuarioId } as any, apunte: { id: apunteOrigen.id } as any },
+    if (apunteOrigen && apunteDestino) {
+      const progresoOrigen = await this.progresoLecturaRepo.findOne({
+        where: { usuario: { id: usuarioId } as any, apunte: { id: apunteOrigen.id } as any },
+      });
+      if (progresoOrigen) {
+        const yaExisteProgreso = await this.progresoLecturaRepo.findOne({
+          where: { usuario: { id: usuarioId } as any, apunte: { id: apunteDestino.id } as any },
         });
-        if (progresoOrigen) {
-          const yaExiste = await this.progresoLecturaRepo.findOne({
-            where: { usuario: { id: usuarioId } as any, apunte: { id: apunteDestino.id } as any },
-          });
-          if (!yaExiste) {
-            await this.progresoLecturaRepo.save(this.progresoLecturaRepo.create({
-              usuario: { id: usuarioId } as any,
-              apunte: { id: apunteDestino.id } as any,
-              porcentaje: progresoOrigen.porcentaje,
-            } as any));
-          }
+        if (!yaExisteProgreso) {
+          await this.progresoLecturaRepo.save(this.progresoLecturaRepo.create({
+            usuario: { id: usuarioId } as any,
+            apunte: { id: apunteDestino.id } as any,
+            porcentaje: progresoOrigen.porcentaje,
+          } as any));
         }
       }
-    // --- Notas personales del usuario en el tema: se repuntan al nuevo tema directamente ---
+    }
+
+    // --- Notas personales del usuario: se reapuntan directamente al nuevo tema ---
     await this.apunteUsuarioRepo.update(
       { usuario: { id: usuarioId } as any, tema: { id: temaOrigen.id } as any },
       { tema: { id: temaDestino.id } as any },
     );
+  }
+
+  // --- ResultadoTest ligados directamente a un tema: se reapuntan al tema equivalente ---
+  for (const [origenTemaId, destinoTemaId] of Object.entries(mapaTemaId)) {
+    await this.resultadoTestRepo.update(
+      { usuario: { id: usuarioId } as any, tema: { id: origenTemaId } as any },
+      { tema: { id: destinoTemaId } as any },
+    );
+  }
+
+  // --- ResultadoTest de tests generales (sin tema propio): re-apuntar temaId dentro de detallePreguntas ---
+  const resultadosGenerales = await this.resultadoTestRepo.find({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any, tema: null as any },
+  });
+
+  for (const resultado of resultadosGenerales) {
+    if (!resultado.detallePreguntas?.length) continue;
+    let cambiado = false;
+    const nuevoDetalle = resultado.detallePreguntas.map((p) => {
+      if (p.temaId && mapaTemaId[p.temaId]) {
+        cambiado = true;
+        return { ...p, temaId: mapaTemaId[p.temaId] };
+      }
+      return p;
+    });
+    if (cambiado) {
+      await this.resultadoTestRepo.update(resultado.id, { detallePreguntas: nuevoDetalle });
+    }
   }
 }
 }
