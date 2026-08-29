@@ -32,7 +32,7 @@ import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity';
       ExamenAnterior,
       Articulo, Capitulo, Titulo, Convocatoria, Usuario, PreguntaTest, ApunteOplora, Flashcard, RepasoFC, ApunteUsuario
     ]),
-    IaModule, ApunteOploraModule,
+    IaModule, 
     forwardRef(() => TestModule),
     forwardRef(() => FlashcardModule),
     forwardRef(() => ApunteOploraModule),

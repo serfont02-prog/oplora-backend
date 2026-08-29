@@ -10,6 +10,7 @@ import { NotaArticulo } from '../normativa/nota-articulo.entity';
 import { TemaNormativa } from '../tema/tema-normativa.entity';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { NotificacionService } from '../notificacion/notificacion.service';
+import { TemaService } from '../tema/tema.service';
 
 
 
@@ -31,7 +32,7 @@ export class ConvocatoriaService {
     private readonly temaNormativaRepo: Repository<TemaNormativa>,
     @InjectRepository(UsuarioOposicion) // ⭐ nuevo
     private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
-
+    private readonly temaService: TemaService,
     private readonly notificacionService: NotificacionService, 
 
   ) {}
@@ -117,12 +118,15 @@ private async actualizarEstadoOposicion(oposicionId: string): Promise<void> {
   return convocatoria;
   }
 
-  async remove(id: string): Promise<void> {
+async remove(id: string): Promise<void> {
   // Borrar documentos asociados
   await this.documentoRepo.delete({ convocatoria: { id } as any });
 
-  // Borrar temas asociados (si los hay)
-  await this.temaRepo.delete({ convocatoria: { id } as any });
+  // Borrar temas asociados (reutilizando la limpieza completa en cascada)
+  const temas = await this.temaRepo.find({ where: { convocatoria: { id } as any } });
+  for (const tema of temas) {
+    await this.temaService.remove(tema.id);
+  }
 
   // Finalmente, la convocatoria
   await this.convocatoriaRepo.delete(id);
