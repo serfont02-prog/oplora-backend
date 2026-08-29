@@ -11,6 +11,8 @@ import { TemaNormativa } from '../tema/tema-normativa.entity';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { TemaService } from '../tema/tema.service';
+import { Flashcard } from '../flashcard/flashcard.entity';
+import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
 
 
 
@@ -34,7 +36,10 @@ export class ConvocatoriaService {
     private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
     private readonly temaService: TemaService,
     private readonly notificacionService: NotificacionService, 
-
+    @InjectRepository(Flashcard)
+    private readonly flashcardRepo: Repository<Flashcard>,
+    @InjectRepository(ApunteOplora)
+    private readonly apunteOploraRepo: Repository<ApunteOplora>,
   ) {}
 
   findByOposicion(oposicionId: string): Promise<Convocatoria[]> {
@@ -204,6 +209,8 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
       tipo: tema.tipo,
       contexto: tema.contexto,
       convocatoria: { id: nueva.id } as any,
+
+      
     }));
     mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
 
@@ -214,6 +221,44 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
           tema: { id: nuevoTema.id } as any,
           articulo: { id: (tn.articulo as any).id } as any,
         }));
+
+        // Copiar Flashcards del tema
+        const flashcardsOrigen = await this.flashcardRepo.find({ where: { tema: { id: tema.id } as any } });
+        for (const fc of flashcardsOrigen) {
+          await this.flashcardRepo.save(this.flashcardRepo.create({
+            tipo: fc.tipo,
+            nivel: fc.nivel,
+            pregunta: fc.pregunta,
+            respuesta: fc.respuesta,
+            explicacion: fc.explicacion,
+            esParaDuelo: fc.esParaDuelo,
+            activa: fc.activa,
+            tema: { id: nuevoTema.id } as any,
+            articulo: fc.articulo ? { id: (fc.articulo as any).id } as any : undefined,
+          } as any));
+        }
+
+        // Copiar Apuntes OPLORA del tema
+          // Copiar Apuntes OPLORA del tema
+          const apuntesOrigen = await this.apunteOploraRepo.find({ where: { tema: { id: tema.id } as any } });
+          for (const ap of apuntesOrigen) {
+            await this.apunteOploraRepo.save(this.apunteOploraRepo.create({
+              titulo: ap.titulo,
+              descripcion: ap.descripcion,
+              urlArchivo: ap.urlArchivo,
+              tipo: ap.tipo,
+              orden: ap.orden,
+              contenidoEstructurado: ap.contenidoEstructurado,
+              textoCompleto: ap.textoCompleto,
+              activo: ap.activo,
+              versionLeyId: ap.versionLeyId,
+              paginas: ap.paginas,
+              tamanoBytes: ap.tamanoBytes,
+              versionParser: ap.versionParser,
+              tema: { id: nuevoTema.id } as any,
+            } as any));
+          }
+
       }
     }
   }

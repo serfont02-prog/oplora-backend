@@ -9,6 +9,12 @@ import { ConfiguracionModule } from '../config/configuracion.module';
 import { PasswordResetService } from './password-reset.service';
 import { UsuarioConvocatoriaHistorial } from './usuario-convocatoria-historial.entity';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
+import { RepasoFC } from '../flashcard/repaso-fc.entity';
+import { Flashcard } from '../flashcard/flashcard.entity';
+import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
+import { ProgresoLectura } from '../apunte-oplora/progreso-lectura.entity';
+import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity';
+import { Tema } from '../tema/tema.entity';
 
 @Module({
   imports: [
@@ -17,7 +23,7 @@ import { Convocatoria } from '../convocatoria/convocatoria.entity';
       UsuarioOposicion,
       Oposicion,
       UsuarioConvocatoriaHistorial,
-      Convocatoria,
+      Convocatoria, RepasoFC, Flashcard, ApunteOplora, ProgresoLectura, ApunteUsuario, Tema, 
     ]),
     ConfiguracionModule,
   ],

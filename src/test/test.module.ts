@@ -14,7 +14,6 @@ import { PreguntaTest } from './pregunta-test.entity';
 
 import { Usuario } from '../usuario/usuario.entity';
 
-import { IaModule } from '../ia/ia.module';
 import { TemaModule } from '../tema/tema.module';
 import { TemaNormativa } from '../tema/tema-normativa.entity';
 import { ConfiguracionModule } from '../config/configuracion.module';

@@ -12,6 +12,12 @@ import { createClient } from '@supabase/supabase-js';
 import { TipoAvatar } from './usuario.entity';
 import { Convocatoria } from 'src/convocatoria/convocatoria.entity';
 import { UsuarioConvocatoriaHistorial } from './usuario-convocatoria-historial.entity';
+import { RepasoFC } from '../flashcard/repaso-fc.entity';
+import { Flashcard } from '../flashcard/flashcard.entity';
+import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
+import { ProgresoLectura } from '../apunte-oplora/progreso-lectura.entity'; // ajusta la ruta real
+import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity';
+import { Tema } from '../tema/tema.entity';
 
 
 
@@ -37,6 +43,24 @@ export class UsuarioService {
 
     @InjectRepository(UsuarioConvocatoriaHistorial)
     private readonly historialRepo: Repository<UsuarioConvocatoriaHistorial>,
+
+    @InjectRepository(RepasoFC)
+    private readonly repasoFcRepo: Repository<RepasoFC>,
+
+    @InjectRepository(Flashcard)
+    private readonly flashcardRepo: Repository<Flashcard>,
+
+    @InjectRepository(ApunteOplora)
+    private readonly apunteOploraRepo: Repository<ApunteOplora>,
+
+    @InjectRepository(ProgresoLectura)
+    private readonly progresoLecturaRepo: Repository<ProgresoLectura>,
+
+    @InjectRepository(ApunteUsuario)
+    private readonly apunteUsuarioRepo: Repository<ApunteUsuario>,
+
+    @InjectRepository(Tema)
+    private readonly temaRepo: Repository<Tema>,
   ) {}
 
   // ---------------------------------------------------------
@@ -490,7 +514,7 @@ async getConvocatoriasDisponibles(usuarioId: string, oposicionId: string) {
   };
 }
 
-async cambiarConvocatoria(usuarioId: string, oposicionId: string, convocatoriaNuevaId: string): Promise<void> {
+  async cambiarConvocatoria(usuarioId: string, oposicionId: string, convocatoriaNuevaId: string): Promise<void> {
   const uo = await this.usuarioOposicionRepo.findOne({
     where: { usuario: { id: usuarioId }, oposicion: { id: oposicionId } },
     relations: ['convocatoriaActiva'],
@@ -512,6 +536,8 @@ async cambiarConvocatoria(usuarioId: string, oposicionId: string, convocatoriaNu
     throw new BadRequestException('No puedes volver a una convocatoria anterior a la primera que visitaste');
   }
 
+  
+
   const convocatoriaOrigenId = uo.convocatoriaActiva?.id;
 
   // Cambiar convocatoria activa
@@ -529,8 +555,76 @@ async cambiarConvocatoria(usuarioId: string, oposicionId: string, convocatoriaNu
   }
 
   // Copiar progreso (siempre, en cada cambio, con los datos más recientes)
-  //if (convocatoriaOrigenId) {
-    //await this.copiarProgresoEntreConvocatorias(usuarioId, convocatoriaOrigenId, convocatoriaNuevaId);
-  //}
+  if (convocatoriaOrigenId) {
+    await this.migrarProgreso(usuarioId, convocatoriaOrigenId, convocatoriaNuevaId);
+  }
+}
+
+private async migrarProgreso(usuarioId: string, origenId: string, destinoId: string): Promise<void> {
+  const temasOrigen = await this.temaRepo.find({ where: { convocatoria: { id: origenId } as any } });
+  const temasDestino = await this.temaRepo.find({ where: { convocatoria: { id: destinoId } as any } });
+
+  for (const temaOrigen of temasOrigen) {
+    const temaDestino = temasDestino.find((t) => t.numero === temaOrigen.numero);
+    if (!temaDestino) continue; // el tema ya no existe en la nueva convocatoria
+
+    // --- Flashcards: emparejar por texto de pregunta ---
+    const fcOrigen = await this.flashcardRepo.find({ where: { tema: { id: temaOrigen.id } as any } });
+    const fcDestino = await this.flashcardRepo.find({ where: { tema: { id: temaDestino.id } as any } });
+
+    for (const fcO of fcOrigen) {
+      const fcD = fcDestino.find((f) => f.pregunta === fcO.pregunta);
+      if (!fcD) continue;
+
+      const repasoOrigen = await this.repasoFcRepo.findOne({
+        where: { usuario: { id: usuarioId } as any, flashcard: { id: fcO.id } as any },
+      });
+      if (!repasoOrigen) continue;
+
+      const yaExiste = await this.repasoFcRepo.findOne({
+        where: { usuario: { id: usuarioId } as any, flashcard: { id: fcD.id } as any },
+      });
+      if (yaExiste) continue; // no sobrescribir si ya tenía progreso propio ahí
+
+      await this.repasoFcRepo.save(this.repasoFcRepo.create({
+        usuario: { id: usuarioId } as any,
+        flashcard: { id: fcD.id } as any,
+        estado: repasoOrigen.estado,
+        aciertos: repasoOrigen.aciertos,
+        fallos: repasoOrigen.fallos,
+        proximoRepaso: repasoOrigen.proximoRepaso,
+        factorFacilidad: repasoOrigen.factorFacilidad,
+        intervalo: repasoOrigen.intervalo,
+        repeticiones: repasoOrigen.repeticiones,
+      } as any));
+    }
+
+    // --- Progreso de lectura de apuntes: emparejar por tema (asumiendo 1 apunte principal por tema) ---
+    const apunteOrigen = await this.apunteOploraRepo.findOne({ where: { tema: { id: temaOrigen.id } as any } });
+    const apunteDestino = await this.apunteOploraRepo.findOne({ where: { tema: { id: temaDestino.id } as any } });
+
+      if (apunteOrigen && apunteDestino) {
+        const progresoOrigen = await this.progresoLecturaRepo.findOne({
+          where: { usuario: { id: usuarioId } as any, apunte: { id: apunteOrigen.id } as any },
+        });
+        if (progresoOrigen) {
+          const yaExiste = await this.progresoLecturaRepo.findOne({
+            where: { usuario: { id: usuarioId } as any, apunte: { id: apunteDestino.id } as any },
+          });
+          if (!yaExiste) {
+            await this.progresoLecturaRepo.save(this.progresoLecturaRepo.create({
+              usuario: { id: usuarioId } as any,
+              apunte: { id: apunteDestino.id } as any,
+              porcentaje: progresoOrigen.porcentaje,
+            } as any));
+          }
+        }
+      }
+    // --- Notas personales del usuario en el tema: se repuntan al nuevo tema directamente ---
+    await this.apunteUsuarioRepo.update(
+      { usuario: { id: usuarioId } as any, tema: { id: temaOrigen.id } as any },
+      { tema: { id: temaDestino.id } as any },
+    );
+  }
 }
 }
