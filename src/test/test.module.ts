@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { TestController } from './test.controller';
@@ -34,14 +34,11 @@ import { ConfiguracionModule } from '../config/configuracion.module';
       Tema,
       Articulo
     ]),
-   TemaModule,
+    forwardRef(() => TemaModule), 
   ],
 
   controllers: [TestController],
-
   providers: [TestService],
-
   exports: [TestService],
-
 })
 export class TestModule {}
