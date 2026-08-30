@@ -48,8 +48,8 @@ export class Convocatoria {
   @Column({ type: 'text', nullable: true })
   diferenciasAnterior: string;
 
-  @Column({ nullable: true })
-  referenciaBoe: string;
+  @Column({ type: 'date', nullable: true })
+  fechaConvocatoria: Date; // fecha en que salió publicada la convocatoria en el BOE
 
   @Column({ nullable: true })
   plazoInscripcionInicio: Date;
@@ -99,6 +99,13 @@ export class Convocatoria {
 
   @Column({ type: 'text', nullable: true })
   bolsaEmpleoDescripcion: string;
+
+  // ── Estadísticas ──
+  @Column({ type: 'int', nullable: true })
+  numeroSolicitudes: number;
+
+  @Column({ type: 'int', nullable: true })
+  numeroPresentados: number;
 
   // ── Puestos múltiples dentro de la misma convocatoria ──
   @Column({ type: 'jsonb', nullable: true })

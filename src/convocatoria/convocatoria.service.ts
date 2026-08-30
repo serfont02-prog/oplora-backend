@@ -13,6 +13,7 @@ import { NotificacionService } from '../notificacion/notificacion.service';
 import { TemaService } from '../tema/tema.service';
 import { Flashcard } from '../flashcard/flashcard.entity';
 import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
+import { PreguntaTest } from '../test/pregunta-test.entity'; // ajusta la ruta si no coincide
 
 
 
@@ -40,6 +41,8 @@ export class ConvocatoriaService {
     private readonly flashcardRepo: Repository<Flashcard>,
     @InjectRepository(ApunteOplora)
     private readonly apunteOploraRepo: Repository<ApunteOplora>,
+    @InjectRepository(PreguntaTest)
+    private readonly preguntaTestRepo: Repository<PreguntaTest>,
   ) {}
 
   findByOposicion(oposicionId: string): Promise<Convocatoria[]> {
@@ -86,14 +89,16 @@ export class ConvocatoriaService {
       .getMany();
   }
 
-  async create(dto: CreateConvocatoriaDto): Promise<Convocatoria> {
+ async create(dto: CreateConvocatoriaDto): Promise<Convocatoria> {
   const convocatoria = this.convocatoriaRepo.create({
     anyo: dto.anyo,
     plazas: dto.plazas,
     estado: dto.estado,
     fechaExamen: dto.fechaExamen,
     urlInap: dto.urlInap,
-    referenciaBoe: dto.referenciaBoe,
+    fechaConvocatoria: dto.fechaConvocatoria ? new Date(dto.fechaConvocatoria) : undefined,
+    numeroSolicitudes: dto.numeroSolicitudes,
+    numeroPresentados: dto.numeroPresentados,
     oposicion: { id: dto.oposicionId } as any,
   });
 
@@ -190,6 +195,9 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
     fasesAdicionales: original.fasesAdicionales,
     puestos: original.puestos,
     bloquesTemario: original.bloquesTemario,
+    fechaConvocatoria: undefined,
+    numeroSolicitudes: undefined,
+    numeroPresentados: undefined,
     oposicion: { id: original.oposicion.id } as any,
   }));
 
@@ -209,8 +217,7 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
       tipo: tema.tipo,
       contexto: tema.contexto,
       convocatoria: { id: nueva.id } as any,
-
-      
+      claveEstable: tema.claveEstable, 
     }));
     mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
 
@@ -221,6 +228,23 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
           tema: { id: nuevoTema.id } as any,
           articulo: { id: (tn.articulo as any).id } as any,
         }));
+
+        //vinvular preguntas la tema nuevo
+        const temaConPreguntas = await this.temaRepo.findOne({
+          where: { id: tema.id },
+          relations: ['preguntasTest'],
+        });
+
+        if (temaConPreguntas?.preguntasTest?.length) {
+          const nuevoTemaConRelacion = await this.temaRepo.findOne({
+            where: { id: nuevoTema.id },
+            relations: ['preguntasTest'],
+          });
+          if (nuevoTemaConRelacion) { // ⭐ comprobación añadida
+            nuevoTemaConRelacion.preguntasTest = temaConPreguntas.preguntasTest;
+            await this.temaRepo.save(nuevoTemaConRelacion);
+          }
+        }
 
         // Copiar Flashcards del tema
         const flashcardsOrigen = await this.flashcardRepo.find({ where: { tema: { id: tema.id } as any } });

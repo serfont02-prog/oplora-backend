@@ -16,6 +16,9 @@ export class Tema {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Column({ nullable: true })
+  claveEstable: string;
+
   @Column()
   numero: number;
 

@@ -10,8 +10,8 @@ import { Tema } from '../tema/tema.entity';
 import { Articulo } from '../normativa/articulo.entity';
 import { OposicionLey } from '../ley/oposicion-ley.entity';
 import { resetearConsumosSiEsNuevoDia } from '../common/helpers/consumo.helper';
-import { getSuscripcionLimits, haSuperadoLimite } from '../common/helpers/plan.helper';
 import { ConfiguracionService } from '../config/configuracion.service';
+import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 
 export interface Pregunta {
   id?: string;
@@ -52,7 +52,10 @@ export class TestService {
     private readonly temaRepo: Repository<Tema>,
 
     @InjectRepository(Articulo)
-  private readonly articuloRepo: Repository<Articulo>,
+    private readonly articuloRepo: Repository<Articulo>,
+
+  @InjectRepository(UsuarioOposicion)
+  private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
 
   ) {}
 
@@ -194,16 +197,24 @@ if (modo === 'primer_reto') {
         );
     }
 
+    // Resolver la convocatoria activa del usuario para esta oposición (si la tenemos)
+    let convocatoriaActivaId: string | undefined;
+    if (usuarioId) {
+      const uo = await this.usuarioOposicionRepo.findOne({
+        where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+        relations: ['convocatoriaActiva'],
+      });
+      convocatoriaActivaId = uo?.convocatoriaActiva?.id;
+    }
+
   /* =========================================================
        TEST GENERAL OPOSICION
     ========================================================= */
 
 if (!temaId && !versionLeyId && !tituloId && !capituloId) {
   query = query
-    // Camino 1: pregunta → tema → convocatoria → oposicion
     .leftJoin('tema.convocatoria', 'convocatoria')
     .leftJoin('convocatoria.oposicion', 'oposicion')
-    // Camino 2: pregunta → articulo → TemaNormativa → tema → convocatoria → oposicion
     .leftJoin(
       TemaNormativa,
       'tn',
@@ -212,20 +223,29 @@ if (!temaId && !versionLeyId && !tituloId && !capituloId) {
     .leftJoin('tn.tema', 'temaNorm')
     .leftJoin('temaNorm.convocatoria', 'convocatoriaNorm')
     .leftJoin('convocatoriaNorm.oposicion', 'oposicionNorm')
-// Camino 3: pregunta → articulo → capitulo → tituloRef → versionLey → oposicionLey → oposicion
-.leftJoin('articulo.capitulo', 'capituloArt')
-.leftJoin('capituloArt.tituloRef', 'tituloRefArt')
-.leftJoin('tituloRefArt.versionLey', 'versionLeyArt')
-.leftJoin(
-  OposicionLey,
-  'ol',
-  'ol."versionLeyId" = versionLeyArt.id'
-)
-.leftJoin('ol.oposicion', 'oposicionLey')
-    .andWhere(
-      '(oposicion.id = :oposicionId OR oposicionNorm.id = :oposicionId OR oposicionLey.id = :oposicionId)',
-      { oposicionId }
+    .leftJoin('articulo.capitulo', 'capituloArt')
+    .leftJoin('capituloArt.tituloRef', 'tituloRefArt')
+    .leftJoin('tituloRefArt.versionLey', 'versionLeyArt')
+    .leftJoin(
+      OposicionLey,
+      'ol',
+      'ol."versionLeyId" = versionLeyArt.id'
+    )
+    .leftJoin('ol.oposicion', 'oposicionLey');
+
+  if (convocatoriaActivaId) {
+    // ⭐ si conocemos la convocatoria del usuario, filtramos por ella (más preciso)
+    query = query.andWhere(
+      '(convocatoria.id = :convocatoriaActivaId OR convocatoriaNorm.id = :convocatoriaActivaId OR oposicionLey.id = :oposicionId)',
+      { convocatoriaActivaId, oposicionId },
     );
+  } else {
+    // Fallback: comportamiento anterior si no hay usuario/convocatoria resuelta
+    query = query.andWhere(
+      '(oposicion.id = :oposicionId OR oposicionNorm.id = :oposicionId OR oposicionLey.id = :oposicionId)',
+      { oposicionId },
+    );
+  }
 }
 
 
@@ -276,7 +296,7 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
   oposicionId: string;
   totalPreguntas: number;
   correctas: number;
-  tipoTest: string; // ⭐ aquí llegará 'primer_reto'
+  tipoTest: string; 
   tiempoSegundos: number;
   temaId?: string;
   detallePreguntas: {

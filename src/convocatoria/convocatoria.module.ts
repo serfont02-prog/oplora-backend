@@ -14,11 +14,12 @@ import { NotificacionModule } from '../notificacion/notificacion.module';
 import { TemaModule } from '../tema/tema.module';
 import { Flashcard } from '../flashcard/flashcard.entity';
 import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
+import { PreguntaTest } from 'src/test/pregunta-test.entity';
 
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Convocatoria, Oposicion, DocumentoConvocatoria, Tema, TemaNormativa, NotaArticulo, UsuarioOposicion, Flashcard, ApunteOplora]),
+    TypeOrmModule.forFeature([Convocatoria, Oposicion, DocumentoConvocatoria, Tema, TemaNormativa, NotaArticulo, UsuarioOposicion, Flashcard, ApunteOplora, PreguntaTest]),
     NotificacionModule,
     forwardRef(() => TemaModule),
   ],

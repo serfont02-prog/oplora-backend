@@ -14,6 +14,7 @@ import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
 import { Flashcard } from '../flashcard/flashcard.entity'; 
 import { RepasoFC } from '../flashcard/repaso-fc.entity';
 import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity'; // ajusta la ruta real
+import { randomUUID } from 'crypto';
 
 
 @Injectable()
@@ -78,6 +79,7 @@ export class TemaService {
 
       const tema = this.temaRepo.create({
         ...resto,
+        claveEstable: resto.claveEstable || randomUUID(),
         convocatoria: convocatoriaId ? { id: convocatoriaId } as any : undefined,
       } as Partial<Tema>); 
 
@@ -94,6 +96,16 @@ export class TemaService {
 async remove(id: string) {
   await this.temaNormativaRepo.delete({ tema: { id } as any });
 
+  // Desvincular preguntas (sin borrarlas) antes de eliminar el tema
+  const temaConPreguntas = await this.temaRepo.findOne({
+    where: { id },
+    relations: ['preguntasTest'],
+  });
+  if (temaConPreguntas) {
+    temaConPreguntas.preguntasTest = [];
+    await this.temaRepo.save(temaConPreguntas);
+  }
+
   const apuntes = await this.apunteOploraRepo.find({ where: { tema: { id } as any } });
   for (const apunte of apuntes) {
     await this.apunteOploraService.eliminar(apunte.id);
@@ -106,7 +118,7 @@ async remove(id: string) {
   }
   await this.flashcardRepo.delete({ tema: { id } as any });
 
-  await this.apunteUsuarioRepo.delete({ tema: { id } as any }); // ⭐ nuevo
+  await this.apunteUsuarioRepo.delete({ tema: { id } as any });
 
   return this.temaRepo.delete(id);
 }

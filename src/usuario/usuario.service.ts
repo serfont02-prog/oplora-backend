@@ -576,7 +576,7 @@ private async migrarProgreso(usuarioId: string, oposicionId: string, origenId: s
   }
 
   for (const temaOrigen of temasOrigen) {
-    const temaDestino = temasDestino.find((t) => t.numero === temaOrigen.numero);
+    const temaDestino = temasDestino.find((t) => t.claveEstable === temaOrigen.claveEstable);
     if (!temaDestino) continue; // el tema ya no existe en la nueva convocatoria
 
     // --- Flashcards: emparejar por texto de pregunta ---
