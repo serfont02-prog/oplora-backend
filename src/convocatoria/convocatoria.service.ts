@@ -121,12 +121,25 @@ private async actualizarEstadoOposicion(oposicionId: string): Promise<void> {
 }
 
   async update(id: string, dto: UpdateConvocatoriaDto): Promise<Convocatoria> {
-    await this.findOne(id);
-    await this.convocatoriaRepo.update(id, dto);
-    const convocatoria = await this.findOne(id);
-    await this.actualizarEstadoOposicion((convocatoria.oposicion as any).id);
+  await this.findOne(id);
+
+  const payload: any = { ...dto };
+
+  // Convertir cadenas vacías en null para campos de fecha
+  if (payload.fechaConvocatoria === '') payload.fechaConvocatoria = null;
+  if (payload.fechaExamen === '') payload.fechaExamen = null;
+  if (payload.plazoInscripcionInicio === '') payload.plazoInscripcionInicio = null;
+  if (payload.plazoInscripcionFin === '') payload.plazoInscripcionFin = null;
+
+  // Convertir cadenas vacías en null para campos numéricos
+  if (payload.numeroSolicitudes === '' as any) payload.numeroSolicitudes = null;
+  if (payload.numeroPresentados === '' as any) payload.numeroPresentados = null;
+
+  await this.convocatoriaRepo.update(id, payload);
+  const convocatoria = await this.findOne(id);
+  await this.actualizarEstadoOposicion((convocatoria.oposicion as any).id);
   return convocatoria;
-  }
+}
 
 async remove(id: string): Promise<void> {
   // Borrar documentos asociados
