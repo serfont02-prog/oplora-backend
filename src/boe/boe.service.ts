@@ -341,7 +341,6 @@ async procesarConvocatoria(id: string, oposicionExistenteId?: string): Promise<{
       anyo: datos.anyo ? parseInt(datos.anyo.toString()) : new Date().getFullYear(),
       plazas: datos.plazas,
       estado: 'borrador' as any,
-      referenciaBoe: boe.referenciaBOE,
       oposicion: { id: oposicion.id } as any,
     }));
     await this.oposicionRepo.update(oposicion.id, { activa: true });

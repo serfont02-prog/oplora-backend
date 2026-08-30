@@ -210,80 +210,92 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
 
   const mapaTemasViejoNuevo: Record<string, string> = {};
 
-  for (const tema of temas) {
-    const nuevoTema = await this.temaRepo.save(this.temaRepo.create({
-      numero: tema.numero,
-      titulo: tema.titulo,
-      tipo: tema.tipo,
-      contexto: tema.contexto,
-      convocatoria: { id: nueva.id } as any,
-      claveEstable: tema.claveEstable, 
-    }));
-    mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
-
-    // ⭐ Copiar vinculación de artículos (TemaNormativa)
-    if (tema.normativas?.length) {
-      for (const tn of tema.normativas) {
-        await this.temaNormativaRepo.save(this.temaNormativaRepo.create({
-          tema: { id: nuevoTema.id } as any,
-          articulo: { id: (tn.articulo as any).id } as any,
+      for (const tema of temas) {
+        const nuevoTema = await this.temaRepo.save(this.temaRepo.create({
+          numero: tema.numero,
+          titulo: tema.titulo,
+          tipo: tema.tipo,
+          contexto: tema.contexto,
+          convocatoria: { id: nueva.id } as any,
+          claveEstable: tema.claveEstable, 
         }));
+        mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
 
-        //vinvular preguntas la tema nuevo
-        const temaConPreguntas = await this.temaRepo.findOne({
-          where: { id: tema.id },
+        // ⭐ Copiar vinculación de artículos (TemaNormativa)
+        if (tema.normativas?.length) {
+          for (const tema of temas) {
+      const nuevoTema = await this.temaRepo.save(this.temaRepo.create({
+        numero: tema.numero,
+        titulo: tema.titulo,
+        tipo: tema.tipo,
+        contexto: tema.contexto,
+        convocatoria: { id: nueva.id } as any,
+        claveEstable: tema.claveEstable,
+      }));
+      mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
+
+      // Copiar vinculación de artículos (TemaNormativa)
+      if (tema.normativas?.length) {
+        for (const tn of tema.normativas) {
+          await this.temaNormativaRepo.save(this.temaNormativaRepo.create({
+            tema: { id: nuevoTema.id } as any,
+            articulo: { id: (tn.articulo as any).id } as any,
+          }));
+        }
+      }
+
+      // ⭐ Vincular preguntas al tema nuevo — UNA VEZ por tema, fuera del for de normativas
+      const temaConPreguntas = await this.temaRepo.findOne({
+        where: { id: tema.id },
+        relations: ['preguntasTest'],
+      });
+      if (temaConPreguntas?.preguntasTest?.length) {
+        const nuevoTemaConRelacion = await this.temaRepo.findOne({
+          where: { id: nuevoTema.id },
           relations: ['preguntasTest'],
         });
-
-        if (temaConPreguntas?.preguntasTest?.length) {
-          const nuevoTemaConRelacion = await this.temaRepo.findOne({
-            where: { id: nuevoTema.id },
-            relations: ['preguntasTest'],
-          });
-          if (nuevoTemaConRelacion) { // ⭐ comprobación añadida
-            nuevoTemaConRelacion.preguntasTest = temaConPreguntas.preguntasTest;
-            await this.temaRepo.save(nuevoTemaConRelacion);
-          }
+        if (nuevoTemaConRelacion) {
+          nuevoTemaConRelacion.preguntasTest = temaConPreguntas.preguntasTest;
+          await this.temaRepo.save(nuevoTemaConRelacion);
         }
-
-        // Copiar Flashcards del tema
-        const flashcardsOrigen = await this.flashcardRepo.find({ where: { tema: { id: tema.id } as any } });
-        for (const fc of flashcardsOrigen) {
-          await this.flashcardRepo.save(this.flashcardRepo.create({
-            tipo: fc.tipo,
-            nivel: fc.nivel,
-            pregunta: fc.pregunta,
-            respuesta: fc.respuesta,
-            explicacion: fc.explicacion,
-            esParaDuelo: fc.esParaDuelo,
-            activa: fc.activa,
-            tema: { id: nuevoTema.id } as any,
-            articulo: fc.articulo ? { id: (fc.articulo as any).id } as any : undefined,
-          } as any));
-        }
-
-        // Copiar Apuntes OPLORA del tema
-          // Copiar Apuntes OPLORA del tema
-          const apuntesOrigen = await this.apunteOploraRepo.find({ where: { tema: { id: tema.id } as any } });
-          for (const ap of apuntesOrigen) {
-            await this.apunteOploraRepo.save(this.apunteOploraRepo.create({
-              titulo: ap.titulo,
-              descripcion: ap.descripcion,
-              urlArchivo: ap.urlArchivo,
-              tipo: ap.tipo,
-              orden: ap.orden,
-              contenidoEstructurado: ap.contenidoEstructurado,
-              textoCompleto: ap.textoCompleto,
-              activo: ap.activo,
-              versionLeyId: ap.versionLeyId,
-              paginas: ap.paginas,
-              tamanoBytes: ap.tamanoBytes,
-              versionParser: ap.versionParser,
-              tema: { id: nuevoTema.id } as any,
-            } as any));
-          }
-
       }
+
+      // ⭐ Copiar Flashcards del tema — UNA VEZ por tema
+      const flashcardsOrigen = await this.flashcardRepo.find({ where: { tema: { id: tema.id } as any } });
+      for (const fc of flashcardsOrigen) {
+        await this.flashcardRepo.save(this.flashcardRepo.create({
+          tipo: fc.tipo,
+          nivel: fc.nivel,
+          pregunta: fc.pregunta,
+          respuesta: fc.respuesta,
+          explicacion: fc.explicacion,
+          esParaDuelo: fc.esParaDuelo,
+          activa: fc.activa,
+          tema: { id: nuevoTema.id } as any,
+          articulo: fc.articulo ? { id: (fc.articulo as any).id } as any : undefined,
+        } as any));
+      }
+
+      // ⭐ Copiar Apuntes OPLORA del tema — UNA VEZ por tema
+      const apuntesOrigen = await this.apunteOploraRepo.find({ where: { tema: { id: tema.id } as any } });
+      for (const ap of apuntesOrigen) {
+        await this.apunteOploraRepo.save(this.apunteOploraRepo.create({
+          titulo: ap.titulo,
+          descripcion: ap.descripcion,
+          urlArchivo: ap.urlArchivo,
+          tipo: ap.tipo,
+          orden: ap.orden,
+          contenidoEstructurado: ap.contenidoEstructurado,
+          textoCompleto: ap.textoCompleto,
+          activo: ap.activo,
+          versionLeyId: ap.versionLeyId,
+          paginas: ap.paginas,
+          tamanoBytes: ap.tamanoBytes,
+          versionParser: ap.versionParser,
+          tema: { id: nuevoTema.id } as any,
+        } as any));
+      }
+    }
     }
   }
 
