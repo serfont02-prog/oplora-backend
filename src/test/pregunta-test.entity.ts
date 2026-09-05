@@ -65,9 +65,9 @@ export class PreguntaTest {
      RELACIONES
   ========================================================= */
 
-  @ManyToMany(() => Tema)
-  @JoinTable()
-  temas: Tema[];
+    @ManyToMany(() => Tema)
+    @JoinTable()
+    temas: Tema[];
 
   @ManyToMany(() => Articulo)
   @JoinTable()

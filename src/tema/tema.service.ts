@@ -99,14 +99,10 @@ async remove(id: string) {
   console.log('TEMA PASO A OK');
 
   console.log('TEMA PASO B: desvincular preguntas');
-  const temaConPreguntas = await this.temaRepo.findOne({
-    where: { id },
-    relations: ['preguntasTest'],
-  });
-  if (temaConPreguntas) {
-    temaConPreguntas.preguntasTest = [];
-    await this.temaRepo.save(temaConPreguntas);
-  }
+  await this.temaRepo.query(
+    `DELETE FROM preguntas_test_temas_temas WHERE "temasId" = $1`,
+    [id],
+  );
   console.log('TEMA PASO B OK');
 
   console.log('TEMA PASO C: apuntes oplora');
