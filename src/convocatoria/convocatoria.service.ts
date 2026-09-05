@@ -184,9 +184,10 @@ async remove(id: string): Promise<void> {
   if (!convocatoria) throw new NotFoundException('Convocatoria no encontrada');
 
   // Bloquear el borrado si hay usuarios activos en esta convocatoria
-  const usuariosAfectados = await this.usuarioOposicionRepo.count({
-    where: { convocatoriaActiva: { id } as any },
-  });
+  const usuariosAfectados = await this.usuarioOposicionRepo
+    .createQueryBuilder('uo')
+    .where('uo."convocatoriaActivaId" = :id', { id })
+    .getCount();
 
   if (usuariosAfectados > 0) {
     throw new BadRequestException(
