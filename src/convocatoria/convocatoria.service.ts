@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Convocatoria, EstadoConvocatoria } from './convocatoria.entity';
@@ -13,9 +13,9 @@ import { NotificacionService } from '../notificacion/notificacion.service';
 import { TemaService } from '../tema/tema.service';
 import { Flashcard } from '../flashcard/flashcard.entity';
 import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
-import { PreguntaTest } from '../test/pregunta-test.entity'; // ajusta la ruta si no coincide
-
-
+import { PreguntaTest } from '../test/pregunta-test.entity';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { LessThanOrEqual } from 'typeorm';
 
 
 @Injectable()
@@ -52,6 +52,44 @@ export class ConvocatoriaService {
       order: { anyo: 'DESC' },
     });
   }
+
+  @Cron(CronExpression.EVERY_10_MINUTES)
+  async revisarNotificacionesConvocatoriaPendientes() {
+  const ahora = new Date();
+
+  const pendientes = await this.convocatoriaRepo.find({
+    where: {
+      notificacionCambioEnviada: false,
+      notificarCambioEn: LessThanOrEqual(ahora),
+    } as any,
+    relations: ['oposicion'],
+  });
+
+  for (const conv of pendientes) {
+    const origenId = (conv as any).convocatoriaOrigenId;
+    if (!origenId) continue;
+
+    const usuariosVinculados = await this.usuarioOposicionRepo.find({
+      where: { convocatoriaActiva: { id: origenId } },
+      relations: ['usuario'],
+    });
+
+    for (const uo of usuariosVinculados) {
+      await this.notificacionService.crear({
+        usuarioId: (uo.usuario as any).id,
+        tipo: 'nueva_convocatoria' as any,
+        titulo: `Nueva convocatoria ${conv.anyo} disponible`,
+        mensaje: `Ya está disponible la convocatoria ${conv.anyo} de tu oposición. ¿Quieres cambiarte?`,
+        prioridad: 'alta' as any,
+        urlAccion: `/app/oposicion/${conv.oposicion.id}/cambiar-convocatoria`,
+      });
+    }
+
+    await this.convocatoriaRepo.update(conv.id, { notificacionCambioEnviada: true } as any);
+  }
+}
+
+
   async findDocumentosByHash(hash: string, convocatoriaId: string) {
   return this.documentoRepo.find({
     where: { hashContenido: hash, convocatoria: { id: convocatoriaId } },
@@ -142,6 +180,20 @@ private async actualizarEstadoOposicion(oposicionId: string): Promise<void> {
 }
 
 async remove(id: string): Promise<void> {
+  const convocatoria = await this.convocatoriaRepo.findOne({ where: { id } });
+  if (!convocatoria) throw new NotFoundException('Convocatoria no encontrada');
+
+  // Bloquear el borrado si hay usuarios activos en esta convocatoria
+  const usuariosAfectados = await this.usuarioOposicionRepo.count({
+    where: { convocatoriaActiva: { id } as any },
+  });
+
+  if (usuariosAfectados > 0) {
+    throw new BadRequestException(
+      `No se puede borrar esta convocatoria: ${usuariosAfectados} usuario(s) la tienen como convocatoria activa. Cámbialos de convocatoria antes de borrarla.`,
+    );
+  }
+
   // Borrar documentos asociados
   await this.documentoRepo.delete({ convocatoria: { id } as any });
 
@@ -189,14 +241,13 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
   });
   if (!original) throw new NotFoundException('Convocatoria no encontrada');
 
-  // Crear nueva convocatoria con los mismos datos
   const nueva = await this.convocatoriaRepo.save(this.convocatoriaRepo.create({
     anyo: original.anyo + 1,
     plazas: original.plazas,
     estado: 'borrador' as any,
     urlInap: original.urlInap,
     turno: original.turno,
-    ejercicios: original.ejercicios, 
+    ejercicios: original.ejercicios,
     fraccionPenalizacion: original.fraccionPenalizacion,
     notaMinimaAprobado: original.notaMinimaAprobado,
     requisitos: original.requisitos,
@@ -223,92 +274,77 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
 
   const mapaTemasViejoNuevo: Record<string, string> = {};
 
-      for (const tema of temas) {
-        const nuevoTema = await this.temaRepo.save(this.temaRepo.create({
-          numero: tema.numero,
-          titulo: tema.titulo,
-          tipo: tema.tipo,
-          contexto: tema.contexto,
-          convocatoria: { id: nueva.id } as any,
-          claveEstable: tema.claveEstable, 
+  for (const tema of temas) {
+    const nuevoTema = await this.temaRepo.save(this.temaRepo.create({
+      numero: tema.numero,
+      titulo: tema.titulo,
+      tipo: tema.tipo,
+      contexto: tema.contexto,
+      convocatoria: { id: nueva.id } as any,
+      claveEstable: tema.claveEstable,
+    }));
+    mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
+
+    // Copiar vinculación de artículos (TemaNormativa)
+    if (tema.normativas?.length) {
+      for (const tn of tema.normativas) {
+        await this.temaNormativaRepo.save(this.temaNormativaRepo.create({
+          tema: { id: nuevoTema.id } as any,
+          articulo: { id: (tn.articulo as any).id } as any,
         }));
-        mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
-
-        // ⭐ Copiar vinculación de artículos (TemaNormativa)
-        if (tema.normativas?.length) {
-          for (const tema of temas) {
-      const nuevoTema = await this.temaRepo.save(this.temaRepo.create({
-        numero: tema.numero,
-        titulo: tema.titulo,
-        tipo: tema.tipo,
-        contexto: tema.contexto,
-        convocatoria: { id: nueva.id } as any,
-        claveEstable: tema.claveEstable,
-      }));
-      mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
-
-      // Copiar vinculación de artículos (TemaNormativa)
-      if (tema.normativas?.length) {
-        for (const tn of tema.normativas) {
-          await this.temaNormativaRepo.save(this.temaNormativaRepo.create({
-            tema: { id: nuevoTema.id } as any,
-            articulo: { id: (tn.articulo as any).id } as any,
-          }));
-        }
-      }
-
-      // ⭐ Vincular preguntas al tema nuevo — UNA VEZ por tema, fuera del for de normativas
-      const temaConPreguntas = await this.temaRepo.findOne({
-        where: { id: tema.id },
-        relations: ['preguntasTest'],
-      });
-      if (temaConPreguntas?.preguntasTest?.length) {
-        const nuevoTemaConRelacion = await this.temaRepo.findOne({
-          where: { id: nuevoTema.id },
-          relations: ['preguntasTest'],
-        });
-        if (nuevoTemaConRelacion) {
-          nuevoTemaConRelacion.preguntasTest = temaConPreguntas.preguntasTest;
-          await this.temaRepo.save(nuevoTemaConRelacion);
-        }
-      }
-
-      // ⭐ Copiar Flashcards del tema — UNA VEZ por tema
-      const flashcardsOrigen = await this.flashcardRepo.find({ where: { tema: { id: tema.id } as any } });
-      for (const fc of flashcardsOrigen) {
-        await this.flashcardRepo.save(this.flashcardRepo.create({
-          tipo: fc.tipo,
-          nivel: fc.nivel,
-          pregunta: fc.pregunta,
-          respuesta: fc.respuesta,
-          explicacion: fc.explicacion,
-          esParaDuelo: fc.esParaDuelo,
-          activa: fc.activa,
-          tema: { id: nuevoTema.id } as any,
-          articulo: fc.articulo ? { id: (fc.articulo as any).id } as any : undefined,
-        } as any));
-      }
-
-      // ⭐ Copiar Apuntes OPLORA del tema — UNA VEZ por tema
-      const apuntesOrigen = await this.apunteOploraRepo.find({ where: { tema: { id: tema.id } as any } });
-      for (const ap of apuntesOrigen) {
-        await this.apunteOploraRepo.save(this.apunteOploraRepo.create({
-          titulo: ap.titulo,
-          descripcion: ap.descripcion,
-          urlArchivo: ap.urlArchivo,
-          tipo: ap.tipo,
-          orden: ap.orden,
-          contenidoEstructurado: ap.contenidoEstructurado,
-          textoCompleto: ap.textoCompleto,
-          activo: ap.activo,
-          versionLeyId: ap.versionLeyId,
-          paginas: ap.paginas,
-          tamanoBytes: ap.tamanoBytes,
-          versionParser: ap.versionParser,
-          tema: { id: nuevoTema.id } as any,
-        } as any));
       }
     }
+
+    // Vincular preguntas al tema nuevo
+    const temaConPreguntas = await this.temaRepo.findOne({
+      where: { id: tema.id },
+      relations: ['preguntasTest'],
+    });
+    if (temaConPreguntas?.preguntasTest?.length) {
+      const nuevoTemaConRelacion = await this.temaRepo.findOne({
+        where: { id: nuevoTema.id },
+        relations: ['preguntasTest'],
+      });
+      if (nuevoTemaConRelacion) {
+        nuevoTemaConRelacion.preguntasTest = temaConPreguntas.preguntasTest;
+        await this.temaRepo.save(nuevoTemaConRelacion);
+      }
+    }
+
+    // Copiar Flashcards del tema
+    const flashcardsOrigen = await this.flashcardRepo.find({ where: { tema: { id: tema.id } as any } });
+    for (const fc of flashcardsOrigen) {
+      await this.flashcardRepo.save(this.flashcardRepo.create({
+        tipo: fc.tipo,
+        nivel: fc.nivel,
+        pregunta: fc.pregunta,
+        respuesta: fc.respuesta,
+        explicacion: fc.explicacion,
+        esParaDuelo: fc.esParaDuelo,
+        activa: fc.activa,
+        tema: { id: nuevoTema.id } as any,
+        articulo: fc.articulo ? { id: (fc.articulo as any).id } as any : undefined,
+      } as any));
+    }
+
+    // Copiar Apuntes OPLORA del tema
+    const apuntesOrigen = await this.apunteOploraRepo.find({ where: { tema: { id: tema.id } as any } });
+    for (const ap of apuntesOrigen) {
+      await this.apunteOploraRepo.save(this.apunteOploraRepo.create({
+        titulo: ap.titulo,
+        descripcion: ap.descripcion,
+        urlArchivo: ap.urlArchivo,
+        tipo: ap.tipo,
+        orden: ap.orden,
+        contenidoEstructurado: ap.contenidoEstructurado,
+        textoCompleto: ap.textoCompleto,
+        activo: ap.activo,
+        versionLeyId: ap.versionLeyId,
+        paginas: ap.paginas,
+        tamanoBytes: ap.tamanoBytes,
+        versionParser: ap.versionParser,
+        tema: { id: nuevoTema.id } as any,
+      } as any));
     }
   }
 
@@ -328,24 +364,12 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
     }
   }
 
-  // Notificar a usuarios vinculados a la convocatoria anterior
-const usuariosVinculados = await this.usuarioOposicionRepo.find({
-  where: { convocatoriaActiva: { id: original.id } },
-  relations: ['usuario'],
-});
-
-for (const uo of usuariosVinculados) {
-  await this.notificacionService.crear({
-    usuarioId: (uo.usuario as any).id,
-    tipo: 'nueva_convocatoria' as any,
-    titulo: `Nueva convocatoria ${nueva.anyo} disponible`, 
-    mensaje: `Ya está disponible la convocatoria ${nueva.anyo} de tu oposición. ¿Quieres cambiarte?`,
-    prioridad: 'alta' as any,
-    urlAccion: `/app/oposicion/${original.oposicion.id}/cambiar-convocatoria`,
-  });
-}
-
-
+  // ⭐ Programar notificación diferida (1 hora), en vez de notificar inmediatamente
+  await this.convocatoriaRepo.update(nueva.id, {
+    notificarCambioEn: new Date(Date.now() + 60 * 60 * 1000),
+    notificacionCambioEnviada: false,
+    convocatoriaOrigenId: original.id,
+  } as any);
 
   return nueva;
 }

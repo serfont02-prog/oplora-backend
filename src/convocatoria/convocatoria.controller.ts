@@ -54,6 +54,11 @@ export class ConvocatoriaController {
   return this.service.copiarConvocatoria(id);
   }
 
+  @Post('revisar-notificaciones-pendientes')
+  revisarManual() {
+    return this.service.revisarNotificacionesConvocatoriaPendientes();
+  }
+
   @Post()
   create(@Body() dto: CreateConvocatoriaDto) {
     return this.service.create(dto);

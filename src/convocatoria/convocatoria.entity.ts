@@ -116,6 +116,16 @@ export class Convocatoria {
     plazas?: number;
   }[];
 
+  // ── Notificación diferida al copiar convocatoria ──
+    @Column({ type: 'timestamp', nullable: true })
+    notificarCambioEn: Date;
+
+    @Column({ default: false })
+    notificacionCambioEnviada: boolean;
+
+    @Column({ nullable: true })
+    convocatoriaOrigenId: string;
+
   // ── Temario agrupado por bloques ──
   @Column({ type: 'jsonb', nullable: true })
   bloquesTemario: {
