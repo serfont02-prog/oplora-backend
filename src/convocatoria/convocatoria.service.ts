@@ -302,21 +302,18 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
       }
     }
 
-    // Vincular preguntas al tema nuevo
-    const temaConPreguntas = await this.temaRepo.findOne({
-      where: { id: tema.id },
-      relations: ['preguntasTest'],
-    });
-    if (temaConPreguntas?.preguntasTest?.length) {
-      const nuevoTemaConRelacion = await this.temaRepo.findOne({
-        where: { id: nuevoTema.id },
-        relations: ['preguntasTest'],
-      });
-      if (nuevoTemaConRelacion) {
-        nuevoTemaConRelacion.preguntasTest = temaConPreguntas.preguntasTest;
-        await this.temaRepo.save(nuevoTemaConRelacion);
+        // Vincular preguntas al tema nuevo (copiando las filas de la tabla intermedia directamente)
+      const preguntasVinculadas = await this.temaRepo.query(
+        `SELECT "preguntasTestId" FROM preguntas_test_temas_temas WHERE "temasId" = $1`,
+        [tema.id],
+      );
+
+      for (const fila of preguntasVinculadas) {
+        await this.temaRepo.query(
+          `INSERT INTO preguntas_test_temas_temas ("temasId", "preguntasTestId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [nuevoTema.id, fila.preguntasTestId],
+        );
       }
-    }
 
     // Copiar Flashcards del tema
     const flashcardsOrigen = await this.flashcardRepo.find({ where: { tema: { id: tema.id } as any } });

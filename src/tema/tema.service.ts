@@ -94,40 +94,23 @@ export class TemaService {
   }
 
 async remove(id: string) {
-  console.log('TEMA PASO A: temaNormativa');
   await this.temaNormativaRepo.delete({ tema: { id } as any });
-  console.log('TEMA PASO A OK');
-
-  console.log('TEMA PASO B: desvincular preguntas');
   await this.temaRepo.query(
     `DELETE FROM preguntas_test_temas_temas WHERE "temasId" = $1`,
     [id],
   );
-  console.log('TEMA PASO B OK');
 
-  console.log('TEMA PASO C: apuntes oplora');
   const apuntes = await this.apunteOploraRepo.find({ where: { tema: { id } as any } });
-  console.log('TEMA PASO C: apuntes encontrados', apuntes.length);
   for (const apunte of apuntes) {
     await this.apunteOploraService.eliminar(apunte.id);
   }
-  console.log('TEMA PASO C OK');
-
-  console.log('TEMA PASO D: flashcards');
   const flashcardsDelTema = await this.flashcardRepo.find({ where: { tema: { id } as any }, select: ['id'] });
-  console.log('TEMA PASO D: flashcards encontradas', flashcardsDelTema.length);
   const flashcardIds = flashcardsDelTema.map((f) => f.id);
   if (flashcardIds.length > 0) {
     await this.repasoFcRepo.delete({ flashcard: { id: In(flashcardIds) } as any });
   }
   await this.flashcardRepo.delete({ tema: { id } as any });
-  console.log('TEMA PASO D OK');
-
-  console.log('TEMA PASO E: apunte usuario');
   await this.apunteUsuarioRepo.delete({ tema: { id } as any });
-  console.log('TEMA PASO E OK');
-
-  console.log('TEMA PASO F: borrando tema');
   return this.temaRepo.delete(id);
 }
 
