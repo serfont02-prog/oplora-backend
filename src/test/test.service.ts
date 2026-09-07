@@ -379,6 +379,7 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
   if (datos.tipoTest !== 'primer_reto') {
   await this.actualizarPuntos(
     datos.usuarioId,
+    datos.oposicionId, // ⭐ nuevo
     datos.totalPreguntas,
     datos.correctas,
     porcentaje,
@@ -395,14 +396,17 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
 
  private async actualizarPuntos(
   usuarioId: string,
+  oposicionId: string,
   numPreguntas: number,
   correctas: number,
   porcentaje: number,
 ): Promise<void> {
   const puntosAcciones = await this.configuracionService.getPuntosAcciones();
 
-  const usuario = await this.usuarioRepo.findOne({ where: { id: usuarioId } });
-  if (!usuario) return;
+  const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+  });
+  if (!usuarioOposicion) return;
 
   // Puntos por preguntas correctas
   let puntosGanados = correctas * puntosAcciones.preguntaCorrecta;
@@ -416,10 +420,10 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
 
   if (puntosGanados === 0) return;
 
-  const nuevosPuntos = usuario.puntos + puntosGanados;
+  const nuevosPuntos = usuarioOposicion.puntos + puntosGanados;
   const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(nuevosPuntos);
 
-  await this.usuarioRepo.update(usuarioId, {
+  await this.usuarioOposicionRepo.update(usuarioOposicion.id, {
     puntos: nuevosPuntos,
     nivel: nuevoNivel,
   });

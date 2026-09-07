@@ -84,7 +84,7 @@ async consultarFecha(fecha: string): Promise<any[]> {
     }
 
     return convocatorias;
-  } catch (e) {
+  } catch (e:any) {
     throw new HttpException(`Error consultando BOE: ${e.message}`, 500);
   }
 }
@@ -179,8 +179,8 @@ ${texto}`;
 
    return { cuerpos, datos: datosPrincipales };
 } catch (e) {
-    console.error('Error en extraerDatosPDF:', e.message);
-    throw new HttpException(`Error: ${e.message}`, 500);
+    //console.error('Error en extraerDatosPDF:', e.message);
+    //throw new HttpException(Error,00 );
     
   }
  

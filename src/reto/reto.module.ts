@@ -10,14 +10,16 @@ import { TestModule } from '../test/test.module';
 import { NotificacionModule } from '../notificacion/notificacion.module';
 import { ContactoReciente } from './contacto-reciente.entity';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
-import { ConfiguracionModule } from '../config/configuracion.module'; // ⭐ añadir
+import { ConfiguracionModule } from '../config/configuracion.module';
+import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Reto, ParticipacionReto, Usuario, Tema, ContactoReciente, Convocatoria]),
+    TypeOrmModule.forFeature([Reto, ParticipacionReto, Usuario, Tema, ContactoReciente, Convocatoria, UsuarioOposicion]),
     TestModule,
     NotificacionModule,
-    ConfiguracionModule, // ⭐ añadir
+    ConfiguracionModule, 
   ],
   controllers: [RetoController],
   providers: [RetoService],

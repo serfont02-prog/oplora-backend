@@ -39,7 +39,7 @@ export class OposicionService {
         });
       }
       const result = await qb.getMany();
-      result.forEach(o => console.log(o.nombre, 'convocatoriasActivas:', (o as any).convocatoriasActivas));
+      //result.forEach(o => console.log(o.nombre, 'convocatoriasActivas:', (o as any).convocatoriasActivas));
       return result;
       //return qb.getMany();
     }

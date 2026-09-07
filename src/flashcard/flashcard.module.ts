@@ -11,13 +11,15 @@ import { Tema } from '../tema/tema.entity';
 import { Usuario } from '../usuario/usuario.entity';
 import { NotificacionModule } from '../notificacion/notificacion.module';
 import { ConfiguracionModule } from '../config/configuracion.module';
+import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+
 
 
 
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Flashcard, RepasoFC, RetoFC, ResultadoRetoFC, Articulo, Tema, Usuario]),
+    TypeOrmModule.forFeature([Flashcard, RepasoFC, RetoFC, ResultadoRetoFC, Articulo, Tema, Usuario, UsuarioOposicion]),
     NotificacionModule,
     ConfiguracionModule, // ⭐ aquí, fuera de forFeature
   ],

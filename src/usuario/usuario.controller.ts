@@ -179,8 +179,9 @@ async actualizarObjetivo(
 async actualizarNivel(
   @Request() req,
   @Body('nivel') nivel: number,
+  @Body('oposicionId') oposicionId: string,
 ) {
-  return this.service.actualizarNivel(req.user.id, nivel);
+  return this.service.actualizarNivel(req.user.id, oposicionId, nivel);
 }
 
 

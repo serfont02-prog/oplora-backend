@@ -68,12 +68,6 @@ export class Usuario {
   nick: string;
 
   @Column({ default: 0 })
-  puntos: number;
-
-  @Column({ default: 1 })
-  nivel: number;
-
-  @Column({ default: 0 })
   preguntasCorrectasTotales: number;
 
   @OneToMany(() => ResultadoTest, (r) => r.usuario)

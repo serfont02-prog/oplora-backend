@@ -12,6 +12,8 @@ import { ContactoReciente } from './contacto-reciente.entity';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import { ConfiguracionService } from '../config/configuracion.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+
 
 @Injectable()
 export class RetoService {
@@ -31,6 +33,8 @@ export class RetoService {
     @InjectRepository(ContactoReciente)
     private readonly contactoRepo: Repository<ContactoReciente>,
     private readonly configuracionService: ConfiguracionService,
+    @InjectRepository(UsuarioOposicion)
+    private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
   ) {}
 
   // ─── RETO DIARIO ─────────────────────────────────────────
@@ -53,60 +57,65 @@ export class RetoService {
     }
   }
   async getRetoDiario(usuarioId: string, oposicionId: string): Promise<Reto> {
-    const usuario = await this.usuarioRepo.findOne({ where: { id: usuarioId } });
-    if (!usuario) throw new NotFoundException('Usuario no encontrado');
+  const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+  });
+  if (!usuarioOposicion) throw new NotFoundException('Usuario no vinculado a esta oposición');
+  const nivelUsuario = usuarioOposicion.nivel;
 
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    const manana = new Date(hoy);
-    manana.setDate(manana.getDate() + 1);
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+  const manana = new Date(hoy);
+  manana.setDate(manana.getDate() + 1);
 
-    // Buscar si ya existe un reto diario para hoy y el nivel del usuario
-    let reto = await this.retoRepo.findOne({
-      where: {
-        tipo: TipoReto.DIARIO,
-        estado: EstadoReto.ACTIVO,
-        oposicion: { id: oposicionId },
-        nivelRequerido: usuario.nivel,
-      },
-      relations: ['participaciones', 'participaciones.usuario'],
-    });
-
-    if (!reto || new Date(reto.creadoEn) < hoy) {
-      reto = await this.crearRetoDiario(oposicionId, usuario.nivel);
-    }
-
-    return reto;
-  }
-
-  private async crearRetoDiario(oposicionId: string, nivel: number): Promise<Reto> {
-    const numPreguntas = this.preguntasPorNivel(nivel);
-
-    const preguntas = await this.testService.generarTest(
-      oposicionId,
-      numPreguntas,
-    );
-
-    const fechaFin = new Date();
-    fechaFin.setHours(23, 59, 59, 999);
-
-    const reto = this.retoRepo.create({
+  let reto = await this.retoRepo.findOne({
+    where: {
       tipo: TipoReto.DIARIO,
       estado: EstadoReto.ACTIVO,
-      nivelRequerido: nivel,
-      preguntas,
-      fechaFin,
-      oposicion: { id: oposicionId } as any,
-    });
+      oposicion: { id: oposicionId },
+      nivelRequerido: nivelUsuario,
+    },
+    relations: ['participaciones', 'participaciones.usuario'],
+  });
 
-    return this.retoRepo.save(reto);
+  if (!reto || new Date(reto.creadoEn) < hoy) {
+    reto = await this.crearRetoDiario(oposicionId, nivelUsuario);
   }
+
+  return reto;
+}
+
+    private async crearRetoDiario(oposicionId: string, nivel: number): Promise<Reto> {
+      const numPreguntas = this.preguntasPorNivel(nivel);
+
+      const preguntas = await this.testService.generarTest(
+        oposicionId,
+        numPreguntas,
+      );
+
+      const fechaFin = new Date();
+      fechaFin.setHours(23, 59, 59, 999);
+
+      const reto = this.retoRepo.create({
+        tipo: TipoReto.DIARIO,
+        estado: EstadoReto.ACTIVO,
+        nivelRequerido: nivel,
+        preguntas,
+        fechaFin,
+        oposicion: { id: oposicionId } as any,
+      });
+
+      return this.retoRepo.save(reto);
+    }
 
   // ─── RETO SEMANAL ────────────────────────────────────────
 
   async getRetoSemanal(usuarioId: string, oposicionId: string): Promise<Reto> {
-    const usuario = await this.usuarioRepo.findOne({ where: { id: usuarioId } });
-    if (!usuario) throw new NotFoundException('Usuario no encontrado');
+    const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
+      where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    });
+    if (!usuarioOposicion) throw new NotFoundException('Usuario no vinculado a esta oposición');
+    const nivelUsuario = usuarioOposicion.nivel;
 
     const inicioSemana = new Date();
     inicioSemana.setHours(0, 0, 0, 0);
@@ -117,13 +126,13 @@ export class RetoService {
         tipo: TipoReto.SEMANAL,
         estado: EstadoReto.ACTIVO,
         oposicion: { id: oposicionId },
-        nivelRequerido: usuario.nivel,
+        nivelRequerido: nivelUsuario,
       },
       relations: ['participaciones', 'participaciones.usuario', 'tema'],
     });
 
     if (!reto || new Date(reto.creadoEn) < inicioSemana) {
-      reto = await this.crearRetoSemanal(oposicionId, usuario.nivel);
+      reto = await this.crearRetoSemanal(oposicionId, nivelUsuario);
     }
 
     return reto;
@@ -244,8 +253,7 @@ async completarReto(
   respuestas: any[],
   tiempoSegundos: number,
 ): Promise<ParticipacionReto> {
-  console.log('=== INTENTO COMPLETAR ===', 'retoId:', retoId, 'usuarioId:', usuarioId);
-
+  
   const participacion = await this.participacionRepo.findOne({
     where: {
       reto: { id: retoId },
@@ -254,14 +262,12 @@ async completarReto(
     relations: ['usuario', 'reto'],
   });
 
-  console.log('Participación:', participacion?.id, 'completado:', participacion?.completado, 'usuarioId real:', (participacion?.usuario as any)?.id);
-
   if (!participacion) throw new BadRequestException('No estás participando en este reto');
   if (participacion.completado) throw new BadRequestException('Ya completaste este reto');
 
-  const reto = await this.retoRepo.findOne({
+    const reto = await this.retoRepo.findOne({
     where: { id: retoId },
-    relations: ['participaciones', 'participaciones.usuario'],
+    relations: ['participaciones', 'participaciones.usuario', 'oposicion'],
   });
   if (!reto) throw new NotFoundException('Reto no encontrado');
 
@@ -277,8 +283,7 @@ async completarReto(
     respuestas,
   });
 
-  // ⭐ Dar puntos por las preguntas acertadas (siempre, gane o no)
-  await this.darPuntosPorReto(usuarioId, correctas, false);
+  await this.darPuntosPorReto(usuarioId, (reto.oposicion as any).id, correctas, false);
 
    // Verificar si todos han completado
   const todasCompletadas = reto.participaciones.every(
@@ -351,7 +356,7 @@ async completarReto(
     prioridad: PrioridadNotificacion.MEDIA,
   });
 
-  await this.darPuntosPorReto(ganador.id, 0, true); // ⭐ bonus de victoria
+   await this.darPuntosPorReto(ganador.id, (reto.oposicion as any).id, 0, true);
 }
 }
   
@@ -473,32 +478,26 @@ private async guardarContactoReciente(usuarioId: string, contactoId: string): Pr
   }
 }
 
-private async darPuntosPorReto(usuarioId: string, correctas: number, gano: boolean): Promise<void> {
-  console.log('=== DAR PUNTOS RETO ===', 'usuarioId:', usuarioId, 'correctas:', correctas, 'gano:', gano);
-
+private async darPuntosPorReto(usuarioId: string, oposicionId: string, correctas: number, gano: boolean): Promise<void> {
   const puntosAcciones = await this.configuracionService.getPuntosAcciones();
-  console.log('puntosAcciones:', puntosAcciones);
 
-  const usuario = await this.usuarioRepo.findOne({ where: { id: usuarioId } });
-  if (!usuario) {
-    console.log('⚠️ Usuario no encontrado');
-    return;
-  }
+  const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+  });
+  if (!usuarioOposicion) return;
 
   let puntosGanados = correctas * (puntosAcciones.preguntaCorrecta ?? 2);
   if (gano) puntosGanados += (puntosAcciones.ganarReto ?? 20);
 
-  console.log('Puntos actuales:', usuario.puntos, '→ Puntos ganados esta vez:', puntosGanados);
+  if (puntosGanados === 0) return;
 
-  const nuevosPuntos = usuario.puntos + puntosGanados;
+  const nuevosPuntos = usuarioOposicion.puntos + puntosGanados;
   const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(nuevosPuntos);
 
-  await this.usuarioRepo.update(usuarioId, {
+  await this.usuarioOposicionRepo.update(usuarioOposicion.id, {
     puntos: nuevosPuntos,
     nivel: nuevoNivel,
   });
-
-  console.log('Puntos guardados:', nuevosPuntos, 'nivel:', nuevoNivel);
 }
 
 async eliminarRetoUsuario(retoId: string, usuarioId: string): Promise<void> {

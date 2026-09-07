@@ -180,49 +180,39 @@ private async actualizarEstadoOposicion(oposicionId: string): Promise<void> {
 }
 
 async remove(id: string): Promise<void> {
-  console.log('PASO 1: buscando convocatoria');
   const convocatoria = await this.convocatoriaRepo.findOne({ where: { id } });
   if (!convocatoria) throw new NotFoundException('Convocatoria no encontrada');
 
-  console.log('PASO 2: comprobando usuarios vinculados');
   const usuariosAfectados = await this.usuarioOposicionRepo
     .createQueryBuilder('uo')
     .where('uo."convocatoriaActivaId" = :id', { id })
     .getCount();
-  console.log('PASO 2 OK, usuarios:', usuariosAfectados);
+  
 
   if (usuariosAfectados > 0) {
     throw new BadRequestException(`No se puede borrar: ${usuariosAfectados} usuario(s) vinculados.`);
   }
 
-  console.log('PASO 3: borrando documentos');
   await this.documentoRepo.delete({ convocatoria: { id } as any });
-  console.log('PASO 3 OK');
-
-  console.log('PASO 4: buscando temas');
+  
   const temas = await this.temaRepo.find({ where: { convocatoria: { id } as any } });
-  console.log('PASO 4 OK, temas encontrados:', temas.length);
-
+  
   for (const tema of temas) {
-    console.log('PASO 5: borrando tema', tema.id);
     await this.temaService.remove(tema.id);
-    console.log('PASO 5 OK para tema', tema.id);
   }
 
-  console.log('PASO 6: borrando convocatoria');
   await this.convocatoriaRepo.delete(id);
-  console.log('PASO 6 OK');
 }
 
   async saveDocumento(datos: Partial<DocumentoConvocatoria>): Promise<DocumentoConvocatoria> {
-  console.log('Intentando guardar documento:', datos.titulo, datos.urlPdf);
+
   try {
     const doc = this.documentoRepo.create(datos);
     const guardado = await this.documentoRepo.save(doc);
-    console.log('Documento guardado con id:', guardado.id);
+
     return guardado;
   } catch (error: any) {
-    console.error('ERROR guardando documento:', error.message);
+
     throw error;
   }
 }

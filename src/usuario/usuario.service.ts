@@ -178,43 +178,39 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
   // MÉTODOS DE BÚSQUEDA (CORREGIDOS PARA LOGIN)
   // ---------------------------------------------------------
 
-  async findByEmail(email: string): Promise<Usuario | null> {
-    return this.repo.findOne({
-      where: { email },
-      select: [
-        'id',
-        'email',
-        'nombre',
-        'apellidos',
-        'nick',
-        'rol',
-        'puntos',
-        'nivel',
-        'estado',
-        'onboardingGeneralCompletado',
-        'password', // ← NECESARIO PARA LOGIN
-      ],
-    });
-  }
+    async findByEmail(email: string): Promise<Usuario | null> {
+      return this.repo.findOne({
+        where: { email },
+        select: [
+          'id',
+          'email',
+          'nombre',
+          'apellidos',
+          'nick',
+          'rol',
+          'estado',
+          'onboardingGeneralCompletado',
+          'password',
+        ],
+      });
+    }
 
-  async findByNick(nick: string): Promise<Usuario | null> {
-    return this.repo.findOne({
-      where: { nick },
-      select: [
-        'id',
-        'email',
-        'nombre',
-        'apellidos',
-        'nick',
-        'rol',
-        'puntos',
-        'nivel',
-        'estado',
-        'onboardingGeneralCompletado',
-        'password', // ← NECESARIO PARA LOGIN
-      ],
-    });
-  }
+    async findByNick(nick: string): Promise<Usuario | null> {
+      return this.repo.findOne({
+        where: { nick },
+        select: [
+          'id',
+          'email',
+          'nombre',
+          'apellidos',
+          'nick',
+          'rol',
+          'estado',
+          'onboardingGeneralCompletado',
+          'password',
+        ],
+      });
+    }
 
   async findById(id: string): Promise<Usuario | null> {
     return this.repo.findOne({ where: { id } });
@@ -286,9 +282,12 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
     await this.repo.update(id, { activo: false });
   }
 
-  async actualizarNivel(id: string, nivel: number) {
-  await this.repo.update(id, { nivel });
-  return this.findById(id);
+async actualizarNivel(usuarioId: string, oposicionId: string, nivel: number) {
+  await this.usuarioOposicionRepo.update(
+    { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    { nivel },
+  );
+  return this.findMe(usuarioId);
 }
 
   async guardarConsumo(usuario: Usuario): Promise<void> {
@@ -327,6 +326,7 @@ async findMe(id: string) {
     relations: [
       'usuarioOposiciones',
       'usuarioOposiciones.oposicion',
+      'usuarioOposiciones.convocatoriaActiva', 
     ],
   });
 
@@ -337,7 +337,14 @@ async findMe(id: string) {
 
   return {
     ...usuarioSeguro,
-    oposicionActiva: activa ? activa.oposicion : null,
+    oposicionActiva: activa
+      ? {
+          ...activa.oposicion,
+          puntos: activa.puntos,
+          nivel: activa.nivel,
+          convocatoriaActiva: activa.convocatoriaActiva,
+        }
+      : null,
   };
 }
 

@@ -24,4 +24,11 @@ export class UsuarioOposicion {
 
   @ManyToOne(() => Convocatoria, { nullable: true })
   convocatoriaActiva: Convocatoria | null;
+
+  // ⭐ Nuevo: puntos y nivel son específicos de cada oposición
+  @Column({ default: 0 })
+  puntos: number;
+
+  @Column({ default: 1 })
+  nivel: number;
 }

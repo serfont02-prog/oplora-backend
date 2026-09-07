@@ -9,6 +9,8 @@ import { NotificacionService } from '../notificacion/notificacion.service';
 import { TipoNotificacion, PrioridadNotificacion } from '../notificacion/notificacion.entity';
 import { Usuario } from '../usuario/usuario.entity';
 import { ConfiguracionService } from '../config/configuracion.service';
+import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+
 
 @Injectable()
 export class FlashcardService {
@@ -25,6 +27,10 @@ export class FlashcardService {
     @InjectRepository(Usuario)
     private readonly usuarioRepo: Repository<Usuario>,
     private readonly configuracionService: ConfiguracionService,
+    @InjectRepository(UsuarioOposicion)
+    private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
+    @InjectRepository(Flashcard)
+    private readonly flashcardRepo: Repository<Flashcard>,
   ) {}
 
   // ─── CRUD FLASHCARDS ─────────────────────────────────────
@@ -230,28 +236,39 @@ async registrarRespuesta(
 
   const repasoGuardado = await this.repasoRepo.save(repaso);
 
-  // ⭐ Dar puntos solo si acaba de pasar a DOMINADA por primera vez
-  if (
+ if (
     repasoGuardado.estado === EstadoFC.DOMINADA &&
     estadoAnterior !== EstadoFC.DOMINADA
   ) {
-    await this.darPuntosPorDominar(usuarioId);
+    await this.darPuntosPorDominar(usuarioId, flashcardId);
   }
 
   return repasoGuardado;
 }
 
-private async darPuntosPorDominar(usuarioId: string): Promise<void> {
+private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promise<void> {
+  const flashcard = await this.flashcardRepo.findOne({
+    where: { id: flashcardId },
+    relations: ['oposicion', 'tema', 'tema.convocatoria', 'tema.convocatoria.oposicion'],
+  });
+  if (!flashcard) return;
+
+  const oposicionId = (flashcard.oposicion as any)?.id
+    ?? (flashcard.tema as any)?.convocatoria?.oposicion?.id;
+  if (!oposicionId) return;
+
+  const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+  });
+  if (!usuarioOposicion) return;
+
   const puntosAcciones = await this.configuracionService.getPuntosAcciones();
   const puntosPorDominar = puntosAcciones.flashcardDominada ?? 5;
 
-  const usuario = await this.usuarioRepo.findOne({ where: { id: usuarioId } });
-  if (!usuario) return;
-
-  const nuevosPuntos = usuario.puntos + puntosPorDominar;
+  const nuevosPuntos = usuarioOposicion.puntos + puntosPorDominar;
   const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(nuevosPuntos);
 
-  await this.usuarioRepo.update(usuarioId, {
+  await this.usuarioOposicionRepo.update(usuarioOposicion.id, {
     puntos: nuevosPuntos,
     nivel: nuevoNivel,
   });

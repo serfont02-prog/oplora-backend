@@ -299,10 +299,10 @@ if ($contenedor.length > 0) {
     ? textoCompleto.slice(textoLink.length).replace(/^[:,]\s*/, '').trim()
     : textoCompleto;
 
-  console.log('TEXTO COMPLETO para inscripción:', textoCompleto); // ⭐ añadir
+  console.log('TEXTO COMPLETO para inscripción:', textoCompleto); 
 
   const rango = this.extraerRangoFechas(textoCompleto);
-  console.log('RANGO detectado:', rango); // ⭐ añadir
+  console.log('RANGO detectado:', rango);
   rangoFechas = rango ? `Del ${rango.inicio} al ${rango.fin}` : null;
 }
 
