@@ -1,6 +1,6 @@
 import { Injectable, ConflictException, NotFoundException, BadRequestException  } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Not, IsNull } from 'typeorm';
+import { Repository, Not, IsNull, In } from 'typeorm';
 import { Usuario } from './usuario.entity';
 import * as bcrypt from 'bcrypt';
 import { UsuarioOposicion } from './usuario-oposicion.entity';
@@ -19,6 +19,7 @@ import { ProgresoLectura } from '../apunte-oplora/progreso-lectura.entity'; // a
 import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity';
 import { Tema } from '../tema/tema.entity';
 import { ResultadoTest } from '../test/resultado-test.entity';
+
 
 
 
@@ -65,6 +66,9 @@ export class UsuarioService {
 
     @InjectRepository(ResultadoTest)
     private readonly resultadoTestRepo: Repository<ResultadoTest>,
+
+    @InjectRepository(Usuario)
+    private readonly usuarioRepo: Repository<Usuario>,
   ) {}
 
   // ---------------------------------------------------------
@@ -674,4 +678,89 @@ private async migrarProgreso(usuarioId: string, oposicionId: string, origenId: s
     }
   }
 }
+
+async resetearProgreso(
+  usuarioId: string,
+  oposicionId: string,
+  conservar: {
+    puntosYNivel?: boolean;
+    racha?: boolean;
+    flashcards?: boolean;
+    lectura?: boolean;
+    historialTests?: boolean;
+    notas?: boolean;
+  },
+): Promise<void> {
+  const uo = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    relations: ['convocatoriaActiva'],
+  });
+  if (!uo) throw new NotFoundException('No estás vinculado a esta oposición');
+
+  const convocatoriaId = uo.convocatoriaActiva?.id;
+  if (!convocatoriaId) throw new BadRequestException('No tienes convocatoria activa');
+
+  // --- Puntos y nivel (ahora correctamente acotados a esta oposición) ---
+  if (!conservar.puntosYNivel) {
+    await this.usuarioOposicionRepo.update(uo.id, { puntos: 0, nivel: 1 });
+  }
+
+  // --- Racha (sigue siendo global de cuenta, se resetea igualmente si se pide) ---
+  if (!conservar.racha) {
+    await this.usuarioRepo.update(usuarioId, { rachaActual: 0 });
+    // rachaMaxima se mantiene como récord histórico, no se resetea nunca
+  }
+
+  const temas = await this.temaRepo.find({ where: { convocatoria: { id: convocatoriaId } as any } });
+  const temaIds = temas.map((t) => t.id);
+
+  if (temaIds.length > 0) {
+    // --- Flashcards (RepasoFC) ---
+    if (!conservar.flashcards) {
+      const flashcardsDeLosTemas = await this.flashcardRepo.find({
+        where: { tema: { id: In(temaIds) } as any },
+        select: ['id'],
+      });
+      const flashcardIds = flashcardsDeLosTemas.map((f) => f.id);
+      if (flashcardIds.length > 0) {
+        await this.repasoFcRepo.delete({
+          usuario: { id: usuarioId } as any,
+          flashcard: { id: In(flashcardIds) } as any,
+        });
+      }
+    }
+
+    // --- Progreso de lectura ---
+    if (!conservar.lectura) {
+      const apuntesDeLosTemas = await this.apunteOploraRepo.find({
+        where: { tema: { id: In(temaIds) } as any },
+        select: ['id'],
+      });
+      const apunteIds = apuntesDeLosTemas.map((a) => a.id);
+      if (apunteIds.length > 0) {
+        await this.progresoLecturaRepo.delete({
+          usuario: { id: usuarioId } as any,
+          apunte: { id: In(apunteIds) } as any,
+        });
+      }
+    }
+
+    // --- Historial de tests ---
+    if (!conservar.historialTests) {
+      await this.resultadoTestRepo.delete({
+        usuario: { id: usuarioId } as any,
+        oposicion: { id: oposicionId } as any,
+      });
+    }
+
+    // --- Notas personales ---
+    if (!conservar.notas) {
+      await this.apunteUsuarioRepo.delete({
+        usuario: { id: usuarioId } as any,
+        tema: { id: In(temaIds) } as any,
+      });
+    }
+  }
+}
+
 }

@@ -434,19 +434,26 @@ async completarReto(
 }
 
 async getRankingOposicion(oposicionId: string, nivel?: number): Promise<any[]> {
-  const qb = this.usuarioRepo
-    .createQueryBuilder('u')
-    .leftJoin('u.resultados', 'r', 'r.oposicionId = :oposicionId', { oposicionId })
-    .select([
-      'u.id', 'u.nick', 'u.nombre', 'u.nivel', 'u.puntos', 'u.testsSuperados',
-    ])
-    .where('u.puntos > 0')
-    .orderBy('u.puntos', 'DESC')
+  const qb = this.usuarioOposicionRepo
+    .createQueryBuilder('uo')
+    .leftJoinAndSelect('uo.usuario', 'u')
+    .where('uo.oposicion = :oposicionId', { oposicionId })
+    .andWhere('uo.puntos > 0')
+    .orderBy('uo.puntos', 'DESC')
     .limit(50);
 
-  if (nivel) qb.andWhere('u.nivel = :nivel', { nivel });
+  if (nivel) qb.andWhere('uo.nivel = :nivel', { nivel });
 
-  return qb.getMany();
+  const filas = await qb.getMany();
+
+  return filas.map((uo) => ({
+    id: uo.usuario.id,
+    nick: uo.usuario.nick,
+    nombre: uo.usuario.nombre,
+    nivel: uo.nivel,
+    puntos: uo.puntos,
+    testsSuperados: (uo.usuario as any).testsSuperados,
+  }));
 }
 
 async getRankingRetos(oposicionId: string): Promise<any[]> {

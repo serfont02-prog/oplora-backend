@@ -126,6 +126,15 @@ cambiarConvocatoria(
   return this.service.cambiarConvocatoria(req.user.id, oposicionId, convocatoriaId);
 }
 
+@Post('resetear-progreso')
+resetearProgreso(
+  @Body('oposicionId') oposicionId: string,
+  @Body('conservar') conservar: any,
+  @Request() req: any,
+) {
+  return this.service.resetearProgreso(req.user.id, oposicionId, conservar ?? {});
+}
+
   @Post('avatar')
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('archivo', { storage: memoryStorage() }))
