@@ -82,7 +82,7 @@ export class RetoService {
     reto = await this.crearRetoDiario(oposicionId, nivelUsuario);
   }
 
-  return reto;
+  return this.enriquecerNivelesParticipantes(reto, oposicionId);
 }
 
     private async crearRetoDiario(oposicionId: string, nivel: number): Promise<Reto> {
@@ -135,7 +135,7 @@ export class RetoService {
       reto = await this.crearRetoSemanal(oposicionId, nivelUsuario);
     }
 
-    return reto;
+    return this.enriquecerNivelesParticipantes(reto, oposicionId);
   }
 
   private async crearRetoSemanal(oposicionId: string, nivel: number): Promise<Reto> {
@@ -177,28 +177,49 @@ export class RetoService {
 
   // ─── RETO ENTRE USUARIOS ─────────────────────────────────
 
-  async crearRetoUsuario(
-    retadorId: string,
-    retadoNickOEmail: string,
-    oposicionId: string,
-    numPreguntas: number,
-    temaId?: string,
-    versionLeyId?: string,
-    mensaje?: string,
-    horasPlazo?: number,
-  ): Promise<Reto> {
-    const retador = await this.usuarioRepo.findOne({ where: { id: retadorId } });
-    if (!retador) throw new NotFoundException('Retador no encontrado');
+async crearRetoUsuario(
+  retadorId: string,
+  retadoNickOEmail: string,
+  oposicionId: string,
+  numPreguntas: number,
+  temaId?: string,
+  versionLeyId?: string,
+  mensaje?: string,
+  horasPlazo?: number,
+): Promise<Reto> {
+  const retador = await this.usuarioRepo.findOne({ where: { id: retadorId } });
+  if (!retador) throw new NotFoundException('Retador no encontrado');
 
-    // Buscar retado por nick o email
-    let retado = await this.usuarioRepo.findOne({ where: { nick: retadoNickOEmail } });
-    if (!retado) retado = await this.usuarioRepo.findOne({ where: { email: retadoNickOEmail } });
-    if (!retado) throw new NotFoundException('Usuario no encontrado con ese nick o email');
-    if (retado.id === retadorId) throw new BadRequestException('No puedes retarte a ti mismo');
+  // Buscar retado por nick o email
+  let retado = await this.usuarioRepo.findOne({ where: { nick: retadoNickOEmail.toLowerCase().trim() } });
+  if (!retado) retado = await this.usuarioRepo.findOne({ where: { email: retadoNickOEmail.toLowerCase().trim() } });
+  if (!retado) throw new NotFoundException('Usuario no encontrado con ese nick o email');
+  if (retado.id === retadorId) throw new BadRequestException('No puedes retarte a ti mismo');
 
-    const preguntas = await this.testService.generarTest(oposicionId, numPreguntas, temaId, versionLeyId);
+  // ⭐ Verificar misma oposición y convocatoria
+  const retadorOposicion = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: retadorId } as any, oposicion: { id: oposicionId } as any },
+    relations: ['convocatoriaActiva'],
+  });
+  if (!retadorOposicion) throw new BadRequestException('No estás vinculado a esta oposición');
 
-    const fechaFin = new Date();
+  const retadoOposicion = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: retado.id } as any, oposicion: { id: oposicionId } as any },
+    relations: ['convocatoriaActiva'],
+  });
+  if (!retadoOposicion) {
+    throw new BadRequestException(`${retado.nick ?? retado.nombre} no está preparando esta oposición`);
+  }
+
+  const convocatoriaRetador = retadorOposicion.convocatoriaActiva?.id;
+  const convocatoriaRetado = retadoOposicion.convocatoriaActiva?.id;
+  if (convocatoriaRetador !== convocatoriaRetado) {
+    throw new BadRequestException(`${retado.nick ?? retado.nombre} está en una convocatoria distinta a la tuya`);
+  }
+
+  const preguntas = await this.testService.generarTest(oposicionId, numPreguntas, temaId, versionLeyId);
+
+   const fechaFin = new Date();
     fechaFin.setHours(fechaFin.getHours() + (horasPlazo ?? 48));
 
     const reto = this.retoRepo.create({
@@ -364,11 +385,19 @@ async completarReto(
   // ─── CONSULTAS ───────────────────────────────────────────
 
   async getMisRetos(usuarioId: string): Promise<ParticipacionReto[]> {
-  return this.participacionRepo.find({
+  const participaciones = await this.participacionRepo.find({
     where: { usuario: { id: usuarioId } },
     relations: ['reto', 'reto.creador', 'reto.tema', 'reto.oposicion', 'reto.participaciones', 'reto.participaciones.usuario'],
     order: { creadoEn: 'DESC' },
   });
+
+  for (const p of participaciones) {
+    if (p.reto?.oposicion?.id) {
+      await this.enriquecerNivelesParticipantes(p.reto, (p.reto.oposicion as any).id);
+    }
+  }
+
+  return participaciones;
 }
 
   async getReto(retoId: string): Promise<Reto> {
@@ -377,7 +406,7 @@ async completarReto(
       relations: ['participaciones', 'participaciones.usuario', 'creador', 'tema', 'oposicion'],
     });
     if (!reto) throw new NotFoundException('Reto no encontrado');
-    return reto;
+    return this.enriquecerNivelesParticipantes(reto, (reto.oposicion as any).id);
   }
 
   async getRanking(retoId: string): Promise<ParticipacionReto[]> {
@@ -535,5 +564,57 @@ async getEstadisticasUsuario(usuarioId: string) {
   const porcentajeVictoria = total > 0 ? Math.round((victorias / total) * 100) : 0;
 
   return { victorias, derrotas, total, porcentajeVictoria };
+}
+
+private async enriquecerNivelesParticipantes(reto: Reto, oposicionId: string): Promise<Reto> {
+  if (!reto?.participaciones?.length) return reto;
+
+  for (const p of reto.participaciones) {
+    const usuarioId = (p.usuario as any)?.id;
+    if (!usuarioId) continue;
+
+    const uo = await this.usuarioOposicionRepo.findOne({
+      where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    });
+
+    (p.usuario as any).nivel = uo?.nivel ?? 1;
+  }
+
+  return reto;
+}
+
+// Backend — nuevo endpoint
+async validarDestinatarioReto(retadorId: string, nickOEmail: string, oposicionId: string) {
+  let retado = await this.usuarioRepo.findOne({ where: { nick: nickOEmail.toLowerCase().trim() } });
+  if (!retado) retado = await this.usuarioRepo.findOne({ where: { email: nickOEmail.toLowerCase().trim() } });  
+
+  if (!retado) {
+    return { encontrado: false };
+  }
+  if (retado.id === retadorId) {
+    return { encontrado: true, error: 'No puedes retarte a ti mismo' };
+  }
+
+  const retadorOposicion = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: retadorId } as any, oposicion: { id: oposicionId } as any },
+    relations: ['convocatoriaActiva'],
+  });
+  const retadoOposicion = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: retado.id } as any, oposicion: { id: oposicionId } as any },
+    relations: ['convocatoriaActiva'],
+  });
+
+  if (!retadoOposicion) {
+    return { encontrado: true, nombre: retado.nick ?? retado.nombre, mismaOposicion: false };
+  }
+
+  const mismaConvocatoria = retadorOposicion?.convocatoriaActiva?.id === retadoOposicion.convocatoriaActiva?.id;
+
+  return {
+    encontrado: true,
+    nombre: retado.nick ?? retado.nombre,
+    mismaOposicion: true,
+    mismaConvocatoria,
+  };
 }
 }

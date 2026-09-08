@@ -18,6 +18,15 @@ export class RetoController {
     return this.service.getRetoSemanal(req.user.id, oposicionId);
   }
 
+  @Get('validar-destinatario')
+validarDestinatario(
+  @Query('nickOEmail') nickOEmail: string,
+  @Query('oposicionId') oposicionId: string,
+  @Request() req: any,
+) {
+  return this.service.validarDestinatarioReto(req.user.id, nickOEmail, oposicionId);
+}
+
   @Get('ranking/oposicion/:oposicionId')
 getRankingOposicion(
   @Param('oposicionId') oposicionId: string,
