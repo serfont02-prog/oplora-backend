@@ -162,7 +162,6 @@ var AuthService = function () {
                 nick: usuario.nick,
                 rol: usuario.rol,
                 puntos: usuario.puntos,
-                nivel: usuario.nivel,
                 estado: usuario.estado,
                 onboardingGeneralCompletado: usuario.onboardingGeneralCompletado,
             };
