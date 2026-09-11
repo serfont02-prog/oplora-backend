@@ -46,6 +46,9 @@ export class Usuario {
   @Column({ nullable: true })
   dni: string;
 
+  @Column({ nullable: true })
+  tiempoDisponible: string;
+
   @Column({ default: false })
   notificacionesListas: boolean;
 

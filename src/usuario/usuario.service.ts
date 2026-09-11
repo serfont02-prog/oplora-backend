@@ -432,13 +432,13 @@ async verificarLimiteFlashcards(
       .groupBy('u.suscripcion')
       .getRawMany();
 
-    const porNivel = await this.repo
-      .createQueryBuilder('u')
-      .select('u.nivel', 'nivel')
-      .addSelect('COUNT(*)', 'total')
-      .groupBy('u.nivel')
-      .orderBy('u.nivel', 'ASC')
-      .getRawMany();
+      const porNivel = await this.usuarioOposicionRepo
+    .createQueryBuilder('uo')
+    .select('uo.nivel', 'nivel')
+    .addSelect('COUNT(*)', 'total')
+    .groupBy('uo.nivel')
+    .orderBy('uo.nivel', 'ASC')
+    .getRawMany();
 
     const hoy = new Date();
     hoy.setHours(0, 0, 0, 0);
@@ -678,6 +678,11 @@ private async migrarProgreso(usuarioId: string, oposicionId: string, origenId: s
     }
   }
 }
+
+  async actualizarTiempoDisponible(id: string, tiempoDisponible: string) {
+    await this.repo.update(id, { tiempoDisponible });
+    return this.findById(id);
+  }
 
 async resetearProgreso(
   usuarioId: string,

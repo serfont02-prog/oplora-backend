@@ -184,6 +184,14 @@ async actualizarObjetivo(
   );
 }
 
+@Patch('tiempo-disponible')
+async actualizarTiempoDisponible(
+  @Request() req,
+  @Body('tiempoDisponible') tiempoDisponible: string,
+) {
+  return this.service.actualizarTiempoDisponible(req.user.id, tiempoDisponible);
+}
+
 @Patch('nivel')
 async actualizarNivel(
   @Request() req,
