@@ -7,15 +7,16 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('registro')
-  registro(
-    @Body('email') email: string,
-    @Body('nombre') nombre: string,
-    @Body('apellidos') apellidos: string,
-    @Body('password') password: string,
-    @Body('dni') dni: string,
-  ) {
-    return this.authService.registro({ email, nombre, apellidos, password, dni });
-  }
+registro(
+  @Body('email') email: string,
+  @Body('nombre') nombre: string,
+  @Body('apellidos') apellidos: string,
+  @Body('nick') nick: string,
+  @Body('password') password: string,
+  @Body('dni') dni: string,
+) {
+  return this.authService.registro({ email, nombre, apellidos, nick, password, dni });
+}
 
   @Post('login')
   login(
