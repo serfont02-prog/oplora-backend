@@ -125,9 +125,9 @@ var ConvocatoriaController = function () {
                         case 0: return [4 /*yield*/, this.service.findOne(id)];
                         case 1:
                             convocatoria = _a.sent();
-                            if (!convocatoria.urlInap)
+                            if (!convocatoria.urlOficial)
                                 return [2 /*return*/, { message: 'Esta convocatoria no tiene URL del INAP configurada' }];
-                            return [4 /*yield*/, this.scraperService.scrapeConvocatoria(id, convocatoria.urlInap)];
+                            return [4 /*yield*/, this.scraperService.scrapeConvocatoria(id, convocatoria.urlOficial)];
                         case 2:
                             _a.sent();
                             return [2 /*return*/, { message: 'Scraping completado' }];

@@ -123,7 +123,7 @@ export class ConvocatoriaService {
     return this.convocatoriaRepo
       .createQueryBuilder('c')
       .where('c.estado = :estado', { estado: 'activa' })
-      .andWhere('c.urlInap IS NOT NULL')
+      .andWhere('c.urlOficial IS NOT NULL')
       .getMany();
   }
 
@@ -133,7 +133,7 @@ export class ConvocatoriaService {
     plazas: dto.plazas,
     estado: dto.estado,
     fechaExamen: dto.fechaExamen,
-    urlInap: dto.urlInap,
+    urlOficial: dto.urlOficial,
     fechaConvocatoria: dto.fechaConvocatoria ? new Date(dto.fechaConvocatoria) : undefined,
     numeroSolicitudes: dto.numeroSolicitudes,
     numeroPresentados: dto.numeroPresentados,
@@ -242,7 +242,7 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
     anyo: original.anyo + 1,
     plazas: original.plazas,
     estado: 'borrador' as any,
-    urlInap: original.urlInap,
+    urlOficial: original.urlOficial,
     turno: original.turno,
     ejercicios: original.ejercicios,
     fraccionPenalizacion: original.fraccionPenalizacion,
@@ -277,6 +277,7 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
       titulo: tema.titulo,
       tipo: tema.tipo,
       contexto: tema.contexto,
+      bloque: tema.bloque,
       convocatoria: { id: nueva.id } as any,
       claveEstable: tema.claveEstable,
     }));
@@ -383,13 +384,13 @@ private readonly plantillasNoticia: Record<string, (doc: DocumentoConvocatoria, 
   otro: (doc) => doc.titulo,
 };
 
-async reprocesarUrlInap(id: string, nuevaUrl: string): Promise<void> {
+async reprocesarurlOficial(id: string, nuevaUrl: string): Promise<void> {
   // Borrar todos los documentos existentes de esta convocatoria
   await this.documentoRepo.delete({ convocatoria: { id } as any });
 
   // Actualizar la URL y resetear el plazo (por si cambia la convocatoria de origen)
   await this.convocatoriaRepo.update(id, {
-    urlInap: nuevaUrl,
+    urlOficial: nuevaUrl,
     plazoInscripcionInicio: null as any,
     plazoInscripcionFin: null as any,
   });

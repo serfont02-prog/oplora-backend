@@ -6,7 +6,7 @@ export class CreateConvocatoriaDto {
   estado?: EstadoConvocatoria;
   turno?: TurnoEnum;
   fechaExamen?: Date;
-  urlInap?: string;
+  urlOficial?: string;
   fechaConvocatoria?: string; 
   numeroSolicitudes?: number; 
   numeroPresentados?: number; 
@@ -61,7 +61,7 @@ export class UpdateConvocatoriaDto {
   estado?: EstadoConvocatoria;
   turno?: TurnoEnum;
   fechaExamen?: Date;
-  urlInap?: string;
+  urlOficial?: string;
   echaConvocatoria?: string; 
   numeroSolicitudes?: number; 
   numeroPresentados?: number; 

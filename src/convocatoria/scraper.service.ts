@@ -22,7 +22,7 @@ export class ScraperService {
     this.logger.log('Iniciando check de convocatorias...');
     const convocatorias = await this.convocatoriaService.findActivasConUrl();
     for (const c of convocatorias) {
-      await this.scrapeConvocatoria(c.id, c.urlInap);
+      await this.scrapeConvocatoria(c.id, c.urlOficial);
     }
     this.logger.log(`Check finalizado. ${convocatorias.length} convocatorias revisadas.`);
   }

@@ -107,7 +107,7 @@ var ScraperService = function () {
                         case 2:
                             if (!(_i < convocatorias_1.length)) return [3 /*break*/, 5];
                             c = convocatorias_1[_i];
-                            return [4 /*yield*/, this.scrapeConvocatoria(c.id, c.urlInap)];
+                            return [4 /*yield*/, this.scrapeConvocatoria(c.id, c.urlOficial)];
                         case 3:
                             _a.sent();
                             _a.label = 4;

@@ -39,12 +39,12 @@ export class ConvocatoriaController {
   }
 
   @Patch(':id/url-inap')
-  async actualizarUrlInap(
+  async actualizarurlOficial(
     @Param('id') id: string,
-    @Body('urlInap') urlInap: string,
+    @Body('urlOficial') urlOficial: string,
   ) {
-    await this.service.reprocesarUrlInap(id, urlInap);
-    await this.scraperService.scrapeConvocatoria(id, urlInap);
+    await this.service.reprocesarurlOficial(id, urlOficial);
+    await this.scraperService.scrapeConvocatoria(id, urlOficial);
     return { mensaje: 'URL actualizada y documentos reprocesados' };
   }
 
@@ -79,10 +79,10 @@ export class ConvocatoriaController {
   @Post(':id/scrape')
   async scrapeManual(@Param('id') id: string) {
     const convocatoria = await this.service.findOne(id);
-    if (!convocatoria.urlInap) {
+    if (!convocatoria.urlOficial) {
       return { mensaje: 'Esta convocatoria no tiene URL del INAP configurada' };
     }
-    await this.scraperService.scrapeConvocatoria(id, convocatoria.urlInap);
+    await this.scraperService.scrapeConvocatoria(id, convocatoria.urlOficial);
   return { mensaje: 'Scraping ejecutado correctamente' };
 }
 }

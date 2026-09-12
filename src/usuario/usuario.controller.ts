@@ -192,6 +192,15 @@ async actualizarTiempoDisponible(
   return this.service.actualizarTiempoDisponible(req.user.id, tiempoDisponible);
 }
 
+@Patch('nivel-experiencia')
+async actualizarNivelExperiencia(
+  @Request() req,
+  @Body('nivelExperiencia') nivelExperiencia: number,
+  @Body('oposicionId') oposicionId: string,
+) {
+  return this.service.actualizarNivelExperiencia(req.user.id, oposicionId, nivelExperiencia);
+}
+
 @Patch('nivel')
 async actualizarNivel(
   @Request() req,

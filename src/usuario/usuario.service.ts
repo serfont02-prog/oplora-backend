@@ -346,6 +346,7 @@ async findMe(id: string) {
           ...activa.oposicion,
           puntos: activa.puntos,
           nivel: activa.nivel,
+          nivelExperiencia: activa.nivelExperiencia,
           convocatoriaActiva: activa.convocatoriaActiva,
         }
       : null,
@@ -683,6 +684,14 @@ private async migrarProgreso(usuarioId: string, oposicionId: string, origenId: s
     await this.repo.update(id, { tiempoDisponible });
     return this.findById(id);
   }
+
+  async actualizarNivelExperiencia(usuarioId: string, oposicionId: string, nivelExperiencia: number) {
+  await this.usuarioOposicionRepo.update(
+    { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    { nivelExperiencia },
+  );
+  return this.findMe(usuarioId);
+}
 
 async resetearProgreso(
   usuarioId: string,

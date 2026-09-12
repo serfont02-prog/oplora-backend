@@ -308,7 +308,7 @@ var BoeService = function () {
                             return [4 /*yield*/, this.convocatoriaRepo
                                     .createQueryBuilder('c')
                                     .leftJoinAndSelect('c.oposicion', 'o')
-                                    .where('(c.urlInap IS NULL OR c.urlInap = :empty)', { empty: '' })
+                                    .where('(c.urlOficial IS NULL OR c.urlOficial = :empty)', { empty: '' })
                                     .andWhere('c.estado = :estado', { estado: 'activa' })
                                     .getMany()];
                         case 2:

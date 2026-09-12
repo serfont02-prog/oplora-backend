@@ -31,4 +31,7 @@ export class UsuarioOposicion {
 
   @Column({ default: 1 })
   nivel: number;
+
+  @Column({ nullable: true })
+  nivelExperiencia: number; // 1=Principiante, 2=Intermedio, 3=Avanzado — declarado por el usuario en onboarding
 }

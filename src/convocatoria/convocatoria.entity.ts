@@ -43,7 +43,7 @@ export class Convocatoria {
   fechaExamen: Date;
 
   @Column({ nullable: true })
-  urlInap: string;
+  urlOficial: string;
 
   @Column({ type: 'text', nullable: true })
   diferenciasAnterior: string;

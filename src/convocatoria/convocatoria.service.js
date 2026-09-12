@@ -140,7 +140,7 @@ var ConvocatoriaService = function () {
             return this.convocatoriaRepo
                 .createQueryBuilder('c')
                 .where('c.estado = :estado', { estado: 'activa' })
-                .andWhere('c.urlInap IS NOT NULL')
+                .andWhere('c.urlOficial IS NOT NULL')
                 .getMany();
         };
         ConvocatoriaService_1.prototype.create = function (dto) {
@@ -154,7 +154,7 @@ var ConvocatoriaService = function () {
                                 plazas: dto.plazas,
                                 estado: dto.estado,
                                 fechaExamen: dto.fechaExamen,
-                                urlInap: dto.urlInap,
+                                urlOficial: dto.urlOficial,
                                 referenciaBoe: dto.referenciaBoe,
                                 oposicion: { id: dto.oposicionId },
                             });
@@ -265,7 +265,7 @@ var ConvocatoriaService = function () {
                                     anyo: original.anyo + 1,
                                     plazas: original.plazas,
                                     estado: 'borrador',
-                                    urlInap: original.urlInap,
+                                    urlOficial: original.urlOficial,
                                     numEjercicios: original.numEjercicios,
                                     tipoEjercicio: original.tipoEjercicio,
                                     numPreguntas: original.numPreguntas,

@@ -77,9 +77,9 @@ var Convocatoria = function () {
     var _fechaExamen_decorators;
     var _fechaExamen_initializers = [];
     var _fechaExamen_extraInitializers = [];
-    var _urlInap_decorators;
-    var _urlInap_initializers = [];
-    var _urlInap_extraInitializers = [];
+    var _urlOficial_decorators;
+    var _urlOficial_initializers = [];
+    var _urlOficial_extraInitializers = [];
     var _diferenciasAnterior_decorators;
     var _diferenciasAnterior_initializers = [];
     var _diferenciasAnterior_extraInitializers = [];
@@ -135,8 +135,8 @@ var Convocatoria = function () {
             this.plazas = (__runInitializers(this, _anyo_extraInitializers), __runInitializers(this, _plazas_initializers, void 0));
             this.estado = (__runInitializers(this, _plazas_extraInitializers), __runInitializers(this, _estado_initializers, void 0));
             this.fechaExamen = (__runInitializers(this, _estado_extraInitializers), __runInitializers(this, _fechaExamen_initializers, void 0));
-            this.urlInap = (__runInitializers(this, _fechaExamen_extraInitializers), __runInitializers(this, _urlInap_initializers, void 0));
-            this.diferenciasAnterior = (__runInitializers(this, _urlInap_extraInitializers), __runInitializers(this, _diferenciasAnterior_initializers, void 0));
+            this.urlOficial = (__runInitializers(this, _fechaExamen_extraInitializers), __runInitializers(this, _urlOficial_initializers, void 0));
+            this.diferenciasAnterior = (__runInitializers(this, _urlOficial_extraInitializers), __runInitializers(this, _diferenciasAnterior_initializers, void 0));
             this.referenciaBoe = (__runInitializers(this, _diferenciasAnterior_extraInitializers), __runInitializers(this, _referenciaBoe_initializers, void 0));
             this.plazoInscripcionInicio = (__runInitializers(this, _referenciaBoe_extraInitializers), __runInitializers(this, _plazoInscripcionInicio_initializers, void 0));
             this.plazoInscripcionFin = (__runInitializers(this, _plazoInscripcionInicio_extraInitializers), __runInitializers(this, _plazoInscripcionFin_initializers, void 0));
@@ -164,7 +164,7 @@ var Convocatoria = function () {
         _plazas_decorators = [(0, typeorm_1.Column)({ nullable: true })];
         _estado_decorators = [(0, typeorm_1.Column)({ type: 'enum', enum: EstadoConvocatoria, default: EstadoConvocatoria.BORRADOR })];
         _fechaExamen_decorators = [(0, typeorm_1.Column)({ nullable: true })];
-        _urlInap_decorators = [(0, typeorm_1.Column)({ nullable: true })];
+        _urlOficial_decorators = [(0, typeorm_1.Column)({ nullable: true })];
         _diferenciasAnterior_decorators = [(0, typeorm_1.Column)({ type: 'text', nullable: true })];
         _referenciaBoe_decorators = [(0, typeorm_1.Column)({ nullable: true })];
         _plazoInscripcionInicio_decorators = [(0, typeorm_1.Column)({ nullable: true })];
@@ -186,7 +186,7 @@ var Convocatoria = function () {
         __esDecorate(null, null, _plazas_decorators, { kind: "field", name: "plazas", static: false, private: false, access: { has: function (obj) { return "plazas" in obj; }, get: function (obj) { return obj.plazas; }, set: function (obj, value) { obj.plazas = value; } }, metadata: _metadata }, _plazas_initializers, _plazas_extraInitializers);
         __esDecorate(null, null, _estado_decorators, { kind: "field", name: "estado", static: false, private: false, access: { has: function (obj) { return "estado" in obj; }, get: function (obj) { return obj.estado; }, set: function (obj, value) { obj.estado = value; } }, metadata: _metadata }, _estado_initializers, _estado_extraInitializers);
         __esDecorate(null, null, _fechaExamen_decorators, { kind: "field", name: "fechaExamen", static: false, private: false, access: { has: function (obj) { return "fechaExamen" in obj; }, get: function (obj) { return obj.fechaExamen; }, set: function (obj, value) { obj.fechaExamen = value; } }, metadata: _metadata }, _fechaExamen_initializers, _fechaExamen_extraInitializers);
-        __esDecorate(null, null, _urlInap_decorators, { kind: "field", name: "urlInap", static: false, private: false, access: { has: function (obj) { return "urlInap" in obj; }, get: function (obj) { return obj.urlInap; }, set: function (obj, value) { obj.urlInap = value; } }, metadata: _metadata }, _urlInap_initializers, _urlInap_extraInitializers);
+        __esDecorate(null, null, _urlOficial_decorators, { kind: "field", name: "urlOficial", static: false, private: false, access: { has: function (obj) { return "urlOficial" in obj; }, get: function (obj) { return obj.urlOficial; }, set: function (obj, value) { obj.urlOficial = value; } }, metadata: _metadata }, _urlOficial_initializers, _urlOficial_extraInitializers);
         __esDecorate(null, null, _diferenciasAnterior_decorators, { kind: "field", name: "diferenciasAnterior", static: false, private: false, access: { has: function (obj) { return "diferenciasAnterior" in obj; }, get: function (obj) { return obj.diferenciasAnterior; }, set: function (obj, value) { obj.diferenciasAnterior = value; } }, metadata: _metadata }, _diferenciasAnterior_initializers, _diferenciasAnterior_extraInitializers);
         __esDecorate(null, null, _referenciaBoe_decorators, { kind: "field", name: "referenciaBoe", static: false, private: false, access: { has: function (obj) { return "referenciaBoe" in obj; }, get: function (obj) { return obj.referenciaBoe; }, set: function (obj, value) { obj.referenciaBoe = value; } }, metadata: _metadata }, _referenciaBoe_initializers, _referenciaBoe_extraInitializers);
         __esDecorate(null, null, _plazoInscripcionInicio_decorators, { kind: "field", name: "plazoInscripcionInicio", static: false, private: false, access: { has: function (obj) { return "plazoInscripcionInicio" in obj; }, get: function (obj) { return obj.plazoInscripcionInicio; }, set: function (obj, value) { obj.plazoInscripcionInicio = value; } }, metadata: _metadata }, _plazoInscripcionInicio_initializers, _plazoInscripcionInicio_extraInitializers);
