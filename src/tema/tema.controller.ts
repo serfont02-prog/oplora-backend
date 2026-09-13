@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { TemaService } from './tema.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('temas')
 @UseGuards(JwtAuthGuard)
@@ -54,6 +55,37 @@ getProgresoCompletoConvocatoria(
   return this.service.getProgresoCompleto(req.user.id, temaId, oposicionId);
 }
 
+  @Post('examenes/convocatoria/:convocatoriaId')
+  @UseInterceptors(FileInterceptor('archivo'))
+  async crearExamen(
+    @Param('convocatoriaId') convocatoriaId: string,
+    @UploadedFile() archivo: Express.Multer.File,
+    @Body('nombre') nombre: string,
+    @Body('anyo') anyo: string,
+    @Body('mes') mes: string,
+    @Body('tipo') tipo: string,
+    @Body('parte') parte: string,
+  ) {
+    return this.service.crearExamen({
+      convocatoriaId,
+      nombre,
+      anyo: parseInt(anyo),
+      mes,
+      tipo,
+      parte: parseInt(parte) || 1,
+      archivo,
+    });
+  }
+
+  @Delete('examenes/:id')
+  eliminarExamen(@Param('id') id: string) {
+    return this.service.eliminarExamen(id);
+  }
+
+  @Get('examenes/:id')
+  getExamenConPreguntas(@Param('id') id: string) {
+    return this.service.getExamenConPreguntas(id);
+  }
 
 
   @Post(':id/normativa')

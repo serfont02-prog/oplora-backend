@@ -638,7 +638,7 @@ return {
   };
 }
 
-  async importarPorConvocatoria(
+async importarPorConvocatoria(
   convocatoriaId: string,
   preguntas: {
     enunciado: string;
@@ -650,9 +650,9 @@ return {
     anyo?: number;
     temaNumero: number;
   }[],
+  examenAnteriorId?: string, // ⭐ nuevo parámetro
 ): Promise<{ importadas: number; errores: string[] }> {
 
-  // Obtener temas de la convocatoria
   const temas = await this.temaRepo.find({
     where: { convocatoria: { id: convocatoriaId } },
   });
@@ -677,11 +677,11 @@ return {
       origen: p.origen ?? 'convocatoria',
       anyo: p.anyo,
       activa: true,
+      examenAnterior: examenAnteriorId ? { id: examenAnteriorId } as any : undefined, // ⭐ nuevo
     });
 
     const saved = await this.preguntaRepo.save(pregunta);
 
-    // Vincular al tema
     await this.preguntaRepo
       .createQueryBuilder()
       .relation(PreguntaTest, 'temas')
@@ -693,6 +693,7 @@ return {
 
   return { importadas, errores };
 }
+
 
 async importarPorVersionLey(
   versionLeyId: string,

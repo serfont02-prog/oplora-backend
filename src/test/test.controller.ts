@@ -150,8 +150,9 @@ export class TestController {
 importarPorConvocatoria(
   @Param('convocatoriaId') convocatoriaId: string,
   @Body('preguntas') preguntas: any[],
+  @Body('examenAnteriorId') examenAnteriorId: string,
 ) {
-  return this.testService.importarPorConvocatoria(convocatoriaId, preguntas);
+  return this.testService.importarPorConvocatoria(convocatoriaId, preguntas, examenAnteriorId);
 }
 
 @Post('importar/version-ley/:versionLeyId')

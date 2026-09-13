@@ -15,10 +15,16 @@ import { Flashcard } from '../flashcard/flashcard.entity';
 import { RepasoFC } from '../flashcard/repaso-fc.entity';
 import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity'; // ajusta la ruta real
 import { randomUUID } from 'crypto';
+import { createClient } from '@supabase/supabase-js';
+
 
 
 @Injectable()
 export class TemaService {
+  private supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!,
+);
   constructor(
     @InjectRepository(Tema)
     private readonly temaRepo: Repository<Tema>,
@@ -163,15 +169,27 @@ async remove(id: string) {
   }
   
 
+async getExamenesByConvocatoria(convocatoriaId: string) {
+  const examenes = await this.examenRepo.find({
+    where: { convocatoria: { id: convocatoriaId } } as any,
+    order: { anyo: 'DESC', creadoEn: 'DESC' },
+  });
 
-  
+  if (examenes.length === 0) return [];
 
-  async getExamenesByConvocatoria(convocatoriaId: string) {
-    return this.examenRepo.find({
-      where: { convocatoria: { id: convocatoriaId } } as any,
-      order: { anyo: 'DESC', creadoEn: 'DESC' },
-    });
-  }
+  const conteos = await this.preguntaTestRepo
+    .createQueryBuilder('p')
+    .select('p.examenAnteriorId', 'examenId')
+    .addSelect('COUNT(*)', 'total')
+    .where('p.examenAnteriorId IN (:...ids)', { ids: examenes.map((e) => e.id) })
+    .groupBy('p.examenAnteriorId')
+    .getRawMany();
+
+  const mapaConteos: Record<string, number> = {};
+  for (const c of conteos) mapaConteos[c.examenId] = parseInt(c.total);
+
+  return examenes.map((e) => ({ ...e, totalPreguntas: mapaConteos[e.id] ?? 0 }));
+}
 
   async getExamenesByTema(temaId: string) {
     const tema = await this.temaRepo.findOne({
@@ -366,6 +384,55 @@ async getProgresoCompletoConvocatoria(usuarioId: string, convocatoriaId: string,
   return resultados;
 }
 
+async crearExamen(datos: {
+  convocatoriaId: string;
+  nombre: string;
+  anyo: number;
+  mes?: string;
+  tipo: string;
+  parte: number;
+  archivo: Express.Multer.File;
+}): Promise<ExamenAnterior> {
+  // Sube el PDF a Supabase Storage (mismo bucket/patrón que usas para apuntes)
+  const nombreArchivo = `examenes/${datos.convocatoriaId}/${Date.now()}-${datos.archivo.originalname}`;
+  const { error } = await this.supabase.storage
+    .from('apuntes-oplora') // o el bucket que uses para documentos oficiales
+    .upload(nombreArchivo, datos.archivo.buffer, { contentType: 'application/pdf' });
 
+  if (error) throw new Error(`Error subiendo PDF: ${error.message}`);
 
+  const { data: urlData } = this.supabase.storage.from('apuntes-oplora').getPublicUrl(nombreArchivo);
+
+  const examen = this.examenRepo.create({
+    nombre: datos.nombre,
+    anyo: datos.anyo,
+    mes: datos.mes,
+    tipo: datos.tipo,
+    parte: datos.parte,
+    urlArchivo: urlData.publicUrl,
+    convocatoria: { id: datos.convocatoriaId } as any,
+  });
+
+  return this.examenRepo.save(examen);
+}
+
+async eliminarExamen(id: string): Promise<void> {
+  // Desvincula las preguntas de este examen antes de borrarlo (no se borran las preguntas)
+  await this.preguntaTestRepo.update(
+    { examenAnterior: { id } as any },
+    { examenAnterior: null as any },
+  );
+  await this.examenRepo.delete(id);
+}
+
+async getExamenConPreguntas(id: string) {
+  const examen = await this.examenRepo.findOne({ where: { id } });
+  if (!examen) return null;
+
+  const preguntas = await this.preguntaTestRepo.find({
+    where: { examenAnterior: { id } as any },
+  });
+
+  return { ...examen, totalPreguntas: preguntas.length };
+}
 }
