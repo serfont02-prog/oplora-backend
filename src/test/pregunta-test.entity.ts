@@ -3,12 +3,14 @@ import {
   PrimaryGeneratedColumn,
   Column,
   ManyToMany,
+  ManyToOne,
   JoinTable,
   CreateDateColumn,
 } from 'typeorm';
 
 import { Tema } from '../tema/tema.entity';
 import { Articulo } from '../normativa/articulo.entity';
+import { ExamenAnterior } from '../tema/examen-anterior.entity';
 
 @Entity('preguntas_test')
 export class PreguntaTest {
@@ -72,4 +74,7 @@ export class PreguntaTest {
   @ManyToMany(() => Articulo)
   @JoinTable()
   articulos: Articulo[];
+
+  @ManyToOne(() => ExamenAnterior, (e) => e.preguntas, { nullable: true })
+  examenAnterior: ExamenAnterior;
 }

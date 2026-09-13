@@ -1,14 +1,14 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn } from 'typeorm';
-import { Oposicion } from '../oposicion/oposicion.entity';
-import { Convocatoria } from '../convocatoria/convocatoria.entity';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  OneToMany,
+  CreateDateColumn,
+} from 'typeorm';
 
-export enum TipoExamen {
-  TEST = 'test',
-  PRACTICO = 'practico',
-  DESARROLLO = 'desarrollo',
-  ORAL = 'oral',
-  SUPUESTO = 'supuesto',
-}
+import { Convocatoria } from '../convocatoria/convocatoria.entity';
+import { PreguntaTest } from '../test/pregunta-test.entity';
 
 @Entity('examenes_anteriores')
 export class ExamenAnterior {
@@ -16,41 +16,32 @@ export class ExamenAnterior {
   id: string;
 
   @Column()
-  anyo: number;
-
-  @Column({ nullable: true })
-  parte: number; // 1, 2, 3...
-
-  @Column({ nullable: true })
   nombre: string;
 
-  @Column({ type: 'enum', enum: TipoExamen, default: TipoExamen.TEST })
-  tipo: TipoExamen;
-
-  @Column({ nullable: true })
-  numPreguntas: number;
-
-  @Column({ nullable: true })
-  urlPdf: string;
-
-  @Column({ type: 'text', nullable: true })
-  textoExtraido: string;
-
-  @Column({ default: false })
-  procesado: boolean;
-
-  @Column({ nullable: true })
-  totalPreguntas: number;
+  @Column()
+  anyo: number;
 
   @Column({ nullable: true })
   mes: string;
 
+  @Column({ default: 'test' })
+  tipo: string; // test | practico | desarrollo | oral | supuesto
+
+  @Column({ type: 'int', default: 1 })
+  parte: number; // nº de ejercicio dentro de la convocatoria
+
+  @Column()
+  urlArchivo: string; // PDF del examen real
+
+  @Column({ default: true })
+  activo: boolean;
+
   @CreateDateColumn()
   creadoEn: Date;
 
-  @ManyToOne(() => Oposicion, { nullable: true })
-  oposicion: Oposicion;
-
-  @ManyToOne(() => Convocatoria, { nullable: true })
+  @ManyToOne(() => Convocatoria, { onDelete: 'CASCADE' })
   convocatoria: Convocatoria;
+
+  @OneToMany(() => PreguntaTest, (p) => p.examenAnterior)
+  preguntas: PreguntaTest[];
 }
