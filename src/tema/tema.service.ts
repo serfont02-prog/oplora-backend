@@ -398,6 +398,7 @@ async crearExamen(datos: {
   archivo: Express.Multer.File;
 }): Promise<ExamenAnterior> {
   // Sube el PDF a Supabase Storage (mismo bucket/patrón que usas para apuntes)
+  const nombreLimpio = sanitizarNombreArchivo(datos.archivo.originalname);
   const nombreArchivo = `examenes/${datos.convocatoriaId}/${Date.now()}-${datos.archivo.originalname}`;
   const { error } = await this.supabase.storage
     .from('apuntes-oplora') // o el bucket que uses para documentos oficiales
@@ -537,4 +538,10 @@ function parseFraccion(fraccion: string | null | undefined): number {
   const denominador = parseFloat(partes[1]);
   if (!denominador) return 0;
   return numerador / denominador;
+}
+
+function sanitizarNombreArchivo(nombre: string): string {
+  return nombre
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quita tildes
+    .replace(/[^a-zA-Z0-9.\-_]/g, '_'); // sustituye cualquier otro carácter raro por "_"
 }

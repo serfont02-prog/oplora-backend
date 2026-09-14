@@ -32,6 +32,11 @@ getProgresoOposicion(
     return this.service.getNormativa(id);
   }
 
+  @Get('examenes/convocatoria/:convocatoriaId')
+    getExamenesByConvocatoria(@Param('convocatoriaId') convocatoriaId: string) {
+    return this.service.getExamenesByConvocatoria(convocatoriaId);
+  }
+
   @Get('examenes/:id/preguntas')
   getPreguntasDeExamen(@Param('id') id: string) {
     return this.service.getPreguntasDeExamen(id);
