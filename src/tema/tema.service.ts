@@ -16,6 +16,7 @@ import { RepasoFC } from '../flashcard/repaso-fc.entity';
 import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity'; // ajusta la ruta real
 import { randomUUID } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
+import { ResultadoTest } from '../test/resultado-test.entity';
 
 
 
@@ -47,8 +48,11 @@ export class TemaService {
     private readonly repasoFcRepo: Repository<RepasoFC>,
     @InjectRepository(ApunteUsuario)
     private readonly apunteUsuarioRepo: Repository<ApunteUsuario>,
+    @InjectRepository(ResultadoTest)
+    private readonly resultadoTestRepo: Repository<ResultadoTest>,
   ) {}
 
+  
   async findByConvocatoria(convocatoriaId: string): Promise<Tema[]> {
   return this.temaRepo.find({
     where: { convocatoria: { id: convocatoriaId } },
@@ -435,4 +439,102 @@ async getExamenConPreguntas(id: string) {
 
   return { ...examen, totalPreguntas: preguntas.length };
 }
+
+async getPreguntasDeExamen(examenId: string) {
+  const examen = await this.examenRepo.findOne({
+    where: { id: examenId },
+    relations: ['convocatoria'],
+  });
+  if (!examen) throw new NotFoundException('Examen no encontrado');
+
+  const preguntas = await this.preguntaTestRepo.find({
+    where: { examenAnterior: { id: examenId } as any },
+  });
+
+  return {
+    examen: { id: examen.id, nombre: examen.nombre, anyo: examen.anyo, parte: examen.parte },
+    convocatoria: examen.convocatoria,
+    preguntas: preguntas.map((p) => ({
+      id: p.id,
+      enunciado: p.enunciado,
+      opciones: p.opciones,
+      // ⭐ NO incluir "correcta" aquí — se valida al enviar, no antes
+    })),
+  };
+}
+
+async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { preguntaId: string; opcionElegida: number | null }[]) {
+  const examen = await this.examenRepo.findOne({
+    where: { id: examenId },
+    relations: ['convocatoria'],
+  });
+  if (!examen) throw new NotFoundException('Examen no encontrado');
+
+  const preguntas = await this.preguntaTestRepo.find({
+    where: { examenAnterior: { id: examenId } as any },
+  });
+
+  const fraccion = parseFraccion(examen.convocatoria.fraccionPenalizacion);
+
+  let correctas = 0;
+  let incorrectas = 0;
+  let blancos = 0;
+  const detalle: any[] = [];
+
+  for (const pregunta of preguntas) {
+    const respuesta = respuestas.find((r) => r.preguntaId === pregunta.id);
+
+    if (!respuesta || respuesta.opcionElegida === null) {
+      blancos++;
+      detalle.push({ preguntaId: pregunta.id, estado: 'blanco' });
+      continue;
+    }
+
+    const esCorrecta = respuesta.opcionElegida === pregunta.correcta;
+    if (esCorrecta) {
+      correctas++;
+      detalle.push({ preguntaId: pregunta.id, estado: 'correcta' });
+    } else {
+      incorrectas++;
+      detalle.push({ preguntaId: pregunta.id, estado: 'incorrecta' });
+    }
+  }
+
+  const puntosBrutos = correctas - incorrectas * fraccion;
+  const notaSobreDiez = preguntas.length > 0 ? (puntosBrutos / preguntas.length) * 10 : 0;
+  const notaMinima = examen.convocatoria.notaMinimaAprobado ?? 5;
+  const aprobarias = notaSobreDiez >= notaMinima;
+
+  // Guardar resultado histórico
+  await this.resultadoTestRepo.save(this.resultadoTestRepo.create({
+    usuario: { id: usuarioId } as any,
+    oposicion: { id: (examen.convocatoria as any).oposicion?.id } as any,
+    totalPreguntas: preguntas.length,
+    correctas,
+    porcentaje: preguntas.length > 0 ? Math.round((correctas / preguntas.length) * 100) : 0,
+    tipoTest: 'simulacro_oficial',
+    detallePreguntas: detalle,
+  } as any));
+
+  return {
+    totalPreguntas: preguntas.length,
+    correctas,
+    incorrectas,
+    blancos,
+    nota: Math.round(notaSobreDiez * 100) / 100,
+    notaMinima,
+    aprobarias,
+  };
+}
+
+}
+
+function parseFraccion(fraccion: string | null | undefined): number {
+  if (!fraccion) return 0;
+  const partes = fraccion.split('/');
+  if (partes.length !== 2) return 0;
+  const numerador = parseFloat(partes[0]);
+  const denominador = parseFloat(partes[1]);
+  if (!denominador) return 0;
+  return numerador / denominador;
 }

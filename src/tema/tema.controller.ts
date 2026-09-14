@@ -32,6 +32,11 @@ getProgresoOposicion(
     return this.service.getNormativa(id);
   }
 
+  @Get('examenes/:id/preguntas')
+  getPreguntasDeExamen(@Param('id') id: string) {
+    return this.service.getPreguntasDeExamen(id);
+  }
+
   @Get('convocatoria/:convocatoriaId/progreso-completo')
 getProgresoCompletoConvocatoria(
   @Param('convocatoriaId') convocatoriaId: string,
@@ -75,6 +80,16 @@ getProgresoCompletoConvocatoria(
       parte: parseInt(parte) || 1,
       archivo,
     });
+  }
+
+    @Post('examenes/:id/corregir')
+  @UseGuards(JwtAuthGuard)
+  corregirSimulacro(
+    @Param('id') id: string,
+    @Body('respuestas') respuestas: any[],
+    @Request() req: any,
+  ) {
+    return this.service.corregirSimulacro(req.user.id, id, respuestas);
   }
 
   @Delete('examenes/:id')
