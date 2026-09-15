@@ -399,7 +399,7 @@ async crearExamen(datos: {
 }): Promise<ExamenAnterior> {
   // Sube el PDF a Supabase Storage (mismo bucket/patrón que usas para apuntes)
   const nombreLimpio = sanitizarNombreArchivo(datos.archivo.originalname);
-  const nombreArchivo = `examenes/${datos.convocatoriaId}/${Date.now()}-${datos.archivo.originalname}`;
+  const nombreArchivo = `examenes/${datos.convocatoriaId}/${Date.now()}-${nombreLimpio}`;
   const { error } = await this.supabase.storage
     .from('apuntes-oplora') // o el bucket que uses para documentos oficiales
     .upload(nombreArchivo, datos.archivo.buffer, { contentType: 'application/pdf' });
