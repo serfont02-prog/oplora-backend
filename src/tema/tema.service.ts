@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Tema } from './tema.entity';
@@ -17,6 +17,10 @@ import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity'; // ajus
 import { randomUUID } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { ResultadoTest } from '../test/resultado-test.entity';
+import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { Convocatoria } from '../convocatoria/convocatoria.entity';
+import { forwardRef, Inject } from '@nestjs/common';
+
 
 
 
@@ -39,7 +43,6 @@ export class TemaService {
     private readonly preguntaTestRepo: Repository<PreguntaTest>,
     private readonly apunteOploraService: ApunteOploraService,
     private readonly flashcardService: FlashcardService,
-    private readonly testService: TestService,
     @InjectRepository(ApunteOplora)
     private readonly apunteOploraRepo: Repository<ApunteOplora>,
     @InjectRepository(Flashcard)
@@ -50,6 +53,12 @@ export class TemaService {
     private readonly apunteUsuarioRepo: Repository<ApunteUsuario>,
     @InjectRepository(ResultadoTest)
     private readonly resultadoTestRepo: Repository<ResultadoTest>,
+    @InjectRepository(UsuarioOposicion)
+    private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
+    @InjectRepository(Convocatoria)
+    private readonly convocatoriaRepo: Repository<Convocatoria>,
+    @Inject(forwardRef(() => TestService))
+    private readonly testService: TestService,
   ) {}
 
   
@@ -171,9 +180,8 @@ async remove(id: string) {
   async desvincularNormativa(temaNormativaId: string) {
     await this.temaNormativaRepo.delete(temaNormativaId);
   }
-  
 
-async getExamenesByConvocatoria(convocatoriaId: string) {
+  async getExamenesByConvocatoria(convocatoriaId: string) {
   const examenes = await this.examenRepo.find({
     where: { convocatoria: { id: convocatoriaId } } as any,
     order: { anyo: 'DESC', creadoEn: 'DESC' },
@@ -193,6 +201,21 @@ async getExamenesByConvocatoria(convocatoriaId: string) {
   for (const c of conteos) mapaConteos[c.examenId] = parseInt(c.total);
 
   return examenes.map((e) => ({ ...e, totalPreguntas: mapaConteos[e.id] ?? 0 }));
+}
+
+// En TemaService
+async getExamenesByOposicionUsuario(usuarioId: string, oposicionId: string) {
+  const uo = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    relations: ['convocatoriaActiva'],
+  });
+  const convocatoriaId = uo?.convocatoriaActiva?.id;
+  if (!convocatoriaId) return { convocatoria: null, examenes: [] };
+
+  const convocatoria = await this.convocatoriaRepo.findOne({ where: { id: convocatoriaId } });
+  const examenes = await this.getExamenesByConvocatoria(convocatoriaId);
+
+  return { convocatoria, examenes };
 }
 
   async getExamenesByTema(temaId: string) {
@@ -460,6 +483,116 @@ async getPreguntasDeExamen(examenId: string) {
       enunciado: p.enunciado,
       opciones: p.opciones,
       // ⭐ NO incluir "correcta" aquí — se valida al enviar, no antes
+    })),
+  };
+}
+
+async corregirSimulacroGenerado(
+  usuarioId: string,
+  oposicionId: string,
+  preguntaIds: string[],
+  respuestas: { preguntaId: string; opcionElegida: number | null }[],
+) {
+  const uo = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    relations: ['convocatoriaActiva'],
+  });
+  const convocatoria = await this.convocatoriaRepo.findOne({ where: { id: uo?.convocatoriaActiva?.id } });
+
+  const preguntas = await this.preguntaTestRepo.find({
+    where: { id: In(preguntaIds) } as any,
+  });
+
+  const fraccion = parseFraccion(convocatoria?.fraccionPenalizacion);
+
+  let correctas = 0, incorrectas = 0, blancos = 0;
+  const detalle: any[] = [];
+
+  for (const pregunta of preguntas) {
+    const respuesta = respuestas.find((r) => r.preguntaId === pregunta.id);
+
+    if (!respuesta || respuesta.opcionElegida === null) {
+      blancos++;
+      detalle.push({ preguntaId: pregunta.id, estado: 'blanco' });
+      continue;
+    }
+
+    const esCorrecta = respuesta.opcionElegida === pregunta.correcta;
+    if (esCorrecta) {
+      correctas++;
+      detalle.push({ preguntaId: pregunta.id, estado: 'correcta' });
+    } else {
+      incorrectas++;
+      detalle.push({ preguntaId: pregunta.id, estado: 'incorrecta' });
+    }
+  }
+
+  const puntosBrutos = correctas - incorrectas * fraccion;
+  const notaSobreDiez = preguntas.length > 0 ? (puntosBrutos / preguntas.length) * 10 : 0;
+  const notaMinima = convocatoria?.notaMinimaAprobado ?? 5;
+  const aprobarias = notaSobreDiez >= notaMinima;
+
+  await this.resultadoTestRepo.save(this.resultadoTestRepo.create({
+    usuario: { id: usuarioId } as any,
+    oposicion: { id: oposicionId } as any,
+    totalPreguntas: preguntas.length,
+    correctas,
+    porcentaje: preguntas.length > 0 ? Math.round((correctas / preguntas.length) * 100) : 0,
+    tipoTest: 'simulacro_generado',
+    detallePreguntas: detalle,
+  } as any));
+
+  return {
+    totalPreguntas: preguntas.length,
+    correctas,
+    incorrectas,
+    blancos,
+    nota: Math.round(notaSobreDiez * 100) / 100,
+    notaMinima,
+    aprobarias,
+  };
+}
+
+async generarSimulacroOplora(usuarioId: string, oposicionId: string, ejercicioNumero: number) {
+  const uo = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    relations: ['convocatoriaActiva'],
+  });
+  const convocatoriaId = uo?.convocatoriaActiva?.id;
+  if (!convocatoriaId) throw new BadRequestException('No tienes convocatoria activa');
+
+  const convocatoria = await this.convocatoriaRepo.findOne({ where: { id: convocatoriaId } });
+  const ejercicio = convocatoria?.ejercicios?.find((e: any) => e.numero === ejercicioNumero);
+  if (!ejercicio) throw new NotFoundException('Ejercicio no encontrado en esta convocatoria');
+
+  const numPreguntas = ejercicio.numPreguntas ?? 50;
+
+  // Reutiliza el mismo generador que ya usa el sistema normal de tests,
+  // sin filtrar por tema/ley concretos → mezcla todo el temario + normativa vinculada
+  const preguntas = await this.testService.generarTest(
+    oposicionId,
+    numPreguntas,
+    undefined, // temaId
+    undefined, // versionLeyId
+    undefined, // capituloId
+    undefined, // tituloId
+    'simulacro', // modo
+    undefined, // nivel
+    undefined, // dificultad
+    usuarioId,
+  );
+
+  return {
+    ejercicio,
+    convocatoria: {
+      fraccionPenalizacion: convocatoria?.fraccionPenalizacion,
+      notaMinimaAprobado: convocatoria?.notaMinimaAprobado,
+    },
+    preguntas: preguntas.map((p: any) => ({
+      id: p.id,
+      enunciado: p.enunciado,
+      opciones: p.opciones,
+      // ⭐ sin "correcta", igual que en el simulacro oficial
     })),
   };
 }

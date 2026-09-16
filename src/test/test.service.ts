@@ -172,32 +172,7 @@ if (modo === 'primer_reto') {
         );
     }
 
-    /* =========================================================
-       FILTRO POR VERSION LEY
-    ========================================================= */
-
-    if (versionLeyId) {
-
-      query = query
-        .leftJoin(
-          'articulo.capitulo',
-          'capituloLey',
-        )
-        .leftJoin(
-          'capituloLey.tituloRef',
-          'tituloLey',
-        )
-        .leftJoin(
-          'tituloLey.versionLey',
-          'versionLey',
-        )
-        .andWhere(
-          'versionLey.id = :versionLeyId',
-          { versionLeyId },
-        );
-    }
-
-    // Resolver la convocatoria activa del usuario para esta oposición (si la tenemos)
+        // Resolver la convocatoria activa del usuario para esta oposición (si la tenemos)
     let convocatoriaActivaId: string | undefined;
     if (usuarioId) {
       const uo = await this.usuarioOposicionRepo.findOne({
@@ -206,6 +181,29 @@ if (modo === 'primer_reto') {
       });
       convocatoriaActivaId = uo?.convocatoriaActiva?.id;
     }
+
+    /* =========================================================
+       FILTRO POR VERSION LEY
+    ========================================================= */
+
+    if (versionLeyId) {
+    query = query
+      .leftJoin('articulo.capitulo', 'capituloLey')
+      .leftJoin('capituloLey.tituloRef', 'tituloLey')
+      .leftJoin('tituloLey.versionLey', 'versionLey')
+      .andWhere('versionLey.id = :versionLeyId', { versionLeyId })
+      // ⭐ Exigir que el artículo esté realmente vinculado a algún tema del temario real
+      .leftJoin(TemaNormativa, 'tnLey', 'tnLey."articuloId" = articulo.id')
+      .leftJoin('tnLey.tema', 'temaLey')
+      .andWhere(
+        convocatoriaActivaId
+          ? 'temaLey.id IS NOT NULL AND temaLey."convocatoriaId" = :convocatoriaActivaId'
+          : 'temaLey.id IS NOT NULL',
+        convocatoriaActivaId ? { convocatoriaActivaId } : {},
+      );
+  }
+
+
 
   /* =========================================================
        TEST GENERAL OPOSICION

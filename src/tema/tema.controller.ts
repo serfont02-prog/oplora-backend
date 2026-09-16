@@ -27,15 +27,40 @@ getProgresoOposicion(
     return this.service.findByOposicion(oposicionId);
   }
 
+    @Get('examenes/mi-convocatoria/:oposicionId')
+  @UseGuards(JwtAuthGuard)
+  getExamenesByOposicionUsuario(
+    @Param('oposicionId') oposicionId: string,
+    @Request() req: any,
+  ) {
+    return this.service.getExamenesByOposicionUsuario(req.user.id, oposicionId);
+  }
+
   @Get(':id/normativa')
   getNormativa(@Param('id') id: string) {
     return this.service.getNormativa(id);
   }
 
-  @Get('examenes/convocatoria/:convocatoriaId')
-    getExamenesByConvocatoria(@Param('convocatoriaId') convocatoriaId: string) {
-    return this.service.getExamenesByConvocatoria(convocatoriaId);
-  }
+  @Get('simulacro-oplora/:oposicionId/:ejercicioNumero')
+@UseGuards(JwtAuthGuard)
+generarSimulacroOplora(
+  @Param('oposicionId') oposicionId: string,
+  @Param('ejercicioNumero') ejercicioNumero: string,
+  @Request() req: any,
+) {
+  return this.service.generarSimulacroOplora(req.user.id, oposicionId, Number(ejercicioNumero));
+}
+
+@Post('simulacro-oplora/:oposicionId/corregir')
+@UseGuards(JwtAuthGuard)
+corregirSimulacroGenerado(
+  @Param('oposicionId') oposicionId: string,
+  @Body('preguntaIds') preguntaIds: string[],
+  @Body('respuestas') respuestas: any[],
+  @Request() req: any,
+) {
+  return this.service.corregirSimulacroGenerado(req.user.id, oposicionId, preguntaIds, respuestas);
+}
 
   @Get('examenes/:id/preguntas')
   getPreguntasDeExamen(@Param('id') id: string) {
