@@ -369,6 +369,37 @@ async getTotalPreguntasDelTema(temaId: string): Promise<number> {
     .getCount();
 }
 
+
+  async getTodosExamenesOposicion(oposicionId: string) {
+    const convocatorias = await this.convocatoriaRepo.find({
+      where: { oposicion: { id: oposicionId } } as any,
+      order: { anyo: 'DESC' },
+    });
+
+    if (convocatorias.length === 0) return [];
+
+    const examenes = await this.examenRepo.find({
+      where: { convocatoria: { id: In(convocatorias.map((c) => c.id)) } } as any,
+      relations: ['convocatoria'],
+      order: { anyo: 'DESC', creadoEn: 'DESC' },
+    });
+
+    if (examenes.length === 0) return [];
+
+    const conteos = await this.preguntaTestRepo
+      .createQueryBuilder('p')
+      .select('p.examenAnteriorId', 'examenId')
+      .addSelect('COUNT(*)', 'total')
+      .where('p.examenAnteriorId IN (:...ids)', { ids: examenes.map((e) => e.id) })
+      .groupBy('p.examenAnteriorId')
+      .getRawMany();
+
+    const mapaConteos: Record<string, number> = {};
+    for (const c of conteos) mapaConteos[c.examenId] = parseInt(c.total);
+
+    return examenes.map((e) => ({ ...e, totalPreguntas: mapaConteos[e.id] ?? 0 }));
+  }
+
   async getProgresoOposicion(usuarioId: string, oposicionId: string, convocatoriaId: string) {
   const temas = await this.temaRepo.find({
     where: { convocatoria: { id: convocatoriaId } },

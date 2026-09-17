@@ -41,6 +41,12 @@ getProgresoOposicion(
     return this.service.getNormativa(id);
   }
 
+  @Get('examenes/oposicion/:oposicionId')
+  @UseGuards(JwtAuthGuard)
+  getTodosExamenesOposicion(@Param('oposicionId') oposicionId: string) {
+    return this.service.getTodosExamenesOposicion(oposicionId);
+  }
+
   @Get('simulacro-oplora/:oposicionId/:ejercicioNumero')
 @UseGuards(JwtAuthGuard)
 generarSimulacroOplora(
