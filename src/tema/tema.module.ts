@@ -25,6 +25,7 @@ import { RepasoFC } from '../flashcard/repaso-fc.entity';
 import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity';
 import { ResultadoTest } from '../test/resultado-test.entity';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { PsicotecnicoConfigOposicion } from '../psicotecnico/psicotecnico-config-oposicion.entity';
 
 
 @Module({
@@ -32,7 +33,7 @@ import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
     TypeOrmModule.forFeature([
       Tema, TemaNormativa, PreguntaBanco,
       ExamenAnterior,
-      Articulo, Capitulo, Titulo, Convocatoria, Usuario, PreguntaTest, ApunteOplora, Flashcard, RepasoFC, ApunteUsuario, ResultadoTest, UsuarioOposicion
+      Articulo, Capitulo, Titulo, Convocatoria, Usuario, PreguntaTest, ApunteOplora, Flashcard, RepasoFC, ApunteUsuario, ResultadoTest, UsuarioOposicion, PsicotecnicoConfigOposicion
     ]),
     IaModule, 
     forwardRef(() => TestModule),

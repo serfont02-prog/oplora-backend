@@ -16,6 +16,7 @@ import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
 import { PreguntaTest } from '../test/pregunta-test.entity';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { LessThanOrEqual } from 'typeorm';
+import { PsicotecnicoConfigOposicion } from '../psicotecnico/psicotecnico-config-oposicion.entity';
 
 
 @Injectable()
@@ -43,6 +44,8 @@ export class ConvocatoriaService {
     private readonly apunteOploraRepo: Repository<ApunteOplora>,
     @InjectRepository(PreguntaTest)
     private readonly preguntaTestRepo: Repository<PreguntaTest>,
+    @InjectRepository(PsicotecnicoConfigOposicion)
+    private readonly psicotecnicoConfigRepo: Repository<PsicotecnicoConfigOposicion>,
   ) {}
 
   findByOposicion(oposicionId: string): Promise<Convocatoria[]> {
@@ -357,6 +360,40 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
         tema: { id: temaNuevoId } as any,
       }));
     }
+  }
+
+  // Copiar overrides de psicotécnicos específicos de esta convocatoria (si los hay).
+  // La config "por defecto" de la oposición (convocatoria = null) ya se aplica sola a
+  // la nueva convocatoria sin copiar nada; esto solo traslada excepciones puntuales.
+  const configsConvocatoria = await this.psicotecnicoConfigRepo.find({
+    where: { convocatoria: { id: original.id } as any },
+  });
+  for (const cfg of configsConvocatoria) {
+    await this.psicotecnicoConfigRepo.save(this.psicotecnicoConfigRepo.create({
+      tipo: cfg.tipo,
+      habilitado: cfg.habilitado,
+      oficial: cfg.oficial,
+      subtiposHabilitados: cfg.subtiposHabilitados,
+      dificultadesDisponibles: cfg.dificultadesDisponibles,
+      oposicion: { id: original.oposicion.id } as any,
+      convocatoria: { id: nueva.id } as any,
+    }));
+  }
+
+  // Copiar ENLACES pregunta psicotécnica ↔ convocatoria (igual que con el banco de
+  // Test/Tema): se vincula la MISMA pregunta a la convocatoria nueva, no se duplica.
+  // Si luego el admin la desvincula/edita solo para la convocatoria nueva, la vieja
+  // no se entera. Las preguntas "globales" (sin convocatorias) no necesitan copia,
+  // ya aplican solas a cualquier convocatoria de la oposición.
+  const preguntasPsicoVinculadas = await this.temaRepo.query(
+    `SELECT "preguntaId" FROM preguntas_psicotecnicas_convocatorias WHERE "convocatoriaId" = $1`,
+    [original.id],
+  );
+  for (const fila of preguntasPsicoVinculadas) {
+    await this.temaRepo.query(
+      `INSERT INTO preguntas_psicotecnicas_convocatorias ("preguntaId", "convocatoriaId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [fila.preguntaId, nueva.id],
+    );
   }
 
   // ⭐ Programar notificación diferida (1 hora), en vez de notificar inmediatamente

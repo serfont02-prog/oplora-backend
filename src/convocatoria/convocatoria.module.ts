@@ -15,11 +15,12 @@ import { TemaModule } from '../tema/tema.module';
 import { Flashcard } from '../flashcard/flashcard.entity';
 import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
 import { PreguntaTest } from 'src/test/pregunta-test.entity';
+import { PsicotecnicoConfigOposicion } from '../psicotecnico/psicotecnico-config-oposicion.entity';
 
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Convocatoria, Oposicion, DocumentoConvocatoria, Tema, TemaNormativa, NotaArticulo, UsuarioOposicion, Flashcard, ApunteOplora, PreguntaTest]),
+    TypeOrmModule.forFeature([Convocatoria, Oposicion, DocumentoConvocatoria, Tema, TemaNormativa, NotaArticulo, UsuarioOposicion, Flashcard, ApunteOplora, PreguntaTest, PsicotecnicoConfigOposicion]),
     NotificacionModule,
     forwardRef(() => TemaModule),
   ],

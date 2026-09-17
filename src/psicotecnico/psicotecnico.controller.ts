@@ -34,12 +34,22 @@ export class PsicotecnicoController {
   @UseGuards(JwtAuthGuard)
   generar(
     @Body('oposicionId') oposicionId: string,
+    @Body('convocatoriaId') convocatoriaId: string,
     @Body('tipo') tipo: PsicotecnicoTipo,
     @Body('subtipo') subtipo: string,
     @Body('dificultad') dificultad: PsicotecnicoDificultad,
     @Body('numPreguntas') numPreguntas: number,
+    @Request() req: any,
   ) {
-    return this.service.generarPreguntas({ oposicionId, tipo, subtipo, dificultad, numPreguntas });
+    return this.service.generarPreguntas({
+      usuarioId: req.user.id,
+      oposicionId,
+      convocatoriaId,
+      tipo,
+      subtipo,
+      dificultad,
+      numPreguntas,
+    });
   }
 
   @Post('resultado')
@@ -70,8 +80,9 @@ export class PsicotecnicoController {
   @Post('admin/preguntas/importar')
   importarPreguntas(
     @Body('oposicionId') oposicionId: string,
+    @Body('convocatoriaId') convocatoriaId: string,
     @Body('preguntas') preguntas: any[],
   ) {
-    return this.service.importarPreguntas(oposicionId, preguntas);
+    return this.service.importarPreguntas(oposicionId, preguntas, convocatoriaId);
   }
 }

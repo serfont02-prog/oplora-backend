@@ -6,6 +6,7 @@ import { PsicotecnicoConfigOposicion } from './psicotecnico-config-oposicion.ent
 import { PreguntaPsicotecnica } from './pregunta-psicotecnica.entity';
 import { ResultadoPsicotecnico } from './resultado-psicotecnico.entity';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { Convocatoria } from '../convocatoria/convocatoria.entity';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
       PreguntaPsicotecnica,
       ResultadoPsicotecnico,
       UsuarioOposicion,
+      Convocatoria,
     ]),
   ],
   controllers: [PsicotecnicoController],

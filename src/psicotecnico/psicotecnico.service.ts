@@ -56,15 +56,19 @@ export class PsicotecnicoService {
     });
   }
 
+  // Resuelve la convocatoria a usar cuando el caller no la pasa explícitamente:
+  // la convocatoria activa del usuario en esa oposición.
+  private async resolverConvocatoria(usuarioId: string, oposicionId: string, convocatoriaId?: string | null) {
+    if (convocatoriaId) return convocatoriaId;
+    const uo = await this.usuarioOposicionRepo.findOne({
+      where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+      relations: ['convocatoriaActiva'],
+    });
+    return uo?.convocatoriaActiva?.id;
+  }
+
   async getConfigParaUsuario(usuarioId: string, oposicionId: string, convocatoriaId?: string) {
-    let convocatoriaResuelta = convocatoriaId;
-    if (!convocatoriaResuelta) {
-      const uo = await this.usuarioOposicionRepo.findOne({
-        where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
-        relations: ['convocatoriaActiva'],
-      });
-      convocatoriaResuelta = uo?.convocatoriaActiva?.id;
-    }
+    const convocatoriaResuelta = await this.resolverConvocatoria(usuarioId, oposicionId, convocatoriaId);
 
     const config = (await this.getConfigEfectiva(oposicionId, convocatoriaResuelta)).filter((c) => c.habilitado);
 
@@ -144,19 +148,51 @@ export class PsicotecnicoService {
   ========================================================= */
 
   async generarPreguntas(datos: {
+    usuarioId: string;
     oposicionId: string;
+    convocatoriaId?: string;
     tipo: PsicotecnicoTipo;
     subtipo?: string;
     dificultad?: PsicotecnicoDificultad;
     numPreguntas?: number;
   }) {
     const numPreguntas = Math.min(Math.max(datos.numPreguntas ?? 10, 1), 50);
+    const convocatoriaResuelta = await this.resolverConvocatoria(datos.usuarioId, datos.oposicionId, datos.convocatoriaId);
 
     const qb = this.preguntaRepo
       .createQueryBuilder('p')
       .where('p.activa = true')
-      .andWhere('p.tipo = :tipo', { tipo: datos.tipo })
-      .andWhere('(p.oposicionId IS NULL OR p.oposicionId = :oposicionId)', { oposicionId: datos.oposicionId });
+      .andWhere('(p.oposicionId IS NULL OR p.oposicionId = :oposicionId)', { oposicionId: datos.oposicionId })
+      // Sin convocatorias vinculadas = aplica a todas las de la oposición.
+      // Si tiene, solo cuenta si es precisamente la convocatoria del usuario.
+      // (EXISTS/NOT EXISTS en vez de JOIN para no duplicar filas por pregunta.)
+      .andWhere(
+        convocatoriaResuelta
+          ? `(
+              NOT EXISTS (SELECT 1 FROM preguntas_psicotecnicas_convocatorias ppc WHERE ppc."preguntaId" = p.id)
+              OR EXISTS (SELECT 1 FROM preguntas_psicotecnicas_convocatorias ppc2 WHERE ppc2."preguntaId" = p.id AND ppc2."convocatoriaId" = :convocatoriaId)
+            )`
+          : `NOT EXISTS (SELECT 1 FROM preguntas_psicotecnicas_convocatorias ppc WHERE ppc."preguntaId" = p.id)`,
+        convocatoriaResuelta ? { convocatoriaId: convocatoriaResuelta } : {},
+      );
+
+    // "Mixto" no es un banco propio: mezcla preguntas de todos los tipos que
+    // estén ACTIVADOS ahora mismo para esta oposición/convocatoria (no de todos
+    // los tipos del catálogo). Si el propio "mixto" tuviera preguntas propias
+    // subidas directamente, también entrarían.
+    if (datos.tipo === PsicotecnicoTipo.MIXTO) {
+      const configEfectiva = await this.getConfigEfectiva(datos.oposicionId, convocatoriaResuelta);
+      const tiposHabilitados = configEfectiva
+        .filter((c) => c.habilitado && c.tipo !== PsicotecnicoTipo.MIXTO)
+        .map((c) => c.tipo);
+
+      if (tiposHabilitados.length === 0) {
+        throw new BadRequestException('Activa al menos una modalidad para poder generar un mixto.');
+      }
+      qb.andWhere('p.tipo IN (:...tiposHabilitados)', { tiposHabilitados });
+    } else {
+      qb.andWhere('p.tipo = :tipo', { tipo: datos.tipo });
+    }
 
     if (datos.subtipo) qb.andWhere('p.subtipo = :subtipo', { subtipo: datos.subtipo });
     if (datos.dificultad) qb.andWhere('p.dificultad = :dificultad', { dificultad: datos.dificultad });
@@ -266,7 +302,10 @@ export class PsicotecnicoService {
      IMPORTAR PREGUNTAS (admin)
   ========================================================= */
 
-  async importarPreguntas(oposicionId: string | undefined, preguntas: any[]) {
+  // `convocatoriaId`: si se pasa, las preguntas nacen vinculadas SOLO a esa
+  // convocatoria (no salen en otras de la misma oposición); si se omite,
+  // quedan como preguntas "globales" de la oposición, como hasta ahora.
+  async importarPreguntas(oposicionId: string | undefined, preguntas: any[], convocatoriaId?: string) {
     const resultado = { importadas: 0, errores: [] as string[] };
 
     for (const [i, p] of preguntas.entries()) {
@@ -280,7 +319,7 @@ export class PsicotecnicoService {
           continue;
         }
 
-        await this.preguntaRepo.save(
+        const nueva = await this.preguntaRepo.save(
           this.preguntaRepo.create({
             tipo: p.tipo,
             subtipo: p.subtipo,
@@ -296,6 +335,15 @@ export class PsicotecnicoService {
             oposicion: oposicionId ? ({ id: oposicionId } as any) : null,
           }),
         );
+
+        if (convocatoriaId) {
+          await this.preguntaRepo
+            .createQueryBuilder()
+            .relation(PreguntaPsicotecnica, 'convocatorias')
+            .of(nueva.id)
+            .add(convocatoriaId);
+        }
+
         resultado.importadas++;
       } catch (e: any) {
         resultado.errores.push(`Fila ${i + 1}: ${e.message}`);
