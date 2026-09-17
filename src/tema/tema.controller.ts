@@ -27,6 +27,11 @@ getProgresoOposicion(
     return this.service.findByOposicion(oposicionId);
   }
 
+  @Get('examenes/convocatoria/:convocatoriaId')
+  getExamenesByConvocatoria(@Param('convocatoriaId') convocatoriaId: string) {
+    return this.service.getExamenesByConvocatoria(convocatoriaId);
+  }
+
     @Get('examenes/mi-convocatoria/:oposicionId')
   @UseGuards(JwtAuthGuard)
   getExamenesByOposicionUsuario(
