@@ -20,6 +20,7 @@
   import { ApunteUsuarioModule } from './apunte-usuario/apunte-usuario.module';
   import { SesionTemaModule } from './sesion-tema/sesion-tema.module';
   import { PreferenciaWidgetModule } from './preferencia-widget/preferencia-widget.module';
+  import { PsicotecnicoModule } from './psicotecnico/psicotecnico.module';
 
 
 @Module({
@@ -63,6 +64,7 @@ FlashcardModule,
 ApunteOploraModule,
 ApunteUsuarioModule,
 SesionTemaModule,
+PsicotecnicoModule,
   ],
 })
 export class AppModule {} 
