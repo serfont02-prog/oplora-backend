@@ -11,6 +11,8 @@ export class CreateConvocatoriaDto {
   numeroSolicitudes?: number; 
   numeroPresentados?: number; 
   oposicionId!: string;
+  plazoInscripcionInicio?: string;
+  plazoInscripcionFin?: string;
   ejercicios?: {
     numero: number;
     tipo: TipoEjercicio;
@@ -20,6 +22,7 @@ export class CreateConvocatoriaDto {
   }[];
   permiteBlancos?: boolean;
   fraccionPenalizacion?: string;
+  fraccionPenalizacionBlanco?: string;
   notaMinimaAprobado?: number;
   diferenciasAnterior?: string;
   requisitos?: string;
@@ -73,8 +76,11 @@ export class UpdateConvocatoriaDto {
     tiempoMinutos?: number;
     descripcion?: string;
   }[];
+  plazoInscripcionInicio?: string;
+  plazoInscripcionFin?: string;
   permiteBlancos?: boolean;
   fraccionPenalizacion?: string;
+  fraccionPenalizacionBlanco?: string;
   notaMinimaAprobado?: number;
   diferenciasAnterior?: string;
   requisitos?: string;

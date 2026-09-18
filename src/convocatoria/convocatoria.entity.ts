@@ -73,6 +73,9 @@ export class Convocatoria {
   permiteBlancos: boolean;
 
   @Column({ nullable: true })
+  fraccionPenalizacionBlanco: string; // solo se usa si permiteBlancos = false (ej: "1/4")
+
+  @Column({ nullable: true })
   fraccionPenalizacion: string;
 
   @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })

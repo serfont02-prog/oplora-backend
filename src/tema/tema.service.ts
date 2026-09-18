@@ -535,6 +535,9 @@ async corregirSimulacroGenerado(
   });
 
   const fraccion = parseFraccion(convocatoria?.fraccionPenalizacion);
+  const fraccionBlanco = convocatoria?.permiteBlancos === false
+    ? parseFraccion(convocatoria?.fraccionPenalizacionBlanco)
+    : 0;
 
   let correctas = 0, incorrectas = 0, blancos = 0;
   const detalle: any[] = [];
@@ -558,7 +561,7 @@ async corregirSimulacroGenerado(
     }
   }
 
-  const puntosBrutos = correctas - incorrectas * fraccion;
+  const puntosBrutos = correctas - incorrectas * fraccion - blancos * fraccionBlanco;
   const notaSobreDiez = preguntas.length > 0 ? (puntosBrutos / preguntas.length) * 10 : 0;
   const notaMinima = convocatoria?.notaMinimaAprobado ?? 5;
   const aprobarias = notaSobreDiez >= notaMinima;
@@ -640,6 +643,9 @@ async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { pregu
   });
 
   const fraccion = parseFraccion(examen.convocatoria.fraccionPenalizacion);
+  const fraccionBlanco = examen.convocatoria.permiteBlancos === false
+    ? parseFraccion(examen.convocatoria.fraccionPenalizacionBlanco)
+    : 0;
 
   let correctas = 0;
   let incorrectas = 0;
@@ -665,7 +671,7 @@ async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { pregu
     }
   }
 
-  const puntosBrutos = correctas - incorrectas * fraccion;
+  const puntosBrutos = correctas - incorrectas * fraccion - blancos * fraccionBlanco;
   const notaSobreDiez = preguntas.length > 0 ? (puntosBrutos / preguntas.length) * 10 : 0;
   const notaMinima = examen.convocatoria.notaMinimaAprobado ?? 5;
   const aprobarias = notaSobreDiez >= notaMinima;
