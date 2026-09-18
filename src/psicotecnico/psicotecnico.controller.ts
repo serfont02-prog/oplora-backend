@@ -58,6 +58,12 @@ export class PsicotecnicoController {
     return this.service.guardarResultado({ ...body, usuarioId: req.user.id });
   }
 
+  @Get('progreso-periodo/:oposicionId')
+  @UseGuards(JwtAuthGuard)
+  getProgresoPorPeriodo(@Param('oposicionId') oposicionId: string, @Request() req: any) {
+    return this.service.getProgresoPorPeriodo(req.user.id, oposicionId);
+  }
+
   /* =========================================================
      ADMIN — configuración por oposición/convocatoria
   ========================================================= */

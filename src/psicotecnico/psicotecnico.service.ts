@@ -42,18 +42,25 @@ export class PsicotecnicoService {
      CONFIGURACIÓN — resolución oposición vs convocatoria
   ========================================================= */
 
-  // Config efectiva: si hay filas para la convocatoria dada, esas ganan;
-  // si no hay ninguna, se cae a las filas "por defecto" de la oposición.
+  // Config efectiva: se parte de la config "por defecto" de la oposición
+  // (convocatoria = null) y, tipo por tipo, se sustituye por la fila propia
+  // de esa convocatoria si existe. NO es un reemplazo total: activar/desactivar
+  // un tipo a nivel de convocatoria no debe tapar los demás tipos que sigan
+  // viniendo del nivel oposición.
   private async getConfigEfectiva(oposicionId: string, convocatoriaId?: string | null) {
-    if (convocatoriaId) {
-      const deConvocatoria = await this.configRepo.find({
-        where: { oposicion: { id: oposicionId } as any, convocatoria: { id: convocatoriaId } as any },
-      });
-      if (deConvocatoria.length > 0) return deConvocatoria;
-    }
-    return this.configRepo.find({
+    const porDefecto = await this.configRepo.find({
       where: { oposicion: { id: oposicionId } as any, convocatoria: IsNull() },
     });
+
+    if (!convocatoriaId) return porDefecto;
+
+    const propias = await this.configRepo.find({
+      where: { oposicion: { id: oposicionId } as any, convocatoria: { id: convocatoriaId } as any },
+    });
+
+    const mapa = new Map(porDefecto.map((c) => [c.tipo, c]));
+    for (const propia of propias) mapa.set(propia.tipo, propia); // override solo de ese tipo
+    return Array.from(mapa.values());
   }
 
   // Resuelve la convocatoria a usar cuando el caller no la pasa explícitamente:
@@ -296,6 +303,36 @@ export class PsicotecnicoService {
       };
     }
     return resultado;
+  }
+
+  /* =========================================================
+     PROGRESO POR PERIODO (para el widget "Mi progreso")
+  ========================================================= */
+
+  async getProgresoPorPeriodo(usuarioId: string, oposicionId?: string) {
+    const ahora = new Date();
+    const inicioHoy = new Date(ahora); inicioHoy.setHours(0, 0, 0, 0);
+    const inicioSemana = new Date(ahora); inicioSemana.setDate(ahora.getDate() - 7);
+    const inicioMes = new Date(ahora); inicioMes.setDate(ahora.getDate() - 30);
+
+    const qb = this.resultadoRepo.createQueryBuilder('r').where('r.usuarioId = :usuarioId', { usuarioId });
+    if (oposicionId) qb.andWhere('r.oposicionId = :oposicionId', { oposicionId });
+    const resultados = await qb.getMany();
+
+    const calcular = (desde: Date | null) => {
+      const filtrados = desde ? resultados.filter((r) => r.creadoEn >= desde) : resultados;
+      const totalPreguntas = filtrados.reduce((acc, r) => acc + r.totalPreguntas, 0);
+      const totalCorrectas = filtrados.reduce((acc, r) => acc + r.correctas, 0);
+      const precision = totalPreguntas > 0 ? Math.round((totalCorrectas / totalPreguntas) * 100) : 0;
+      return { totalPreguntas, precision };
+    };
+
+    return {
+      dia: calcular(inicioHoy),
+      semana: calcular(inicioSemana),
+      mes: calcular(inicioMes),
+      total: calcular(null),
+    };
   }
 
   /* =========================================================
