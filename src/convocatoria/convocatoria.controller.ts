@@ -1,7 +1,10 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { ConvocatoriaService } from './convocatoria.service';
 import { CreateConvocatoriaDto, UpdateConvocatoriaDto } from './convocatoria.dto';
 import { ScraperService } from './scraper.service';
+import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
 @Controller('convocatorias')
 export class ConvocatoriaController {
@@ -39,6 +42,8 @@ export class ConvocatoriaController {
   }
 
   @Patch(':id/url-inap')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   async actualizarurlOficial(
     @Param('id') id: string,
     @Body('urlOficial') urlOficial: string,
@@ -50,33 +55,45 @@ export class ConvocatoriaController {
 
 
   @Post(':id/copiar')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   copiar(@Param('id') id: string) {
   return this.service.copiarConvocatoria(id);
   }
 
   @Post('revisar-notificaciones-pendientes')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   revisarManual() {
     return this.service.revisarNotificacionesConvocatoriaPendientes();
   }
 
   @Post()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   create(@Body() dto: CreateConvocatoriaDto) {
     return this.service.create(dto);
   }
 
   @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   update(@Param('id') id: string, @Body() dto: UpdateConvocatoriaDto) {
     return this.service.update(id, dto);
   }
 
   @Delete(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   remove(@Param('id') id: string) {
     return this.service.remove(id);
   }
 
   // Endpoint para lanzar el scraper manualmente desde el panel de admin
- 
+
   @Post(':id/scrape')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   async scrapeManual(@Param('id') id: string) {
     const convocatoria = await this.service.findOne(id);
     if (!convocatoria.urlOficial) {

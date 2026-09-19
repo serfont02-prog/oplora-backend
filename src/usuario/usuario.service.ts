@@ -308,12 +308,8 @@ async actualizarNivel(usuarioId: string, oposicionId: string, nivel: number) {
   async actualizarObjetivo(
   id: string,
   objetivo: string,
-  nivel?: number,
 ) {
-  await this.repo.update(id, {
-    objetivo,
-    ...(nivel && { nivel }),
-  });
+  await this.repo.update(id, { objetivo });
 
   return this.findById(id);
 }

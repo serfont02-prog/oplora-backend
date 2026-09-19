@@ -65,7 +65,7 @@ export class UpdateConvocatoriaDto {
   turno?: TurnoEnum;
   fechaExamen?: Date;
   urlOficial?: string;
-  echaConvocatoria?: string; 
+  fechaConvocatoria?: string;
   numeroSolicitudes?: number; 
   numeroPresentados?: number; 
   referenciaBoe?: string;

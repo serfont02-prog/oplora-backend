@@ -1,5 +1,7 @@
 import { UsuarioService } from './usuario.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 import { resetearConsumosSiEsNuevoDia } from '../common/helpers/consumo.helper';
 import { getSuscripcionLimits } from '../common/helpers/plan.helper';
 import { NotFoundException } from '@nestjs/common';
@@ -20,6 +22,8 @@ export class UsuarioController {
   ) {}
 
   @Get()
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   findAll() {
     return this.service.findAll();
   }
@@ -108,6 +112,8 @@ resetearPassword(@Body('token') token: string, @Body('password') password: strin
   return this.passwordResetService.resetearPassword(token, password);
 }
   @Get('estadisticas')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   estadisticas() {
   return this.service.getEstadisticas();
 }
@@ -149,12 +155,15 @@ resetearProgreso(
   }
 
   @Patch(':id/suscripcion')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   cambiarSuscripcion(@Param('id') id: string, @Body('suscripcion') suscripcion: string) {
-    console.log('PATCH SUSCRIPCION', id, suscripcion);
     return this.service.cambiarSuscripcion(id, suscripcion);
   }
 
   @Patch(':id/desactivar')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   desactivar(@Param('id') id: string) {
     return this.service.desactivar(id);
   }
@@ -174,13 +183,11 @@ async actualizarObjetivo(
   @Body()
   body: {
     objetivo: string;
-    nivel?: number;
   },
 ) {
   return this.service.actualizarObjetivo(
     req.user.id,
     body.objetivo,
-    body.nivel,
   );
 }
 

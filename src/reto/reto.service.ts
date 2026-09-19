@@ -292,10 +292,8 @@ async completarReto(
   });
   if (!reto) throw new NotFoundException('Reto no encontrado');
 
-  const correctas = respuestas.filter((r) => r.esCorrecta).length;
+  const correctas = respuestas.filter((r) => r.correcta).length;
   const porcentaje = Math.round((correctas / reto.preguntas.length) * 100);
-
-  console.log('Correctas:', correctas, 'de', reto.preguntas.length, '→', porcentaje, '%');
 
   await this.participacionRepo.update(participacion.id, {
     completado: true,
@@ -452,7 +450,6 @@ async getRankingOposicion(oposicionId: string, nivel?: number): Promise<any[]> {
     nombre: uo.usuario.nombre,
     nivel: uo.nivel,
     puntos: uo.puntos,
-    testsSuperados: (uo.usuario as any).testsSuperados,
   }));
 }
 

@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Patch, Param, Query, UseGuards, Request } from '@nestjs/common';
 import { NotificacionService } from './notificacion.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 import { TipoNotificacion, PrioridadNotificacion } from './notificacion.entity';
 
 @Controller('notificaciones')
@@ -13,16 +15,11 @@ export class NotificacionController {
     return this.service.findByUsuario(req.user.id, noLeidas === 'true');
   }
 
-    @Get('count')
+  @Get('count')
   @UseGuards(JwtAuthGuard)
   count(@Request() req: any) {
     return this.service.countNoLeidas(req.user.id);
   }
-
-  @Get('count')
-countNoLeidas(@Request() req: any) {
-  return this.service.countNoLeidas(req.user.id);
-}
 
   @Patch(':id/leer')
   @UseGuards(JwtAuthGuard)
@@ -37,6 +34,8 @@ countNoLeidas(@Request() req: any) {
   }
 
   @Post('seed/:usuarioId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   async seed(@Param('usuarioId') usuarioId: string) {
     const tipos = [
       {

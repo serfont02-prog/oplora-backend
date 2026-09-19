@@ -1,6 +1,8 @@
 import { Controller, Get, Patch, Body, Param, UseGuards } from '@nestjs/common';
 import { ConfiguracionService } from './configuracion.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
 @Controller('configuracion')
 @UseGuards(JwtAuthGuard)
@@ -18,6 +20,8 @@ export class ConfiguracionController {
   }
 
   @Patch(':clave')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
   set(@Param('clave') clave: string, @Body('valor') valor: any) {
     return this.service.set(clave, valor);
   }

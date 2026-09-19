@@ -1,13 +1,16 @@
 import {
   Controller, Get, Post, Patch, Delete,
   Param, Body, Query,
-  UploadedFile, UseInterceptors,
+  UploadedFile, UseInterceptors, UseGuards,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { extname } from 'path';
 import { LeyService } from './ley.service';
 import { TipoCambio } from './version-ley.entity';
 import { ParseoService } from './parseo.service';
+import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
 @Controller('leyes')
 export class LeyController {
@@ -43,11 +46,15 @@ getNoticiasLegislacion(
   }
 
   @Post()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   create(@Body('nombre') nombre: string, @Body('descripcion') descripcion?: string) {
     return this.service.create(nombre, descripcion);
   }
 
   @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   update(
     @Param('id') id: string,
     @Body() datos: Partial<{ nombre: string; descripcion: string }>,
@@ -68,6 +75,8 @@ getNoticiasLegislacion(
   }
 
   @Post(':id/versiones/subir')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   @UseInterceptors(FileInterceptor('archivo'))
   async subirVersion(
     @Param('id') leyId: string,
@@ -103,6 +112,8 @@ getNoticiasLegislacion(
   }
 
   @Patch(':id/versiones/:versionId/activar')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   activarVersion(
     @Param('id') _leyId: string,
     @Param('versionId') versionId: string,
@@ -111,6 +122,8 @@ getNoticiasLegislacion(
   }
 
     @Patch('versiones/:versionId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   async editarVersion(
     @Param('versionId') versionId: string,
     @Body() datos: {
@@ -127,6 +140,8 @@ getNoticiasLegislacion(
   // ─── SUBIR LEY NUEVA (crea ley + primera versión) ────────
 
  @Post('subir')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 @UseInterceptors(FileInterceptor('archivo'))
 async subirLeyNueva(
   @UploadedFile() file: Express.Multer.File,
@@ -166,6 +181,8 @@ async subirLeyNueva(
   // ─── VINCULACIÓN ─────────────────────────────────────────
 
   @Post('vincular')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   vincular(
     @Body('leyId') leyId: string,
     @Body('oposicionId') oposicionId: string,
@@ -175,6 +192,8 @@ async subirLeyNueva(
   }
 
   @Delete(':leyId/oposicion/:oposicionId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   desvincular(
     @Param('leyId') leyId: string,
     @Param('oposicionId') oposicionId: string,
@@ -190,6 +209,8 @@ async subirLeyNueva(
   }
 
   @Post(':id/versiones/:versionId/parsear')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   parsearVersion(
   @Param('id') _leyId: string,
   @Param('versionId') versionId: string,
@@ -198,11 +219,15 @@ async subirLeyNueva(
   }
 
   @Delete(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   eliminar(@Param('id') id: string) {
   return this.service.eliminar(id);
   }
 
   @Post(':id/versiones/:versionId/importar-json')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 importarJson(
   @Param('versionId') versionId: string,
   @Body('estructura') estructura: { titulos: any[] },
@@ -211,6 +236,8 @@ importarJson(
 }
 
 @Post('versiones/:versionId/copiar')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 copiarVersion(
   @Param('versionId') versionId: string,
   @Body() datos: { version: string; referenciaBoe?: string; tipoNorma?: string; fechaVigencia?: string; notas?: string },

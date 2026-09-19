@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Delete, Param, Body, Query, Request, UseGuards } from '@nestjs/common';
 import { PsicotecnicoService } from './psicotecnico.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 import { PsicotecnicoTipo, PsicotecnicoDificultad } from './psicotecnico-tipo.enum';
 
 @Controller('psicotecnicos')
@@ -69,21 +71,29 @@ export class PsicotecnicoController {
   ========================================================= */
 
   @Get('admin/config/:oposicionId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   getConfigAdmin(@Param('oposicionId') oposicionId: string) {
     return this.service.getConfigAdmin(oposicionId);
   }
 
   @Post('admin/config')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   upsertConfig(@Body() body: any) {
     return this.service.upsertConfig(body);
   }
 
   @Delete('admin/config/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   eliminarConfig(@Param('id') id: string) {
     return this.service.eliminarConfig(id);
   }
 
   @Post('admin/preguntas/importar')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   importarPreguntas(
     @Body('oposicionId') oposicionId: string,
     @Body('convocatoriaId') convocatoriaId: string,

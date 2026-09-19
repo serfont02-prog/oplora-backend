@@ -179,11 +179,10 @@ ${texto}`;
 
    return { cuerpos, datos: datosPrincipales };
 } catch (e) {
-    //console.error('Error en extraerDatosPDF:', e.message);
-    //throw new HttpException(Error,00 );
-    
+    console.error('Error en extraerDatosPDF:', e.message);
+    throw new HttpException('Error al extraer datos del PDF: ' + e.message, 500);
   }
- 
+
 }
 
 //TAREAS PENDIENTES PARA EL ADMIN
@@ -224,7 +223,7 @@ async getTareasPendientes(): Promise<any> {
   };
 }
 
-async extraerTemarioYCaracteristicas(urlPdf: string): Promise<{
+async extraerTemarioYCaracteristicas(id: string): Promise<{
   temas: { numero: number; titulo: string }[];
   caracteristicas: {
     numEjercicios?: number;
@@ -236,7 +235,11 @@ async extraerTemarioYCaracteristicas(urlPdf: string): Promise<{
     notaMinimaAprobado?: number;
   };
 }> {
-  const pdfRes = await axios.get(urlPdf, { responseType: 'arraybuffer' });
+  const convocatoria = await this.boeRepo.findOne({ where: { id } });
+  if (!convocatoria?.urlPdf) {
+    throw new Error('Convocatoria BOE no encontrada o sin urlPdf');
+  }
+  const pdfRes = await axios.get(convocatoria.urlPdf, { responseType: 'arraybuffer' });
   const pdfBuffer = Buffer.from(pdfRes.data);
   const pdfParse = require('pdf-parse');
   const pdfData = await pdfParse(pdfBuffer);
