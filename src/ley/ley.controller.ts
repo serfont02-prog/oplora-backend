@@ -151,6 +151,7 @@ async subirLeyNueva(
   @Body('referenciaBoe') referenciaBoe: string,
   @Body('tipoNorma') tipoNorma: string,
   @Body('fechaPublicacion') fechaPublicacion: string,
+  @Body('fechaVigencia') fechaVigencia: string,
   @Body('oposicionIds') oposicionIdsRaw: string,
 ) {
   const ext = extname(file.originalname).toLowerCase();
@@ -165,6 +166,7 @@ async subirLeyNueva(
       referenciaBoe: referenciaBoe || undefined,
       tipoNorma: tipoNorma || undefined,
       fechaPublicacion: fechaPublicacion || undefined,
+      fechaVigencia: fechaVigencia || undefined,
       tipoCambio: TipoCambio.INICIAL,
     },
     texto,
