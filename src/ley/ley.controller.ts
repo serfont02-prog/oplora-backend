@@ -151,6 +151,7 @@ async subirLeyNueva(
   @Body('referenciaBoe') referenciaBoe: string,
   @Body('tipoNorma') tipoNorma: string,
   @Body('fechaPublicacion') fechaPublicacion: string,
+  @Body('fechaVigencia') fechaVigencia: string,
   @Body('oposicionIds') oposicionIdsRaw: string,
 ) {
   const ext = extname(file.originalname).toLowerCase();
@@ -165,6 +166,7 @@ async subirLeyNueva(
       referenciaBoe: referenciaBoe || undefined,
       tipoNorma: tipoNorma || undefined,
       fechaPublicacion: fechaPublicacion || undefined,
+      fechaVigencia: fechaVigencia || undefined,
       tipoCambio: TipoCambio.INICIAL,
     },
     texto,
@@ -230,7 +232,7 @@ async subirLeyNueva(
 @Roles('admin')
 importarJson(
   @Param('versionId') versionId: string,
-  @Body('estructura') estructura: { titulos: any[] },
+  @Body('estructura') estructura: { libros?: any[]; titulos?: any[]; disposiciones?: any[] },
 ) {
   return this.parseoService.importarEstructuraJson(versionId, estructura);
 }

@@ -91,6 +91,8 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     await this.capituloRepo.delete({ tituloRef: { id: t.id } as any });
   }
   await this.tituloRepo.delete({ versionLey: { id: versionId } as any });
+  // ⭐ borrar también los libros de esta versión (antes quedaban huérfanos al re-parsear)
+  await this.libroRepo.delete({ versionLey: { id: versionId } as any });
   await this.disposicionRepo.delete({ versionLey: { id: versionId } as any });
 }
 
@@ -181,6 +183,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
           orden: ++ordenLibro,
           numero: nodo.numero,
           nombre: nodo.nombre || `Libro ${nodo.numero}`,
+          versionLey: { id: versionId } as any,
         } as any);
         const guardado = await this.libroRepo.save(libro);
         libroActualId = (guardado as any).id;
@@ -255,18 +258,43 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos };
   }
 
-    async importarEstructuraJson(versionId: string, estructura: { titulos: any[]; disposiciones?: any[] }): Promise<any> {
+    async importarEstructuraJson(versionId: string, estructura: { libros?: any[]; titulos?: any[]; disposiciones?: any[] }): Promise<any> {
     await this.limpiarEstructuraAnterior(versionId);
 
-    let totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0, totalDisposiciones = 0;
+    let totalLibros = 0, totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0, totalDisposiciones = 0;
 
-    for (let ti = 0; ti < estructura.titulos.length; ti++) {
-      const tData = estructura.titulos[ti];
+    // Soporte opcional de libros (p.ej. Código Civil: Libro > Título > ...).
+    // Si `estructura.libros` no viene, se mantiene el comportamiento anterior
+    // (títulos colgando directamente de la versión, sin libro) para no romper
+    // leyes ya importadas sin esta estructura (LOFCS, Ley 4/2015, LOPDGDD...).
+    const gruposDeTitulos: { titulos: any[]; libroId?: string }[] = [];
+
+    for (let li = 0; li < (estructura.libros ?? []).length; li++) {
+      const lData = estructura.libros![li];
+      const libro = await this.libroRepo.save(this.libroRepo.create({
+        orden: li + 1,
+        numero: lData.numero,
+        nombre: lData.nombre,
+        versionLey: { id: versionId } as any,
+      } as any));
+      totalLibros++;
+      gruposDeTitulos.push({ titulos: lData.titulos ?? [], libroId: libro.id });
+    }
+
+    if (estructura.titulos && estructura.titulos.length > 0) {
+      gruposDeTitulos.push({ titulos: estructura.titulos });
+    }
+
+    let ordenTituloGlobal = 0;
+    for (const grupo of gruposDeTitulos) {
+    for (let ti = 0; ti < grupo.titulos.length; ti++) {
+      const tData = grupo.titulos[ti];
       const titulo = await this.tituloRepo.save(this.tituloRepo.create({
-        orden: ti + 1,
+        orden: ++ordenTituloGlobal,
         numero: tData.numero,
         nombre: tData.nombre,
         versionLey: { id: versionId } as any,
+        libro: grupo.libroId ? ({ id: grupo.libroId } as any) : undefined,
       }));
       totalTitulos++;
 
@@ -334,8 +362,9 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
           }
         }
       }
-        
-      
+
+
+    }
     }
 
     for (let di = 0; di < (estructura.disposiciones ?? []).length; di++) {
@@ -349,7 +378,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
             }));
             totalDisposiciones++;
           }
-    return { totalTitulos, totalCapitulos, totalSecciones, totalArticulos, totalDisposiciones };
+    return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos, totalDisposiciones };
   }
 
   async copiarVersion(versionOrigenId: string, datosNuevaVersion: {
@@ -382,19 +411,39 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     ley: { id: origen.ley.id } as any,
   }));
 
+  // Copiar libros (si los hay) creando copias propias de la nueva versión,
+  // no referencias a los libros de la versión origen.
+  const librosOrigen = await this.libroRepo.find({
+    where: { versionLey: { id: versionOrigenId } as any },
+    order: { orden: 'ASC' },
+  });
+  const mapaLibroOrigenANuevo = new Map<string, string>();
+  for (const libroOrigen of librosOrigen) {
+    const nuevoLibro = await this.libroRepo.save(this.libroRepo.create({
+      orden: libroOrigen.orden,
+      numero: libroOrigen.numero,
+      nombre: libroOrigen.nombre,
+      versionLey: { id: nuevaVersion.id } as any,
+    } as any));
+    mapaLibroOrigenANuevo.set(libroOrigen.id, nuevoLibro.id);
+  }
+
   // Copiar toda la jerarquía: títulos -> capítulos -> secciones -> artículos
   const titulosOrigen = await this.tituloRepo.find({
     where: { versionLey: { id: versionOrigenId } },
     order: { orden: 'ASC' },
+    relations: ['libro'],
   });
 
   for (const tituloOrigen of titulosOrigen) {
+    const libroOrigenId = tituloOrigen.libro ? (tituloOrigen.libro as any).id : undefined;
+    const nuevoLibroId = libroOrigenId ? mapaLibroOrigenANuevo.get(libroOrigenId) : undefined;
     const nuevoTitulo = await this.tituloRepo.save(this.tituloRepo.create({
       orden: tituloOrigen.orden,
       numero: tituloOrigen.numero,
       nombre: tituloOrigen.nombre,
       versionLey: { id: nuevaVersion.id } as any,
-      libro: tituloOrigen.libro ? { id: (tituloOrigen.libro as any).id } as any : undefined,
+      libro: nuevoLibroId ? { id: nuevoLibroId } as any : undefined,
     }));
 
     // Artículos directos del título (sin capítulo)
