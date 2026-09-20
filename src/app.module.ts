@@ -21,6 +21,7 @@
   import { SesionTemaModule } from './sesion-tema/sesion-tema.module';
   import { PreferenciaWidgetModule } from './preferencia-widget/preferencia-widget.module';
   import { PsicotecnicoModule } from './psicotecnico/psicotecnico.module';
+  import { NoticiaModule } from './noticia/noticia.module';
 
 
 @Module({
@@ -65,6 +66,7 @@ ApunteOploraModule,
 ApunteUsuarioModule,
 SesionTemaModule,
 PsicotecnicoModule,
+NoticiaModule,
   ],
 })
 export class AppModule {} 

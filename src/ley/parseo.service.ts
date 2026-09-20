@@ -9,6 +9,7 @@ import { Seccion } from '../normativa/seccion.entity';
 import { Libro } from '../normativa/libro.entity';
 import { Disposicion } from '../normativa/disposicion.entity';
 import { TipoCambio } from '../ley/version-ley.entity'; // ajusta la ruta si el enum está en otro archivo
+import { NoticiaService } from '../noticia/noticia.service';
 
 interface NodoParseado {
   tipo: 'libro' | 'titulo' | 'capitulo' | 'seccion' | 'articulo';
@@ -45,6 +46,7 @@ export class ParseoService {
     private readonly libroRepo: Repository<Libro>,
     @InjectRepository(Disposicion)
     private readonly disposicionRepo: Repository<Disposicion>,
+    private readonly noticiaService: NoticiaService,
   ) {}
 
   async parsearVersion(versionId: string): Promise<{ ok: boolean; resumen: any }> {
@@ -477,6 +479,14 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
       contenido: disp.contenido,
       versionLey: { id: nuevaVersion.id } as any,
     }));
+  }
+
+  const versionConLey = await this.versionRepo.findOne({
+    where: { id: nuevaVersion.id },
+    relations: ['ley'],
+  });
+  if (versionConLey) {
+    await this.noticiaService.generarNoticiasLegislativasDesdeVersion(versionConLey);
   }
 
   return nuevaVersion;

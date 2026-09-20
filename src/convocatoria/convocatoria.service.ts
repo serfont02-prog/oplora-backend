@@ -18,6 +18,22 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { LessThanOrEqual } from 'typeorm';
 import { PsicotecnicoConfigOposicion } from '../psicotecnico/psicotecnico-config-oposicion.entity';
 
+// Plantillas de titular reutilizadas también por NoticiaService al generar noticias
+// 'oficial' a partir de un DocumentoConvocatoria (evita duplicar los textos en dos sitios).
+export const PLANTILLAS_NOTICIA_DOCUMENTO: Record<string, (doc: DocumentoConvocatoria, anyo: number) => string> = {
+  resolucion_convocatoria: (_, anyo) => `Resolución de la convocatoria ${anyo}`,
+  lista_admitidos_provisional: (_, anyo) => `Lista provisional de admitidos · convocatoria ${anyo}`,
+  lista_admitidos_definitiva: (_, anyo) => `Lista definitiva de admitidos · convocatoria ${anyo}`,
+  lista_excluidos_provisional: (_, anyo) => `Lista provisional de excluidos · convocatoria ${anyo}`,
+  lista_excluidos_definitiva: (_, anyo) => `Lista definitiva de excluidos · convocatoria ${anyo}`,
+  fecha_examen: (_, anyo) => `Fecha de examen · convocatoria ${anyo}`,
+  resultado_ejercicio: (_, anyo) => `Resultados de un ejercicio · convocatoria ${anyo}`,
+  cronograma: (_, anyo) => `Nuevo cronograma · convocatoria ${anyo}`,
+  normas_especificas: (_, anyo) => `Normas específicas · convocatoria ${anyo}`,
+  nota_informativa: (doc) => doc.titulo,
+  guia_inscripcion: (_, anyo) => `Guía de inscripción · convocatoria ${anyo}`,
+  otro: (doc) => doc.titulo,
+};
 
 @Injectable()
 export class ConvocatoriaService {
@@ -426,20 +442,7 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
   return nueva;
 }
 
-private readonly plantillasNoticia: Record<string, (doc: DocumentoConvocatoria, anyo: number) => string> = {
-  resolucion_convocatoria: (_, anyo) => `Resolución de la convocatoria ${anyo}`,
-  lista_admitidos_provisional: (_, anyo) => `Lista provisional de admitidos · convocatoria ${anyo}`,
-  lista_admitidos_definitiva: (_, anyo) => `Lista definitiva de admitidos · convocatoria ${anyo}`,
-  lista_excluidos_provisional: (_, anyo) => `Lista provisional de excluidos · convocatoria ${anyo}`,
-  lista_excluidos_definitiva: (_, anyo) => `Lista definitiva de excluidos · convocatoria ${anyo}`,
-  fecha_examen: (_, anyo) => `Fecha de examen · convocatoria ${anyo}`,
-  resultado_ejercicio: (_, anyo) => `Resultados de un ejercicio · convocatoria ${anyo}`,
-  cronograma: (_, anyo) => `Nuevo cronograma · convocatoria ${anyo}`,
-  normas_especificas: (_, anyo) => `Normas específicas · convocatoria ${anyo}`,
-  nota_informativa: (doc) => doc.titulo,
-  guia_inscripcion: (_, anyo) => `Guía de inscripción · convocatoria ${anyo}`,
-  otro: (doc) => doc.titulo,
-};
+private readonly plantillasNoticia = PLANTILLAS_NOTICIA_DOCUMENTO;
 
 async reprocesarurlOficial(id: string, nuevaUrl: string): Promise<void> {
   // Borrar todos los documentos existentes de esta convocatoria

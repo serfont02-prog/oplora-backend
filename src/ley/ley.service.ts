@@ -6,6 +6,7 @@ import { VersionLey, TipoCambio } from './version-ley.entity';
 import { DiffVersion } from './diff-version.entity';
 import { OposicionLey } from './oposicion-ley.entity';
 import * as fs from 'fs';
+import { NoticiaService } from '../noticia/noticia.service';
 const pdfParse = require('pdf-parse');
 
 @Injectable()
@@ -19,7 +20,7 @@ export class LeyService {
     private readonly diffRepo: Repository<DiffVersion>,
     @InjectRepository(OposicionLey)
     private readonly oposicionLeyRepo: Repository<OposicionLey>,
-    
+    private readonly noticiaService: NoticiaService,
   ) {}
 
   // ─── LEYES ───────────────────────────────────────────────
@@ -99,7 +100,17 @@ async create(nombre: string, siglas?: string, descripcion?: string): Promise<Ley
       ley: { id: leyId } as any,
     });
 
-    return this.versionRepo.save(version);
+    const versionGuardada = await this.versionRepo.save(version);
+
+    const versionConLey = await this.versionRepo.findOne({
+      where: { id: versionGuardada.id },
+      relations: ['ley'],
+    });
+    if (versionConLey) {
+      await this.noticiaService.generarNoticiasLegislativasDesdeVersion(versionConLey);
+    }
+
+    return versionGuardada;
   }
 
   async activarVersion(versionId: string): Promise<VersionLey> {

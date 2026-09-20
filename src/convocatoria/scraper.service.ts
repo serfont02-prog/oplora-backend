@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, forwardRef, Inject } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { ConvocatoriaService } from './convocatoria.service';
 import { TipoDocumento } from './documento-convocatoria.entity';
 import * as crypto from 'crypto';
+import { NoticiaService } from '../noticia/noticia.service';
 
 
 @Injectable()
@@ -15,7 +16,11 @@ export class ScraperService {
   julio: 6, agosto: 7, septiembre: 8, octubre: 9, noviembre: 10, diciembre: 11,
 };
 
-  constructor(private readonly convocatoriaService: ConvocatoriaService) {}
+  constructor(
+    private readonly convocatoriaService: ConvocatoriaService,
+    @Inject(forwardRef(() => NoticiaService))
+    private readonly noticiaService: NoticiaService,
+  ) {}
 
   @Cron('0 */4 * * *')
   async checkTodasConvocatorias() {
@@ -85,7 +90,7 @@ export class ScraperService {
       const subtipo = this.detectarSubtipo(pdf.texto);
       const fechaPublicacion = pdf.fechaTexto ? this.parseFechaTexto(pdf.fechaTexto) : null;
 
-      await this.convocatoriaService.saveDocumento({
+      const documentoGuardado = await this.convocatoriaService.saveDocumento({
         titulo: pdf.texto || 'Documento sin título',
         descripcion: pdf.descripcion || null,
         tipo,
@@ -96,6 +101,7 @@ export class ScraperService {
         procesado: false,
         convocatoria: { id: convocatoriaId } as any,
       });
+      await this.noticiaService.generarNoticiaOficialDesdeDocumento(documentoGuardado);
 
       this.logger.log(`Nuevo documento: ${pdf.texto} (${tipo}) — publicado: ${pdf.fechaTexto ?? 'sin fecha'}`);
     }
@@ -111,7 +117,7 @@ for (const enlace of enlacesInfo) {
 
   const descripcionFinal = enlace.descripcion || enlace.rangoFechas || null;
 
-  await this.convocatoriaService.saveDocumento({
+  const enlaceGuardado = await this.convocatoriaService.saveDocumento({
     titulo: enlace.texto,
     descripcion: descripcionFinal,
     tipo: TipoDocumento.NOTA_INFORMATIVA,
@@ -120,6 +126,7 @@ for (const enlace of enlacesInfo) {
     procesado: false,
     convocatoria: { id: convocatoriaId } as any,
   });
+  await this.noticiaService.generarNoticiaOficialDesdeDocumento(enlaceGuardado);
 
   this.logger.log(`Nuevo enlace informativo: ${enlace.texto} — ${descripcionFinal}`);
 }
@@ -135,7 +142,7 @@ for (const enlace of enlacesInfo) {
 
       const tipo = this.clasificarDocumento(aviso.contenidoTexto);
 
-      await this.convocatoriaService.saveDocumento({
+      const avisoGuardado = await this.convocatoriaService.saveDocumento({
         titulo: aviso.titulo,
         tipo,
         subtipo: null,
@@ -145,6 +152,7 @@ for (const enlace of enlacesInfo) {
         procesado: false,
         convocatoria: { id: convocatoriaId } as any,
       });
+      await this.noticiaService.generarNoticiaOficialDesdeDocumento(avisoGuardado);
 
       this.logger.log(`Nuevo aviso de texto: ${aviso.titulo} (${tipo})`);
     }

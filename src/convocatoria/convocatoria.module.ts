@@ -16,6 +16,7 @@ import { Flashcard } from '../flashcard/flashcard.entity';
 import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
 import { PreguntaTest } from 'src/test/pregunta-test.entity';
 import { PsicotecnicoConfigOposicion } from '../psicotecnico/psicotecnico-config-oposicion.entity';
+import { NoticiaModule } from '../noticia/noticia.module';
 
 
 @Module({
@@ -23,6 +24,7 @@ import { PsicotecnicoConfigOposicion } from '../psicotecnico/psicotecnico-config
     TypeOrmModule.forFeature([Convocatoria, Oposicion, DocumentoConvocatoria, Tema, TemaNormativa, NotaArticulo, UsuarioOposicion, Flashcard, ApunteOplora, PreguntaTest, PsicotecnicoConfigOposicion]),
     NotificacionModule,
     forwardRef(() => TemaModule),
+    forwardRef(() => NoticiaModule),
   ],
   controllers: [ConvocatoriaController],
   providers: [ConvocatoriaService, ScraperService],

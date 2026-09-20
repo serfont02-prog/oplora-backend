@@ -16,6 +16,7 @@ import { Articulo } from '../normativa/articulo.entity';
 import { Seccion } from '../normativa/seccion.entity';
 import { Libro } from '../normativa/libro.entity';
 import { Disposicion } from 'src/normativa/disposicion.entity';
+import { NoticiaModule } from '../noticia/noticia.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { Disposicion } from 'src/normativa/disposicion.entity';
       Ley, VersionLey, DiffVersion, OposicionLey,
       Titulo, Capitulo, Articulo, Seccion, Libro, Disposicion
     ]),
+    NoticiaModule,
     MulterModule.register({
       storage: diskStorage({
         destination: './uploads',
