@@ -45,7 +45,7 @@ export class Noticia {
   @Column({ type: 'text', nullable: true })
   contenido: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   urlOrigen: string | null;
 
   // Siempre relleno para 'oficial' y 'legislativa'; opcional para 'oplora'.
