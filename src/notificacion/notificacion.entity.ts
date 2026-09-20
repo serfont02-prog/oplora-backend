@@ -14,6 +14,7 @@ export enum TipoNotificacion {
   LOGRO = 'logro',
   RACHA_PELIGRO = 'racha_peligro',
   NUEVA_NOTICIA = 'nueva_noticia',
+  RESPUESTA_SOPORTE = 'respuesta_soporte',
 }
 
 export enum PrioridadNotificacion {

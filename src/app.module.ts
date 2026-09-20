@@ -22,6 +22,7 @@
   import { PreferenciaWidgetModule } from './preferencia-widget/preferencia-widget.module';
   import { PsicotecnicoModule } from './psicotecnico/psicotecnico.module';
   import { NoticiaModule } from './noticia/noticia.module';
+  import { SoporteModule } from './soporte/soporte.module';
 
 
 @Module({
@@ -67,6 +68,7 @@ ApunteUsuarioModule,
 SesionTemaModule,
 PsicotecnicoModule,
 NoticiaModule,
+SoporteModule,
   ],
 })
 export class AppModule {} 

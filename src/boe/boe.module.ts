@@ -8,10 +8,11 @@ import { BoeController } from './boe.controller';
 import { IaModule } from '../ia/ia.module';
 import { Tema } from '../tema/tema.entity';
 import { Noticia } from '../noticia/noticia.entity';
+import { TicketSoporte } from '../soporte/ticket-soporte.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([BoeConvocatoria, Oposicion, Convocatoria, Tema, Noticia]),
+    TypeOrmModule.forFeature([BoeConvocatoria, Oposicion, Convocatoria, Tema, Noticia, TicketSoporte]),
     IaModule,
   ],
   controllers: [BoeController],

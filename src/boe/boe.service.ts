@@ -8,6 +8,7 @@ import axios from 'axios';
 import { ClaudeService } from '../ia/claude.service';
 import { Tema } from '../tema/tema.entity';
 import { Noticia, OrigenNoticia } from '../noticia/noticia.entity';
+import { TicketSoporte, EstadoTicketSoporte } from '../soporte/ticket-soporte.entity';
 
 @Injectable()
 export class BoeService {
@@ -23,6 +24,8 @@ export class BoeService {
     private readonly temaRepo: Repository<Tema>,
     @InjectRepository(Noticia)
     private readonly noticiaRepo: Repository<Noticia>,
+    @InjectRepository(TicketSoporte)
+    private readonly ticketSoporteRepo: Repository<TicketSoporte>,
   ) {}
 
 async consultarFecha(fecha: string): Promise<any[]> {
@@ -218,6 +221,10 @@ async getTareasPendientes(): Promise<any> {
     },
   });
 
+  const ticketsSoporteAbiertos = await this.ticketSoporteRepo.count({
+    where: { estado: EstadoTicketSoporte.ABIERTO },
+  });
+
   return {
     boesPendientes,
     convocatoriasSinInap: convocatoriasSinInap.map((c) => ({
@@ -231,7 +238,8 @@ async getTareasPendientes(): Promise<any> {
       nombre: o.nombre,
     })),
     noticiasPendientes,
-    total: boesPendientes + convocatoriasSinInap.length + oposicionesSinTemas.length + noticiasPendientes,
+    ticketsSoporteAbiertos,
+    total: boesPendientes + convocatoriasSinInap.length + oposicionesSinTemas.length + noticiasPendientes + ticketsSoporteAbiertos,
   };
 }
 

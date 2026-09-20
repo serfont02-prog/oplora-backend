@@ -155,4 +155,15 @@ async notificarResultadoReto(usuarioId: string, retadorNombre: string, ganador: 
     }
   }
 
+  async notificarRespuestaSoporte(usuarioId: string, asunto: string, urlAccion?: string): Promise<void> {
+    await this.crear({
+      usuarioId,
+      tipo: TipoNotificacion.RESPUESTA_SOPORTE,
+      titulo: 'Respuesta a tu consulta de soporte',
+      mensaje: `Hemos respondido a tu consulta "${asunto}"`,
+      prioridad: PrioridadNotificacion.MEDIA,
+      urlAccion,
+    });
+  }
+
 }
