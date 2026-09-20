@@ -7,9 +7,10 @@ export class CreateConvocatoriaDto {
   turno?: TurnoEnum;
   fechaExamen?: Date;
   urlOficial?: string;
-  fechaConvocatoria?: string; 
-  numeroSolicitudes?: number; 
-  numeroPresentados?: number; 
+  urlOficialNoAplica?: boolean;
+  fechaConvocatoria?: string;
+  numeroSolicitudes?: number;
+  numeroPresentados?: number;
   oposicionId!: string;
   plazoInscripcionInicio?: string;
   plazoInscripcionFin?: string;
@@ -65,9 +66,10 @@ export class UpdateConvocatoriaDto {
   turno?: TurnoEnum;
   fechaExamen?: Date;
   urlOficial?: string;
+  urlOficialNoAplica?: boolean;
   fechaConvocatoria?: string;
-  numeroSolicitudes?: number; 
-  numeroPresentados?: number; 
+  numeroSolicitudes?: number;
+  numeroPresentados?: number;
   referenciaBoe?: string;
   ejercicios?: {
     numero: number;

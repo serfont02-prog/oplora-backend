@@ -7,10 +7,11 @@ import { BoeService } from './boe.service';
 import { BoeController } from './boe.controller';
 import { IaModule } from '../ia/ia.module';
 import { Tema } from '../tema/tema.entity';
+import { Noticia } from '../noticia/noticia.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([BoeConvocatoria, Oposicion, Convocatoria, Tema]),
+    TypeOrmModule.forFeature([BoeConvocatoria, Oposicion, Convocatoria, Tema, Noticia]),
     IaModule,
   ],
   controllers: [BoeController],

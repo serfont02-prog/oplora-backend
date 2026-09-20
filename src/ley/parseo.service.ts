@@ -486,7 +486,13 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     relations: ['ley'],
   });
   if (versionConLey) {
-    await this.noticiaService.generarNoticiasLegislativasDesdeVersion(versionConLey);
+    // No dejar que un fallo generando noticias (efecto secundario) tumbe la
+    // copia de versión (efecto principal, ya persistido con toda su jerarquía).
+    try {
+      await this.noticiaService.generarNoticiasLegislativasDesdeVersion(versionConLey);
+    } catch (e: any) {
+      this.logger.error(`Error generando noticias legislativas para versión copiada ${nuevaVersion.id}: ${e.message}`);
+    }
   }
 
   return nuevaVersion;

@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, forwardRef, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Noticia, TipoNoticia, OrigenNoticia, PrioridadNoticia } from './noticia.entity';
@@ -10,6 +10,11 @@ import { TemaNormativa } from '../tema/tema-normativa.entity';
 import { Articulo } from '../normativa/articulo.entity';
 import { Capitulo } from '../normativa/capitulo.entity';
 import { Titulo } from '../normativa/titulo.entity';
+import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { NotificacionService } from '../notificacion/notificacion.service';
+
+// Código de error de Postgres para violación de constraint UNIQUE.
+const PG_UNIQUE_VIOLATION = '23505';
 
 @Injectable()
 export class NoticiaService {
@@ -30,6 +35,10 @@ export class NoticiaService {
     private readonly versionLeyRepo: Repository<VersionLey>,
     @InjectRepository(DocumentoConvocatoria)
     private readonly documentoRepo: Repository<DocumentoConvocatoria>,
+    @InjectRepository(UsuarioOposicion)
+    private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
+    @Inject(forwardRef(() => NotificacionService))
+    private readonly notificacionService: NotificacionService,
   ) {}
 
   // ─── CRUD ADMIN ────────────────────────────────────────────
@@ -103,7 +112,11 @@ export class NoticiaService {
       automatica: dto.automatica ?? false,
     });
 
-    return this.noticiaRepo.save(noticia);
+    const guardada = await this.noticiaRepo.save(noticia);
+    if (guardada.publicada) {
+      await this.notificarUsuariosSiCorresponde(guardada.id);
+    }
+    return guardada;
   }
 
   async update(id: string, dto: UpdateNoticiaDto): Promise<Noticia> {
@@ -123,6 +136,9 @@ export class NoticiaService {
     if (dto.fechaPublicacion !== undefined) payload.fechaPublicacion = dto.fechaPublicacion ? new Date(dto.fechaPublicacion) : null;
 
     await this.noticiaRepo.save({ id, ...payload });
+    if (dto.publicada) {
+      await this.notificarUsuariosSiCorresponde(id);
+    }
     return this.findOne(id);
   }
 
@@ -132,9 +148,70 @@ export class NoticiaService {
   }
 
   async publicar(id: string): Promise<Noticia> {
-    await this.findOne(id);
-    await this.noticiaRepo.update(id, { publicada: true, fechaPublicacion: new Date() });
+    const existente = await this.findOne(id);
+    await this.noticiaRepo.update(id, {
+      publicada: true,
+      // No pisar una fechaPublicacion ya establecida (p.ej. la fecha real del
+      // BOE) si la noticia se publica/despublica/vuelve a publicar.
+      fechaPublicacion: existente.fechaPublicacion ?? new Date(),
+    });
+    await this.notificarUsuariosSiCorresponde(id);
     return this.findOne(id);
+  }
+
+  // ─── NOTIFICACIONES A USUARIOS AFECTADOS ─────────────────────
+
+  /**
+   * Al publicarse una noticia (por primera vez), calcula qué usuarios deben
+   * ser notificados según el ámbito de la noticia y dispara
+   * NotificacionService.notificarNuevaNoticia. Idempotente gracias a
+   * `notificacionEnviada`: si la noticia se despublica y se vuelve a publicar,
+   * no se duplican notificaciones.
+   */
+  private async notificarUsuariosSiCorresponde(noticiaId: string): Promise<void> {
+    const noticia = await this.noticiaRepo.findOne({
+      where: { id: noticiaId },
+      relations: ['convocatoria', 'convocatoria.oposicion', 'oposicion'],
+    });
+    if (!noticia || !noticia.publicada || noticia.notificacionEnviada) return;
+
+    let usuarioIds: string[] = [];
+    let oposicionIdParaUrl: string | undefined;
+
+    if (noticia.convocatoria) {
+      const usuOpos = await this.usuarioOposicionRepo.find({
+        where: { convocatoriaActiva: { id: noticia.convocatoria.id } as any },
+        relations: ['usuario'],
+      });
+      usuarioIds = usuOpos.map((uo) => uo.usuario?.id).filter((id): id is string => !!id);
+      oposicionIdParaUrl = (noticia.convocatoria.oposicion as any)?.id;
+    } else if (noticia.oposicion) {
+      const usuOpos = await this.usuarioOposicionRepo.find({
+        where: { oposicion: { id: noticia.oposicion.id } as any, activa: true },
+        relations: ['usuario'],
+      });
+      usuarioIds = usuOpos.map((uo) => uo.usuario?.id).filter((id): id is string => !!id);
+      oposicionIdParaUrl = noticia.oposicion.id;
+    } else {
+      // Noticia global (sin convocatoria ni oposición): decisión de producto
+      // pendiente. NO se generan notificaciones masivas a todos los usuarios
+      // sin que el usuario del proyecto lo decida explícitamente.
+      this.logger.log(`Noticia global ${noticiaId} publicada: no se generan notificaciones (pendiente de decisión de producto)`);
+      return;
+    }
+
+    // Deduplicar por si un usuario apareciera más de una vez.
+    usuarioIds = Array.from(new Set(usuarioIds));
+
+    // Marcamos como enviada ANTES de disparar el bucle de notificaciones para
+    // minimizar la ventana de una doble publicación casi simultánea; si el
+    // envío falla a mitad, se pierde ese lote pero no se duplica al reintentar.
+    await this.noticiaRepo.update(noticiaId, { notificacionEnviada: true });
+
+    if (usuarioIds.length === 0) return;
+
+    const urlAccion = oposicionIdParaUrl ? `/app/oposicion/${oposicionIdParaUrl}/noticias` : undefined;
+    await this.notificacionService.notificarNuevaNoticia(usuarioIds, noticia.titulo, urlAccion);
   }
 
   async despublicar(id: string): Promise<Noticia> {
@@ -225,7 +302,20 @@ export class NoticiaService {
       fechaPublicacion: documentoCompleto.fechaPublicacion ?? null,
     });
 
-    return this.noticiaRepo.save(noticia);
+    try {
+      return await this.noticiaRepo.save(noticia);
+    } catch (e: any) {
+      // Condición de carrera: dos scrapes casi simultáneos intentando crear la
+      // misma noticia oficial. La constraint única en documentoConvocatoria
+      // rechaza el segundo insert; recuperamos la que ganó la carrera.
+      if (e?.code === PG_UNIQUE_VIOLATION) {
+        const ganadora = await this.noticiaRepo.findOne({
+          where: { documentoConvocatoria: { id: documentoCompleto.id } as any },
+        });
+        if (ganadora) return ganadora;
+      }
+      throw e;
+    }
   }
 
   // ─── GENERACIÓN AUTOMÁTICA: LEGISLATIVAS ─────────────────────
@@ -339,7 +429,23 @@ export class NoticiaService {
         automatica: true,
         fechaPublicacion: version.fechaPublicacion ?? null,
       });
-      creadas.push(await this.noticiaRepo.save(noticia));
+      try {
+        creadas.push(await this.noticiaRepo.save(noticia));
+      } catch (e: any) {
+        // Condición de carrera: dos triggers casi simultáneos (p.ej. crearVersion
+        // y copiarVersion) generando la misma noticia legislativa para la misma
+        // convocatoria + versión. La constraint única rechaza el duplicado.
+        if (e?.code === PG_UNIQUE_VIOLATION) {
+          const ganadora = await this.noticiaRepo.findOne({
+            where: { convocatoria: { id: convocatoriaId } as any, versionLey: { id: version.id } as any },
+          });
+          if (ganadora) {
+            creadas.push(ganadora);
+            continue;
+          }
+        }
+        throw e;
+      }
     }
 
     return creadas;

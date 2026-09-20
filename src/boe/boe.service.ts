@@ -1,12 +1,13 @@
 import { Injectable, HttpException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { BoeConvocatoria, EstadoBOE } from './boe.entity';
 import { Oposicion } from '../oposicion/oposicion.entity';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import axios from 'axios';
 import { ClaudeService } from '../ia/claude.service';
 import { Tema } from '../tema/tema.entity';
+import { Noticia, OrigenNoticia } from '../noticia/noticia.entity';
 
 @Injectable()
 export class BoeService {
@@ -20,6 +21,8 @@ export class BoeService {
     private readonly claudeService: ClaudeService,
     @InjectRepository(Tema)
     private readonly temaRepo: Repository<Tema>,
+    @InjectRepository(Noticia)
+    private readonly noticiaRepo: Repository<Noticia>,
   ) {}
 
 async consultarFecha(fecha: string): Promise<any[]> {
@@ -196,6 +199,7 @@ async getTareasPendientes(): Promise<any> {
     .leftJoinAndSelect('c.oposicion', 'o')
     .where('(c.urlOficial IS NULL OR c.urlOficial = :empty)', { empty: '' })
     .andWhere('c.estado = :estado', { estado: 'activa' })
+    .andWhere('c.urlOficialNoAplica = false')
     .getMany();
 
   const oposicionesSinTemas = await this.oposicionRepo
@@ -206,6 +210,13 @@ async getTareasPendientes(): Promise<any> {
     .andWhere('t.id IS NULL')
     .select(['o.id', 'o.nombre'])
     .getMany();
+
+  const noticiasPendientes = await this.noticiaRepo.count({
+    where: {
+      publicada: false,
+      origen: In([OrigenNoticia.SCRAPER_BOE, OrigenNoticia.CAMBIO_NORMATIVA]),
+    },
+  });
 
   return {
     boesPendientes,
@@ -219,7 +230,8 @@ async getTareasPendientes(): Promise<any> {
       id: o.id,
       nombre: o.nombre,
     })),
-    total: boesPendientes + convocatoriasSinInap.length + oposicionesSinTemas.length,
+    noticiasPendientes,
+    total: boesPendientes + convocatoriasSinInap.length + oposicionesSinTemas.length + noticiasPendientes,
   };
 }
 

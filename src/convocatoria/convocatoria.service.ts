@@ -154,6 +154,7 @@ export class ConvocatoriaService {
     turno: dto.turno,
     fechaExamen: dto.fechaExamen,
     urlOficial: dto.urlOficial,
+    urlOficialNoAplica: dto.urlOficialNoAplica ?? false,
     fechaConvocatoria: dto.fechaConvocatoria ? new Date(dto.fechaConvocatoria) : undefined,
     plazoInscripcionInicio: (dto as any).plazoInscripcionInicio ? new Date((dto as any).plazoInscripcionInicio) : undefined,
     plazoInscripcionFin: (dto as any).plazoInscripcionFin ? new Date((dto as any).plazoInscripcionFin) : undefined,

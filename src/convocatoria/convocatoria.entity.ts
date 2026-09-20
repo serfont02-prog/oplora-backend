@@ -45,6 +45,11 @@ export class Convocatoria {
   @Column({ nullable: true })
   urlOficial: string;
 
+  // Marca que esta convocatoria no depende del INAP / no tiene URL oficial aplicable,
+  // para que deje de aparecer en "tareas pendientes" del admin como "sin URL INAP".
+  @Column({ default: false })
+  urlOficialNoAplica: boolean;
+
   @Column({ type: 'text', nullable: true })
   diferenciasAnterior: string;
 

@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import { Oposicion } from '../oposicion/oposicion.entity';
 import { Ley } from '../ley/ley.entity';
@@ -25,6 +25,13 @@ export enum PrioridadNoticia {
   BAJA = 'baja',
 }
 
+// Evita duplicados por condición de carrera: si dos scrapes casi simultáneos
+// procesan el mismo DocumentoConvocatoria, el segundo insert fallará por esta
+// constraint (Postgres permite múltiples NULLs en un índice único, así que no
+// afecta a noticias 'legislativa'/'oplora' que no tienen documentoConvocatoria).
+@Index('uq_noticia_documento_convocatoria', ['documentoConvocatoria'], { unique: true, where: '"documentoConvocatoriaId" IS NOT NULL' })
+// Evita duplicados legislativos: misma convocatoria + misma versión de ley.
+@Index('uq_noticia_convocatoria_version', ['convocatoria', 'versionLey'], { unique: true, where: '"convocatoriaId" IS NOT NULL AND "versionLeyId" IS NOT NULL' })
 @Entity('noticias')
 export class Noticia {
   @PrimaryGeneratedColumn('uuid')
@@ -88,6 +95,11 @@ export class Noticia {
 
   @Column({ default: false })
   automatica: boolean;
+
+  // Evita disparar notificaciones duplicadas si la noticia se publica más de
+  // una vez (publicar → despublicar → publicar de nuevo).
+  @Column({ default: false })
+  notificacionEnviada: boolean;
 
   @CreateDateColumn()
   creadoEn: Date;

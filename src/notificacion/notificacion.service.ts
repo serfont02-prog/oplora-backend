@@ -142,5 +142,17 @@ async notificarResultadoReto(usuarioId: string, retadorNombre: string, ganador: 
   });
 }
 
+  async notificarNuevaNoticia(usuarioIds: string[], noticiaTitulo: string, urlAccion?: string): Promise<void> {
+    for (const usuarioId of usuarioIds) {
+      await this.crear({
+        usuarioId,
+        tipo: TipoNotificacion.NUEVA_NOTICIA,
+        titulo: 'Nueva noticia publicada',
+        mensaje: `Se ha publicado "${noticiaTitulo}"`,
+        prioridad: PrioridadNotificacion.MEDIA,
+        urlAccion,
+      });
+    }
+  }
 
-}   
+}

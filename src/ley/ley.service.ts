@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Ley } from './ley.entity';
@@ -11,6 +11,8 @@ const pdfParse = require('pdf-parse');
 
 @Injectable()
 export class LeyService {
+  private readonly logger = new Logger(LeyService.name);
+
   constructor(
     @InjectRepository(Ley)
     private readonly leyRepo: Repository<Ley>,
@@ -107,7 +109,13 @@ async create(nombre: string, siglas?: string, descripcion?: string): Promise<Ley
       relations: ['ley'],
     });
     if (versionConLey) {
-      await this.noticiaService.generarNoticiasLegislativasDesdeVersion(versionConLey);
+      // No dejar que un fallo generando noticias (efecto secundario) tumbe la
+      // subida de la versión de ley (efecto principal, ya persistido).
+      try {
+        await this.noticiaService.generarNoticiasLegislativasDesdeVersion(versionConLey);
+      } catch (e: any) {
+        this.logger.error(`Error generando noticias legislativas para versión ${versionGuardada.id}: ${e.message}`);
+      }
     }
 
     return versionGuardada;
