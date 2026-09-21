@@ -169,7 +169,14 @@ if (tipo === 'pdf') {
   }
 
   async findOne(id: string): Promise<ApunteOplora> {
-  const apunte = await this.repo.findOne({ where: { id }, relations: ['tema'] });
+  // ⭐ El frontend necesita llegar hasta la oposición (vía tema.convocatoria.oposicion, o vía
+  // el propio apunte.oposicion) para poder resolver las siglas de las leyes y pintar los
+  // enlaces [SIGLAS artículo N] como clicables. Sin estas relaciones, oposicionId sale
+  // undefined y los enlaces se quedan como texto plano sin poder hacer click.
+  const apunte = await this.repo.findOne({
+    where: { id },
+    relations: ['tema', 'tema.convocatoria', 'tema.convocatoria.oposicion', 'oposicion'],
+  });
   if (!apunte) throw new NotFoundException('Apunte no encontrado');
   return apunte;
 }
