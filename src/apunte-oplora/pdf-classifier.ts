@@ -55,6 +55,7 @@ export interface BloqueParrafo {
   id: number;
   tipo: 'parrafo';
   texto: string;
+  negrita?: boolean; // mini-subtítulo detectado por negrita en el PDF (p.ej. "Concepto")
 }
 
 export interface BloqueLista {
@@ -518,6 +519,23 @@ export function clasificarDocumento(
       // CERRAR LISTA SI EMPIEZA PÁRRAFO
       if (bufferListaItems.length > 0) {
         flushLista();
+      }
+
+      // MINI-SUBTÍTULO EN NEGRITA (p.ej. "Concepto", "Regula:", "Fue:")
+      // ⭐ El buffer de párrafo normal solo corta con un punto y aparte, así que una línea
+      // corta sin punto (un mini-encabezado como "Concepto") se quedaba pegada al párrafo
+      // siguiente, perdiendo su salto de línea, y además la negrita del PDF nunca llegaba
+      // al frontend (se leía pero no se usaba para nada). Si la línea viene en negrita la
+      // tratamos como su propio bloque —cerrando cualquier párrafo pendiente antes y
+      // empezando uno nuevo después—, y marcamos el bloque como `negrita` para que el
+      // frontend la pinte en negrita.
+      const esLineaCortaEnNegrita = linea.bold && texto.length <= 80;
+      if (esLineaCortaEnNegrita) {
+        flushParrafo();
+        añadirBloque({ id: idCounter++, tipo: 'parrafo', texto, negrita: true });
+        ultimoTipo = 'parrafo';
+        if (DEBUG) console.debug('MINI_SUBTITULO_NEGRITA', { texto });
+        continue;
       }
 
       // PÁRRAFO (regla simple: añadimos al buffer; cerramos solo con punto y aparte)
