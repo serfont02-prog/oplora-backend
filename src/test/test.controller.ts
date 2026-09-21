@@ -74,6 +74,24 @@ export class TestController {
   }
 
   /* =========================================================
+     REPASO INTELIGENTE
+  ========================================================= */
+
+  @Post('repaso-inteligente')
+  @UseGuards(JwtAuthGuard)
+  repasoInteligente(
+    @Body('oposicionId') oposicionId: string,
+    @Body('numPreguntas') numPreguntas: number,
+    @Request() req: any,
+  ) {
+    return this.testService.generarRepasoInteligente(
+      req.user.id,
+      oposicionId,
+      numPreguntas ?? 10,
+    );
+  }
+
+  /* =========================================================
      GUARDAR RESULTADO
   ========================================================= */
 

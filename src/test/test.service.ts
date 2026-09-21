@@ -1,5 +1,5 @@
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { ResultadoTest } from './resultado-test.entity';
 import { Usuario } from '../usuario/usuario.entity';
@@ -294,29 +294,63 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
   oposicionId: string;
   totalPreguntas: number;
   correctas: number;
-  tipoTest: string; 
+  tipoTest: string;
   tiempoSegundos: number;
   temaId?: string;
   detallePreguntas: {
     preguntaId?: string;
     enunciado: string;
     correcta: boolean;
+    enBlanco?: boolean;
     temaId?: string;
     articuloId?: string;
+    indiceSeleccionada?: number | null;
+    indiceCorrecta?: number;
   }[];
 }): Promise<ResultadoTest> {
-  
-  const porcentaje = Math.round(
-    (datos.correctas / datos.totalPreguntas) * 100,
-  );
+
+  /* =========================================================
+     ⭐ SEGURIDAD: nunca confiar en la corrección/puntuación que
+     manda el cliente (se puede falsificar desde el navegador).
+     Se recalcula aquí contra la respuesta real guardada en BD,
+     usando únicamente preguntaId + indiceSeleccionada del cliente.
+  ========================================================= */
+  const preguntaIds = datos.detallePreguntas
+    .map((d) => d.preguntaId)
+    .filter((id): id is string => !!id);
+
+  const preguntasReales = preguntaIds.length
+    ? await this.preguntaRepo.find({ where: { id: In(preguntaIds) } })
+    : [];
+  const mapaPreguntas = new Map(preguntasReales.map((p) => [p.id, p]));
+
+  const detalleVerificado = datos.detallePreguntas.map((d) => {
+    if (d.enBlanco || !d.preguntaId) {
+      return { ...d, correcta: false };
+    }
+    const real = mapaPreguntas.get(d.preguntaId);
+    if (!real) {
+      // Pregunta inexistente/eliminada: no puede contar como acierto
+      return { ...d, correcta: false };
+    }
+    return { ...d, correcta: d.indiceSeleccionada === real.correcta };
+  });
+
+  const totalPreguntasVerificado = detalleVerificado.length || datos.totalPreguntas;
+  const correctasVerificadas = detalleVerificado.filter(
+    (d) => d.correcta && !d.enBlanco,
+  ).length;
+  const porcentaje = totalPreguntasVerificado > 0
+    ? Math.round((correctasVerificadas / totalPreguntasVerificado) * 100)
+    : 0;
 
   const resultado = this.resultadoRepo.create({
-    totalPreguntas: datos.totalPreguntas,
-    correctas: datos.correctas,
+    totalPreguntas: totalPreguntasVerificado,
+    correctas: correctasVerificadas,
     porcentaje,
     tipoTest: datos.tipoTest,
     tiempoSegundos: datos.tiempoSegundos,
-    detallePreguntas: datos.detallePreguntas,
+    detallePreguntas: detalleVerificado,
     usuario: { id: datos.usuarioId } as any,
     oposicion: { id: datos.oposicionId } as any,
     tema: datos.temaId ? { id: datos.temaId } as any : undefined,
@@ -324,15 +358,10 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
 
  await this.resultadoRepo.save(resultado);
 
-  // Incrementar preguntasTestHoy siempre
-  const usuario = await this.usuarioRepo.findOne({ where: { id: datos.usuarioId } });
-  if (usuario) {
-    await this.usuarioRepo.update(datos.usuarioId, {
-      preguntasTestHoy: usuario.preguntasTestHoy + datos.totalPreguntas,           // hoy
-      preguntasRespondidasTotales: usuario.preguntasRespondidasTotales + datos.totalPreguntas, // histórico
-      ultimaActividad: new Date(),
-    });
-  }
+  // Incrementar preguntasTestHoy / histórico de forma atómica (evita condiciones de carrera)
+  await this.usuarioRepo.increment({ id: datos.usuarioId }, 'preguntasTestHoy', totalPreguntasVerificado);
+  await this.usuarioRepo.increment({ id: datos.usuarioId }, 'preguntasRespondidasTotales', totalPreguntasVerificado);
+  await this.usuarioRepo.update(datos.usuarioId, { ultimaActividad: new Date() });
 
   /* =========================================================
      ⭐ PRIMER RETO → MARCAR USUARIO COMO ACTIVO
@@ -346,29 +375,17 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
   }
 
   /* =========================================================
-     ACTUALIZAR ESTADISTICAS PREGUNTAS
+     ACTUALIZAR ESTADISTICAS PREGUNTAS (incrementos atómicos)
   ========================================================= */
-  for (const detalle of datos.detallePreguntas) {
-    if (!detalle.preguntaId) continue;
+  for (const detalle of detalleVerificado) {
+    if (!detalle.preguntaId || !mapaPreguntas.has(detalle.preguntaId)) continue;
 
-    const pregunta = await this.preguntaRepo.findOne({
-      where: { id: detalle.preguntaId },
-    });
-
-    if (!pregunta) continue;
-
-    await this.preguntaRepo.update(
-      pregunta.id,
-      {
-        vecesUsada: pregunta.vecesUsada + 1,
-        aciertos: detalle.correcta
-          ? pregunta.aciertos + 1
-          : pregunta.aciertos,
-        fallos: detalle.correcta
-          ? pregunta.fallos
-          : pregunta.fallos + 1,
-      },
-    );
+    await this.preguntaRepo.increment({ id: detalle.preguntaId }, 'vecesUsada', 1);
+    if (detalle.correcta) {
+      await this.preguntaRepo.increment({ id: detalle.preguntaId }, 'aciertos', 1);
+    } else {
+      await this.preguntaRepo.increment({ id: detalle.preguntaId }, 'fallos', 1);
+    }
   }
 
   /* =========================================================
@@ -378,8 +395,8 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
   await this.actualizarPuntos(
     datos.usuarioId,
     datos.oposicionId, // ⭐ nuevo
-    datos.totalPreguntas,
-    datos.correctas,
+    totalPreguntasVerificado,
+    correctasVerificadas,
     porcentaje,
   );
 }
@@ -426,21 +443,6 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
     nivel: nuevoNivel,
   });
 }
-
-  private calcularNivel(
-    puntos: number,
-  ): number {
-
-    if (puntos >= 351) return 5;
-
-    if (puntos >= 151) return 4;
-
-    if (puntos >= 61) return 3;
-
-    if (puntos >= 21) return 2;
-
-    return 1;
-  }
 
   /* =========================================================
      PROGRESO
@@ -666,6 +668,13 @@ async importarPorConvocatoria(
       continue;
     }
 
+    // ⭐ Evitar duplicados: misma pregunta ya importada previamente
+    const existente = await this.preguntaRepo.findOne({ where: { enunciado: p.enunciado } });
+    if (existente) {
+      errores.push(`Pregunta duplicada omitida: "${p.enunciado.slice(0, 60)}..."`);
+      continue;
+    }
+
     const pregunta = this.preguntaRepo.create({
       enunciado: p.enunciado,
       opciones: p.opciones,
@@ -730,6 +739,13 @@ async importarPorVersionLey(
       continue;
     }
 
+    // ⭐ Evitar duplicados: misma pregunta ya importada previamente
+    const existente = await this.preguntaRepo.findOne({ where: { enunciado: p.enunciado } });
+    if (existente) {
+      errores.push(`Pregunta duplicada omitida: "${p.enunciado.slice(0, 60)}..."`);
+      continue;
+    }
+
     const pregunta = this.preguntaRepo.create({
       enunciado: p.enunciado,
       opciones: p.opciones,
@@ -754,6 +770,103 @@ async importarPorVersionLey(
   }
 
   return { importadas, errores };
+}
+
+/* =========================================================
+   ⭐ REPASO INTELIGENTE
+   Prioriza las preguntas que el usuario más ha fallado
+   (históricamente, sobre sus propios intentos) y, si no hay
+   histórico suficiente, completa con un test general normal.
+========================================================= */
+async generarRepasoInteligente(
+  usuarioId: string,
+  oposicionId: string,
+  numPreguntas = 10,
+): Promise<{ preguntas: Pregunta[]; basadoEnHistorial: number }> {
+
+  // Historial reciente del usuario en esta oposición
+  const resultados = await this.resultadoRepo.find({
+    where: {
+      usuario: { id: usuarioId },
+      oposicion: { id: oposicionId },
+    },
+    order: { creadoEn: 'DESC' },
+    take: 50,
+  });
+
+  // Agregamos fallos/aciertos por pregunta a partir del detalle guardado
+  const stats = new Map<string, { fallos: number; aciertos: number; ultimaVez: number }>();
+  for (const r of resultados) {
+    for (const d of (r.detallePreguntas ?? []) as any[]) {
+      if (!d.preguntaId || d.enBlanco) continue;
+      const s = stats.get(d.preguntaId) ?? { fallos: 0, aciertos: 0, ultimaVez: 0 };
+      if (d.correcta) s.aciertos++; else s.fallos++;
+      const fecha = new Date(r.creadoEn).getTime();
+      if (fecha > s.ultimaVez) s.ultimaVez = fecha;
+      stats.set(d.preguntaId, s);
+    }
+  }
+
+  // Priorizamos: al menos 1 fallo, mayor ratio de fallo primero, y a igualdad, el fallo más reciente
+  const prioridadIds = [...stats.entries()]
+    .filter(([, s]) => s.fallos > 0)
+    .sort((a, b) => {
+      const ratioA = a[1].fallos / (a[1].fallos + a[1].aciertos);
+      const ratioB = b[1].fallos / (b[1].fallos + b[1].aciertos);
+      if (ratioB !== ratioA) return ratioB - ratioA;
+      return b[1].ultimaVez - a[1].ultimaVez;
+    })
+    .map(([id]) => id)
+    .slice(0, numPreguntas);
+
+  let preguntasPrioritarias: PreguntaTest[] = [];
+  if (prioridadIds.length > 0) {
+    const encontradas = await this.preguntaRepo.find({
+      where: { id: In(prioridadIds), activa: true },
+      relations: ['temas', 'articulos'],
+    });
+    // Mantener el orden de prioridad (por ratio de fallo)
+    preguntasPrioritarias = prioridadIds
+      .map((id) => encontradas.find((p) => p.id === id))
+      .filter((p): p is PreguntaTest => !!p);
+  }
+
+  const payloadPrioritario: Pregunta[] = preguntasPrioritarias.map((p) => ({
+    id: p.id,
+    enunciado: p.enunciado,
+    opciones: p.opciones,
+    correcta: p.correcta,
+    explicacion: p.explicacion ?? '',
+    articulo: p.articulos?.[0] ? `Art. ${p.articulos[0].numero}` : undefined,
+    articuloId: p.articulos?.[0]?.id ?? null,
+    temaId: p.temas?.[0]?.id ?? null,
+    fuente: 'repaso_inteligente',
+  } as any));
+
+  // Si no hay histórico suficiente, completamos con un test general (sin repetir preguntas)
+  const faltan = numPreguntas - payloadPrioritario.length;
+  let relleno: Pregunta[] = [];
+  if (faltan > 0) {
+    const generales = await this.generarTest(
+      oposicionId,
+      faltan,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'repaso',
+      undefined,
+      undefined,
+      usuarioId,
+    );
+    const yaIncluidos = new Set(payloadPrioritario.map((p) => p.id));
+    relleno = generales.filter((p) => !yaIncluidos.has(p.id));
+  }
+
+  return {
+    preguntas: [...payloadPrioritario, ...relleno].slice(0, numPreguntas),
+    basadoEnHistorial: payloadPrioritario.length,
+  };
 }
 
 async verificarLimiteTest(

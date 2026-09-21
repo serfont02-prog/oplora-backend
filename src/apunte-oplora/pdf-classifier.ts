@@ -219,7 +219,8 @@ function limpiarNumeroLista(texto: string): string {
 function esContinuacionLista(
   linea: LineaExtraida,
   siguiente: LineaExtraida | undefined,
-  fontSizeBase: number
+  fontSizeBase: number,
+  xReferenciaBullet: number | null
 ): boolean {
   const texto = linea.texto.trim();
   if (!texto) return false;
@@ -231,15 +232,33 @@ function esContinuacionLista(
   ) {
     return false;
   }
-  if (typeof linea.x === 'number' && linea.x > 40) return false;
-  if (siguiente) {
-    if (
-      esTituloNivel1(siguiente, fontSizeBase) ||
-      esTituloNivel2(siguiente, fontSizeBase)
-    ) {
-      return false;
-    }
+  // ⭐ Antes exigíamos que la línea de continuación empezara casi en el margen (x <= 40),
+  // asumiendo que el ajuste de línea de una viñeta vuelve al margen del cuerpo del texto.
+  // Pero muchos documentos (p.ej. Tema 4) usan sangría francesa: la viñeta va en una
+  // posición y el texto que la sigue —incluidas sus líneas de ajuste— va más indentado
+  // todavía (p.ej. viñeta en x=90, texto envuelto en x=108). Con el umbral fijo de 40,
+  // esa continuación real se descartaba y quedaba como un párrafo suelto fuera de la
+  // lista. Ahora comparamos con la x real de la viñeta activa: solo tratamos la línea
+  // como algo AJENO a la lista (nuevo párrafo) si vuelve a una indentación claramente
+  // MENOR que la de la propia viñeta (típico de que el texto ha vuelto al margen general
+  // del documento, fuera ya de la lista).
+  if (
+    typeof linea.x === 'number' &&
+    typeof xReferenciaBullet === 'number' &&
+    linea.x < xReferenciaBullet - 5
+  ) {
+    return false;
   }
+  // ⭐ Antes también se descartaba la continuación si la línea SIGUIENTE resultaba ser un
+  // título, asumiendo que eso delataba que "linea" no encajaba de verdad en la lista. Pero
+  // eso rechazaba precisamente el caso normal de que el último ítem de una lista venga
+  // seguido, tras su propio ajuste de línea, por el título de la siguiente sección (p.ej.
+  // "...fiscaliza las cuentas y la ejecución del presupuesto" + "de la Unión." + título
+  // "4. LA COOPERACIÓN..."): la línea "de la Unión." se quedaba fuera de la lista solo por
+  // venir justo antes de un título, que es la situación más común de todas. Ya se comprueba
+  // que "linea" en sí misma no es un título (arriba), así que no hace falta mirar la
+  // siguiente, y el parámetro se conserva solo por compatibilidad de la firma.
+  void siguiente;
   return true;
 }
 // =====================================================
@@ -258,9 +277,25 @@ export function clasificarDocumento(
 
   // Buffers
   let bufferParrafo: string[] = [];
+  // ⭐ Acumula líneas CONSECUTIVAS en negrita como un único párrafo. Antes cada línea en
+  // negrita se cerraba como su propio bloque inmediatamente, así que una frase en negrita
+  // que ocupaba dos o más líneas por el ajuste de línea normal del PDF (no un párrafo
+  // nuevo de verdad) salía partida en varios bloques con saltos de línea de más. Ahora se
+  // van acumulando mientras la negrita continúe, y solo se cierran como un bloque cuando
+  // aparece una línea que ya no es negrita (o cambia el tipo de bloque).
+  let bufferParrafoNegrita: string[] = [];
   let bufferListaItems: string[] = [];
   let bufferListaOrdenada = false;
+  // x de la viñeta/número del último ítem de lista añadido, usada para reconocer sus
+  // líneas de ajuste (ver esContinuacionLista).
+  let ultimaXBullet: number | null = null;
   let ultimoTipo: 'parrafo' | 'lista' | 'titulo' | null = null;
+  // ⭐ Referencia al último bloque de tipo 'titulo' añadido, mientras no se haya añadido
+  // ningún otro contenido real desde entonces. Un título largo que el PDF ajusta en dos o
+  // más líneas visuales suele imprimir la continuación en negrita (mismo peso visual que
+  // el título), y sin esto esa continuación se colaba en el acumulador de negrita normal
+  // y salía como un párrafo en negrita aparte en vez de seguir siendo parte del título.
+  const tituloState: { actual: BloqueTitulo | null } = { actual: null };
   let destacadoAbierto: { titulo: string; contenido: Bloque[]; idInterno: number } | null = null;
 
   // Debug counters
@@ -274,11 +309,26 @@ export function clasificarDocumento(
 
   // Helpers
   const añadirBloque = (bloque: Bloque) => {
+    tituloState.actual = null;
     if (destacadoAbierto) destacadoAbierto.contenido.push(bloque);
     else bloques.push(bloque);
   };
 
+  const flushParrafoNegrita = () => {
+    if (bufferParrafoNegrita.length === 0) return;
+    const texto = normalizarEspacios(bufferParrafoNegrita.join(' '));
+    if (texto.length > 0) {
+      añadirBloque({ id: idCounter++, tipo: 'parrafo', texto, negrita: true });
+    }
+    bufferParrafoNegrita = [];
+    ultimoTipo = 'parrafo';
+  };
+
   const flushParrafo = () => {
+    // Los dos buffers de párrafo (normal y negrita) son mutuamente excluyentes en cada
+    // momento, así que cerrar uno siempre implica cerrar también el otro si estuviera
+    // abierto, para no dejar párrafos de negrita a medias al cambiar de tipo de bloque.
+    flushParrafoNegrita();
     if (bufferParrafo.length === 0) return;
     const texto = normalizarEspacios(bufferParrafo.join(' '));
     if (texto.length > 0) {
@@ -292,6 +342,7 @@ export function clasificarDocumento(
     if (bufferListaItems.length === 0) return;
     añadirBloque({ id: idCounter++, tipo: 'lista', ordenada: bufferListaOrdenada, items: bufferListaItems.map(normalizarEspacios) });
     bufferListaItems = [];
+    ultimaXBullet = null;
     ultimoTipo = 'lista';
   };
 
@@ -308,6 +359,7 @@ export function clasificarDocumento(
     bloques.push(bloque);
     indice.push({ titulo: bloque.texto, nivel, bloqueId: bloque.id });
     ultimoTipo = 'titulo';
+    tituloState.actual = bloque;
   };
 
   // RECORRIDO PRINCIPAL
@@ -378,7 +430,20 @@ export function clasificarDocumento(
       // el conjunto y no se detecta como mini-subtítulo, y el texto se queda pegado a la
       // introducción en vez de arrancar su propio ítem/línea. Si detectamos el patrón
       // "...: Palabra" al final de la línea, separamos esa palabra en su propia línea.
-      const matchEtiquetaTrasDosPuntos = texto.match(/^(.+:)\s+([^\s:.,;]{2,25})$/);
+      // ⭐ Este split NO debe aplicarse a una línea que en realidad es un título (p.ej.
+      // "2.4. LOS ELEMENTOS ORGANIZATIVOS BÁSICOS: LAS", cortada por el PDF justo después
+      // de "LAS" antes de "UNIDADES ADMINISTRATIVAS" en la siguiente línea): si el título
+      // termina en ":" seguido de una palabra corta, este split le arrancaba esa palabra
+      // final al texto del título (que además ya no coincidía con esTituloNivel2 al
+      // comprobarlo después), rompiéndolo en dos y perdiendo el enganche con la continuación
+      // real de la línea siguiente.
+      const esTituloEstaLinea =
+        esTituloNivel1(linea, fontSizeBase) ||
+        esTituloNivel2(linea, fontSizeBase) ||
+        esTituloOrdinal(linea);
+      const matchEtiquetaTrasDosPuntos = esTituloEstaLinea
+        ? null
+        : texto.match(/^(.+:)\s+([^\s:.,;]{2,25})$/);
       if (matchEtiquetaTrasDosPuntos) {
         const intro = matchEtiquetaTrasDosPuntos[1];
         const etiqueta = matchEtiquetaTrasDosPuntos[2];
@@ -547,6 +612,7 @@ export function clasificarDocumento(
         if (bufferListaItems.length > 0 && bufferListaOrdenada) flushLista();
         bufferListaOrdenada = false;
         bufferListaItems.push(limpiarBullet(texto));
+        ultimaXBullet = typeof linea.x === 'number' ? linea.x : null;
         ultimoTipo = 'lista';
         if (DEBUG) console.debug('BULLET', { texto });
         continue;
@@ -558,13 +624,14 @@ export function clasificarDocumento(
         flushParrafo();
         bufferListaOrdenada = true;
         bufferListaItems.push(limpiarNumeroLista(texto));
+        ultimaXBullet = typeof linea.x === 'number' ? linea.x : null;
         ultimoTipo = 'lista';
         if (DEBUG) console.debug('LISTA NUM', { texto });
         continue;
       }
 
       // CONTINUACIÓN DE LISTA
-      if (bufferListaItems.length > 0 && ultimoTipo === 'lista' && esContinuacionLista(linea, siguiente, fontSizeBase)) {
+      if (bufferListaItems.length > 0 && ultimoTipo === 'lista' && esContinuacionLista(linea, siguiente, fontSizeBase, ultimaXBullet)) {
         const ultimoIndice = bufferListaItems.length - 1;
         bufferListaItems[ultimoIndice] = normalizarEspacios(bufferListaItems[ultimoIndice] + ' ' + texto);
         if (DEBUG) console.debug('CONTINUACION LISTA', { texto });
@@ -576,22 +643,58 @@ export function clasificarDocumento(
         flushLista();
       }
 
-      // MINI-SUBTÍTULO EN NEGRITA (p.ej. "Concepto", "Regula:", "Fue:")
+      // CONTINUACIÓN (ajuste de línea) DE UN TÍTULO LARGO
+      // ⭐ Nada real se ha añadido desde que se creó el título, así que esta línea PODRÍA ser
+      // su segunda línea visual en vez de un mini-encabezado nuevo (p.ej. "Concepto"), que
+      // también puede venir justo después de un título. Para no confundir ambos casos solo lo
+      // tratamos como continuación del título cuando, además de venir justo después (nada real
+      // añadido todavía), se cumple UNA de estas señales de que el PDF cortó la línea a media
+      // frase en vez de empezar contenido nuevo:
+      //  a) el título tiene un paréntesis sin cerrar (p.ej. "... (TÍTULO IV, ARTS. 97 A"), o
+      //  b) la propia línea de continuación va casi toda en mayúsculas (p.ej. "GENERALES
+      //     (TÍTULO V, ARTS. 108 A 116 CE)" o "HUMANOS Y AL TRIBUNAL..."), como el título
+      //     al que continúa — un mini-encabezado real como "Concepto" no cumple esto.
+      // ⭐ Esta comprobación NO puede limitarse a líneas en negrita: algunos documentos (p.ej.
+      // Tema 7) dan estilo a sus títulos con el estilo "Heading" de Word (tamaño de fuente
+      // mayor), no con negrita por-run, así que su línea de ajuste tampoco llega marcada como
+      // negrita — pero sigue siendo, igualmente, la continuación del título.
+      {
+        const tituloEnCurso = tituloState.actual;
+        const parensAbiertos = tituloEnCurso ? (tituloEnCurso.texto.match(/\(/g) || []).length : 0;
+        const parensCerrados = tituloEnCurso ? (tituloEnCurso.texto.match(/\)/g) || []).length : 0;
+        const pareceContinuacionTitulo =
+          parensAbiertos > parensCerrados || esTodoMayusculas(texto);
+        if (
+          tituloEnCurso &&
+          pareceContinuacionTitulo &&
+          bufferParrafo.length === 0 &&
+          bufferParrafoNegrita.length === 0
+        ) {
+          tituloEnCurso.texto = normalizarEspacios(tituloEnCurso.texto + ' ' + texto);
+          ultimoTipo = 'titulo';
+          if (DEBUG) console.debug('TITULO_CONTINUACION', { texto });
+          continue;
+        }
+      }
+
+      // TEXTO EN NEGRITA (mini-subtítulo tipo "Concepto", o una frase entera en negrita)
       // ⭐ El buffer de párrafo normal solo corta con un punto y aparte, así que una línea
       // corta sin punto (un mini-encabezado como "Concepto") se quedaba pegada al párrafo
       // siguiente, perdiendo su salto de línea, y además la negrita del PDF nunca llegaba
-      // al frontend (se leía pero no se usaba para nada). Si la línea viene en negrita la
-      // tratamos como su propio bloque —cerrando cualquier párrafo pendiente antes y
-      // empezando uno nuevo después—, y marcamos el bloque como `negrita` para que el
-      // frontend la pinte en negrita.
-      const esLineaCortaEnNegrita = linea.bold && texto.length <= 80;
-      if (esLineaCortaEnNegrita) {
-        flushParrafo();
-        añadirBloque({ id: idCounter++, tipo: 'parrafo', texto, negrita: true });
+      // al frontend. Si la línea viene en negrita la acumulamos en su propio buffer
+      // (cerrando antes cualquier párrafo normal pendiente); mientras las líneas siguientes
+      // sigan en negrita se van sumando a ese MISMO bloque, para que una frase en negrita
+      // que ocupa dos o más líneas por el ajuste de línea normal del PDF salga seguida, sin
+      // saltos de línea de más. El bloque se cierra en cuanto aparece una línea que ya no
+      // es negrita (ver flushParrafo, que cierra ambos buffers).
+      if (linea.bold) {
+        if (bufferParrafoNegrita.length === 0) flushParrafo();
+        bufferParrafoNegrita.push(texto);
         ultimoTipo = 'parrafo';
-        if (DEBUG) console.debug('MINI_SUBTITULO_NEGRITA', { texto });
+        if (DEBUG) console.debug('NEGRITA_ACUMULADA', { texto });
         continue;
       }
+      if (bufferParrafoNegrita.length > 0) flushParrafoNegrita();
 
       // PÁRRAFO (regla simple: añadimos al buffer; cerramos con punto y aparte o con ":")
       bufferParrafo.push(texto);
