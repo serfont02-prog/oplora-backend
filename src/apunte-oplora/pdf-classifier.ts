@@ -131,7 +131,11 @@ const REGEX_SUBAPARTADO_LETRA = /^[A-ZÁÉÍÓÚÑ]\)\s+(.+)$/;
 // usada en el documento (p.ej. Tema 3 usaba "●" en vez de "•"). Si el glifo no está aquí,
 // las líneas de la lista no se detectan como bullet y el párrafo/lista se rompe o se
 // fusiona mal (sin saltos de línea) al renderizarse en la app.
-const REGEX_BULLET = /^[•▪◦·●○■□▶►‣∙]\s*/;
+//  y  son los códigos "crudos" de las viñetas de fuentes Symbol/Wingdings
+// (así vienen en el XML de Word). Word suele reasignarlos a "•"/"▪" reales al exportar
+// a PDF, pero si el PDF se genera con otra herramienta (p.ej. LibreOffice) puede quedarse
+// con el código crudo — los cubrimos también para no depender de qué exportador se use.
+const REGEX_BULLET = /^[•▪◦·●○■□▶►‣∙]\s*/;
 const REGEX_LISTA_NUMERADA = /^(\d+)\.\s+(.+)$/;
 const REGEX_LISTA_ORDINAL = /^(\d+)[.ºªº]\s+(.+)$/;
 const REGEX_ARTICULO_LEGAL = /^art[íi]culo\s+(\d+(?:\.\d+)?)/i;

@@ -59,6 +59,30 @@ export async function extraerLineasPDF(
       scale: 1
     });
 
+    // ⭐ `item.fontName` en pdf.js es un alias interno del PDF (p.ej. "g_d0_f1"), no el
+    // nombre real de la fuente — nunca contiene "bold" aunque el texto lo sea, así que
+    // comprobarlo directamente (como se hacía antes) nunca detectaba negrita en PDFs
+    // generados desde Word. El nombre real ("Aptos,Bold" vs "Aptos") solo está disponible
+    // tras resolver las fuentes de la página (`getOperatorList`) y consultarlo en
+    // `page.commonObjs`. Lo resolvemos una vez por alias y lo cacheamos para no repetir
+    // la consulta por cada fragmento de texto.
+    await page.getOperatorList();
+    const nombreRealPorAlias = new Map<string, string>();
+    const esNombreFuenteBold = (aliasFuente: string): boolean => {
+      if (!aliasFuente) return false;
+      if (!nombreRealPorAlias.has(aliasFuente)) {
+        let nombreReal = '';
+        try {
+          nombreReal = (page as any).commonObjs.get(aliasFuente)?.name ?? '';
+        } catch {
+          nombreReal = '';
+        }
+        nombreRealPorAlias.set(aliasFuente, nombreReal);
+      }
+      const nombreReal = nombreRealPorAlias.get(aliasFuente) ?? '';
+      return /bold|black|heavy|semibold|demi/i.test(nombreReal);
+    };
+
     const textContent = await page.getTextContent();
 
     const fragmentos: FragmentoPDF[] = (
@@ -84,9 +108,7 @@ export async function extraerLineasPDF(
 
           fontName,
 
-          bold: /bold|black|heavy|semibold|demi/i.test(
-            fontName
-          ),
+          bold: esNombreFuenteBold(fontName),
 
           width: Math.abs(item.width ?? 0)
         };
