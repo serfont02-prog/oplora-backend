@@ -166,109 +166,135 @@ export async function extraerLineasPDF(
     }
 
     /**
-     * Convertimos cada grupo en una LineaExtraida.
+     * Construye una LineaExtraida a partir de un tramo de fragmentos
+     * (ya ordenados horizontalmente) que pertenecen a la misma línea visual.
      */
-    const lineas: LineaExtraida[] = grupos
-      .map((grupo) => {
+    function construirLinea(tramo: FragmentoPDF[]): LineaExtraida {
+      const texto = tramo
+        .map(f => f.texto)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
-        // Orden horizontal real
-        grupo.sort((a, b) => a.x - b.x);
+      const x = Math.min(
+        ...tramo.map(f => f.x)
+      );
 
-        const texto = grupo
-          .map(f => f.texto)
-          .join(' ')
-          .replace(/\s+/g, ' ')
-          .trim();
+      const y = tramo[0].y;
 
-        const x = Math.min(
-          ...grupo.map(f => f.x)
+      /**
+       * Elegimos como fontSize el más frecuente,
+       * ponderado por cantidad de texto.
+       */
+      const fontStats = new Map<
+        number,
+        number
+      >();
+
+      for (const f of tramo) {
+
+        const size = Math.round(
+          f.fontSize * 10
+        ) / 10;
+
+        const peso = f.texto.length;
+
+        fontStats.set(
+          size,
+          (fontStats.get(size) ?? 0) + peso
         );
+      }
 
-        const y = grupo[0].y;
+      let fontSize = 0;
+      let maxPeso = 0;
 
-        /**
-         * Elegimos como fontSize el más frecuente,
-         * ponderado por cantidad de texto.
-         */
-        const fontStats = new Map<
-          number,
-          number
-        >();
-
-        for (const f of grupo) {
-
-          const size = Math.round(
-            f.fontSize * 10
-          ) / 10;
-
-          const peso = f.texto.length;
-
-          fontStats.set(
-            size,
-            (fontStats.get(size) ?? 0) + peso
-          );
+      for (
+        const [size, peso]
+        of fontStats.entries()
+      ) {
+        if (peso > maxPeso) {
+          fontSize = size;
+          maxPeso = peso;
         }
+      }
 
-        let fontSize = 0;
-        let maxPeso = 0;
+      /**
+       * Consideramos bold si una parte significativa
+       * del texto del tramo está en bold.
+       */
+      const longitudTotal = tramo.reduce(
+        (acc, f) => acc + f.texto.length,
+        0
+      );
 
-        for (
-          const [size, peso]
-          of fontStats.entries()
-        ) {
-          if (peso > maxPeso) {
-            fontSize = size;
-            maxPeso = peso;
-          }
-        }
-
-        /**
-         * Consideramos bold si una parte significativa
-         * del texto de la línea está en bold.
-         */
-        const longitudTotal = grupo.reduce(
+      const longitudBold = tramo
+        .filter(f => f.bold)
+        .reduce(
           (acc, f) => acc + f.texto.length,
           0
         );
 
-        const longitudBold = grupo
-          .filter(f => f.bold)
-          .reduce(
-            (acc, f) => acc + f.texto.length,
-            0
-          );
+      const bold =
+        longitudTotal > 0 &&
+        longitudBold / longitudTotal >= 0.5;
 
-        const bold =
-          longitudTotal > 0 &&
-          longitudBold / longitudTotal >= 0.5;
+      const fragmentoPrincipal =
+        tramo.reduce((a, b) =>
+          b.texto.length > a.texto.length
+            ? b
+            : a
+        );
 
-        const fragmentoPrincipal =
-          grupo.reduce((a, b) =>
-            b.texto.length > a.texto.length
-              ? b
-              : a
-          );
+      const ancho =
+        Math.max(
+          ...tramo.map(
+            f => f.x + f.width
+          )
+        ) - x;
 
-        const ancho =
-          Math.max(
-            ...grupo.map(
-              f => f.x + f.width
-            )
-          ) - x;
+      return {
+        texto,
+        x,
+        y,
+        fontSize,
+        fontName:
+          fragmentoPrincipal.fontName,
+        bold,
+        pagina: numPagina,
+        ancho,
+        altura: fontSize
+      };
+    }
 
-        return {
-          texto,
-          x,
-          y,
-          fontSize,
-          fontName:
-            fragmentoPrincipal.fontName,
-          bold,
-          pagina: numPagina,
-          ancho,
-          altura: fontSize
-        };
+    /**
+     * Convertimos cada grupo en una o varias LineaExtraida.
+     *
+     * ⭐ Antes se fusionaba TODO el grupo (misma altura visual) en una única línea, y la
+     * negrita se decidía por proporción de caracteres en negrita sobre el total. Eso hacía
+     * que una etiqueta corta en negrita pegada al final o al principio de una frase larga
+     * sin negrita (p.ej. "La Constitución Española es: Escrita") saliera con bold=false,
+     * porque "Escrita" pesaba poco frente al resto — perdiendo así la negrita real que sí
+     * tiene esa palabra en el PDF. Ahora partimos el grupo en tramos contiguos según cambie
+     * el negrita real de cada fragmento, así cada tramo (p.ej. el intro sin negrita y la
+     * etiqueta en negrita) se convierte en su propia línea con su propio bold correcto.
+     */
+    const lineas: LineaExtraida[] = grupos
+      .flatMap((grupo) => {
 
+        // Orden horizontal real
+        grupo.sort((a, b) => a.x - b.x);
+
+        const tramos: FragmentoPDF[][] = [];
+        for (const fragmento of grupo) {
+          const ultimoTramo = tramos[tramos.length - 1];
+          if (ultimoTramo && ultimoTramo[0].bold === fragmento.bold) {
+            ultimoTramo.push(fragmento);
+          } else {
+            tramos.push([fragmento]);
+          }
+        }
+
+        return tramos.map(construirLinea);
       })
       .filter(linea => linea.texto.length > 0);
 

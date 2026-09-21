@@ -323,13 +323,45 @@ export function clasificarDocumento(
   // caiga en mitad del contenido del marcador.
   const lineas: LineaExtraida[] = paginas.flatMap((p) => p.lineas);
 
+  // ⭐ PRE-FUSIÓN DE CORCHETES SUELTOS SIN CERRAR (referencias [SIGLAS artículo N] u otro
+  // corchete cualquiera que NO sea un marcador [EJ|ID|ES|TR|RE|PR ...], que ya se gestiona
+  // aparte más abajo). Si el PDF envuelve el texto de una referencia en varias líneas
+  // (p.ej. "[LOTC" / "Artículo 44" / "artículo 44]."), cada línea intermedia se procesaba
+  // suelta por su cuenta ANTES de este fix, y si alguna de esas líneas intermedias parecía
+  // por sí sola un título, una viñeta o un "artículo X" (como aquí, "Artículo 44"), se
+  // clasificaba como su propio bloque especial, partiendo la referencia en trozos: el
+  // enlace [SIGLAS artículo N] resultante quedaba roto y no era clicable, con un formato
+  // raro al mezclarse con un bloque de "artículo legal". Aquí fusionamos por adelantado
+  // cualquier línea con un "[" sin su "]" correspondiente con las líneas siguientes hasta
+  // que el corchete se cierra, así el resto del clasificador ve una única línea completa.
+  for (let k = 0; k < lineas.length; k++) {
+    const t = lineas[k].texto;
+    if (REGEX_APERTURA_MARCADOR.test(t)) continue; // eso ya lo gestiona su propia lógica
+    const abiertos = (t.match(/\[/g) || []).length;
+    const cerrados = (t.match(/\]/g) || []).length;
+    if (abiertos <= cerrados) continue;
+
+    let acumulado = t;
+    let consumidas = 0;
+    const MAX_LINEAS_CORCHETE = 15;
+    while (consumidas < MAX_LINEAS_CORCHETE && k + 1 < lineas.length) {
+      const siguiente = lineas[k + 1];
+      acumulado = normalizarEspacios(acumulado + ' ' + siguiente.texto);
+      lineas.splice(k + 1, 1);
+      consumidas++;
+      const totalAbiertos = (acumulado.match(/\[/g) || []).length;
+      const totalCerrados = (acumulado.match(/\]/g) || []).length;
+      if (totalCerrados >= totalAbiertos) break;
+    }
+    lineas[k] = { ...lineas[k], texto: acumulado };
+  }
+
   {
     for (let i = 0; i < lineas.length; i++) {
       const linea = lineas[i];
       contadorLineasEntrantes++;
 
-      const siguiente = lineas[i + 1];
-      const texto = normalizarEspacios(linea.texto);
+      let texto = normalizarEspacios(linea.texto);
 
       if (DEBUG) console.debug('LINEA_IN', { i, texto: texto.slice(0, 120), x: linea.x, y: linea.y, fontSize: linea.fontSize, bold: linea.bold });
 
@@ -337,6 +369,25 @@ export function clasificarDocumento(
         markSkip('vacia');
         continue;
       }
+
+      // ⭐ A veces la etiqueta corta de un ítem tipo "definición" (p.ej. "Escrita") queda
+      // pegada, en la MISMA línea física del PDF, a la frase introductoria que termina en
+      // ":" ("La Constitución Española es: Escrita" — el resto, "Recogida en un único
+      // texto.", ya cae en la línea siguiente como continuación de ese ítem). Al venir todo
+      // en una sola línea, la proporción de negrita de esa etiqueta corta queda diluida en
+      // el conjunto y no se detecta como mini-subtítulo, y el texto se queda pegado a la
+      // introducción en vez de arrancar su propio ítem/línea. Si detectamos el patrón
+      // "...: Palabra" al final de la línea, separamos esa palabra en su propia línea.
+      const matchEtiquetaTrasDosPuntos = texto.match(/^(.+:)\s+([^\s:.,;]{2,25})$/);
+      if (matchEtiquetaTrasDosPuntos) {
+        const intro = matchEtiquetaTrasDosPuntos[1];
+        const etiqueta = matchEtiquetaTrasDosPuntos[2];
+        lineas.splice(i + 1, 0, { ...linea, texto: etiqueta });
+        linea.texto = intro;
+        texto = normalizarEspacios(intro);
+      }
+
+      const siguiente = lineas[i + 1];
 
       // Ignorar portada (título gigante)
       const esPrimeraPagina = linea.pagina === 1;
@@ -542,12 +593,17 @@ export function clasificarDocumento(
         continue;
       }
 
-      // PÁRRAFO (regla simple: añadimos al buffer; cerramos solo con punto y aparte)
+      // PÁRRAFO (regla simple: añadimos al buffer; cerramos con punto y aparte o con ":")
       bufferParrafo.push(texto);
       ultimoTipo = 'parrafo';
 
-      // Cierre de párrafo: solo punto y aparte (regla estricta).
-      const termina = /\.\s*$/.test(texto);
+      // Cierre de párrafo: punto y aparte, o dos puntos al final de línea.
+      // ⭐ Una línea como "La Constitución Española es:" iba directa al buffer (no acaba
+      // en punto) y se quedaba pegada a lo que viniera después hasta el siguiente punto
+      // final, perdiendo el salto de línea justo tras los ":". Los dos puntos ya anuncian
+      // el fin de esa frase (lo que sigue es la lista/explicación), así que cortamos ahí
+      // también.
+      const termina = /[.:]\s*$/.test(texto);
       if (termina) {
         flushParrafo();
       }
