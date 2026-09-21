@@ -119,6 +119,10 @@ export interface DocumentoLectura {
 // =====================================================
 
 const REGEX_TITULO_NIVEL_1 = /^(\d+)\.-\s*(.+)$/; // requiere guion: "1.- El derecho"
+// Variante sin guion, tipo "1. LA CONSTITUCIÓN ESPAÑOLA DE 1978" (usada en Tema 2/3).
+// Solo cuenta como título si el resto va en mayúsculas (si no, es más probable que sea
+// un ítem de una lista numerada normal, tipo "1. Aprobada por las Cortes.").
+const REGEX_TITULO_NIVEL_1_SIMPLE = /^(\d+)\.\s+(.+)$/;
 const REGEX_TITULO_NIVEL_2 = /^(\d+\.\d+)\.?\s+(.+)$/; // sin guion, como antes: "1.1. Concepto"
 const REGEX_TITULO_ORDINAL = /^(\d+)\.[oº]\s+(.+)$/i; // "1.º", "2.º" (o "1.o" si el PDF exporta la º como "o")
 const REGEX_SUBAPARTADO_LETRA = /^[A-ZÁÉÍÓÚÑ]\)\s+(.+)$/;
@@ -156,8 +160,17 @@ function esTodoMayusculas(texto: string): boolean {
 
 function esTituloNivel1(linea: LineaExtraida, fontSizeBase: number): boolean {
   const texto = linea.texto.trim();
-  if (!REGEX_TITULO_NIVEL_1.test(texto)) return false;
-  return true; // el patrón numérico "N." es suficiente
+  if (REGEX_TITULO_NIVEL_1.test(texto)) return true; // "1.- Texto"
+
+  // ⭐ "1. TEXTO EN MAYÚSCULAS" (sin guion): antes cualquier "N. texto" cabecera de tema
+  // caía en la rama de lista numerada, así que el índice y los títulos se perdían y la
+  // app volvía a numerar desde 1 en cada capítulo. Solo lo tratamos como título si el
+  // resto de la línea va en mayúsculas, para no confundirlo con un ítem real de lista
+  // numerada (p.ej. "1. Aprobada por las Cortes Generales.").
+  const matchSimple = texto.match(REGEX_TITULO_NIVEL_1_SIMPLE);
+  if (matchSimple && esTodoMayusculas(matchSimple[2])) return true;
+
+  return false;
 }
 
 function esTituloNivel2(linea: LineaExtraida, fontSizeBase: number): boolean {

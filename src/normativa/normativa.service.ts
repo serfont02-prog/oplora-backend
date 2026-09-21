@@ -383,14 +383,35 @@ async getRepasosProgramados(usuarioId: string): Promise<any[]> {
 
 //Buscar numero articulo para los apuntes
 async buscarArticuloPorNumero(versionLeyId: string, numero: string): Promise<Articulo | null> {
-  return this.articuloRepo
-    .createQueryBuilder('a')
-    .leftJoin('a.capitulo', 'c')
-    .leftJoin('c.tituloRef', 't')
-    .leftJoin('a.tituloRef', 'tr')
-    .where('a.numero = :numero', { numero })
-    .andWhere('(t.versionLey = :vId OR tr.versionLey = :vId)', { vId: versionLeyId })
-    .andWhere('a.vigente = true')
-    .getOne();
+  const buscar = (num: string) =>
+    this.articuloRepo
+      .createQueryBuilder('a')
+      .leftJoin('a.capitulo', 'c')
+      .leftJoin('c.tituloRef', 't')
+      .leftJoin('a.seccion', 's')
+      .leftJoin('s.capitulo', 'sc')
+      .leftJoin('sc.tituloRef', 'st')
+      .leftJoin('a.tituloRef', 'tr')
+      .where('a.numero = :num', { num })
+      .andWhere('(t.versionLey = :vId OR st.versionLey = :vId OR tr.versionLey = :vId)', { vId: versionLeyId })
+      .andWhere('a.vigente = true')
+      .getOne();
+
+  // Búsqueda exacta primero (p.ej. numero = "56").
+  const exacto = await buscar(numero);
+  if (exacto) return exacto;
+
+  // ⭐ Las referencias tipo "[CE artículo 1.1]" apuntan a un APARTADO de un artículo
+  // (art. 1, apartado 1), no a un artículo distinto con numero "1.1" — ese artículo
+  // no existe como entidad separada, así que si la búsqueda exacta falla y el número
+  // trae un punto, reintentamos solo con la parte entera del artículo ("1").
+  if (numero.includes('.')) {
+    const parteEntera = numero.split('.')[0];
+    if (parteEntera && parteEntera !== numero) {
+      return buscar(parteEntera);
+    }
+  }
+
+  return null;
 }
 }
