@@ -122,7 +122,11 @@ const REGEX_TITULO_NIVEL_1 = /^(\d+)\.-\s*(.+)$/; // requiere guion: "1.- El der
 const REGEX_TITULO_NIVEL_2 = /^(\d+\.\d+)\.?\s+(.+)$/; // sin guion, como antes: "1.1. Concepto"
 const REGEX_TITULO_ORDINAL = /^(\d+)\.[oº]\s+(.+)$/i; // "1.º", "2.º" (o "1.o" si el PDF exporta la º como "o")
 const REGEX_SUBAPARTADO_LETRA = /^[A-ZÁÉÍÓÚÑ]\)\s+(.+)$/;
-const REGEX_BULLET = /^[•▪◦·]\s*/;
+// ⭐ Ampliado: Word puede exportar viñetas con distintos glifos según la plantilla de lista
+// usada en el documento (p.ej. Tema 3 usaba "●" en vez de "•"). Si el glifo no está aquí,
+// las líneas de la lista no se detectan como bullet y el párrafo/lista se rompe o se
+// fusiona mal (sin saltos de línea) al renderizarse en la app.
+const REGEX_BULLET = /^[•▪◦·●○■□▶►‣∙]\s*/;
 const REGEX_LISTA_NUMERADA = /^(\d+)\.\s+(.+)$/;
 const REGEX_LISTA_ORDINAL = /^(\d+)[.ºªº]\s+(.+)$/;
 const REGEX_ARTICULO_LEGAL = /^art[íi]culo\s+(\d+(?:\.\d+)?)/i;
