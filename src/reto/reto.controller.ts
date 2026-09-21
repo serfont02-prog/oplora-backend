@@ -70,7 +70,7 @@ crearRetoUsuario(
   @Post(':id/completar')
   completarReto(
     @Param('id') id: string,
-    @Body('respuestas') respuestas: { correcta: boolean }[],
+    @Body('respuestas') respuestas: number[],
     @Body('tiempoSegundos') tiempoSegundos: number,
     @Request() req: any,
   ) {
@@ -88,13 +88,13 @@ crearRetoUsuario(
 }
 
   @Get(':id')
-  getReto(@Param('id') id: string) {
-    return this.service.getReto(id);
+  getReto(@Param('id') id: string, @Request() req: any) {
+    return this.service.getReto(id, req.user.id);
   }
 
   @Get(':id/ranking')
-  getRanking(@Param('id') id: string) {
-    return this.service.getRanking(id);
+  getRanking(@Param('id') id: string, @Request() req: any) {
+    return this.service.getRanking(id, req.user.id);
   }
 
   @Delete(':id')

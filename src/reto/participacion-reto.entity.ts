@@ -20,7 +20,7 @@ export class ParticipacionReto {
   posicion: number;
 
   @Column({ type: 'jsonb', nullable: true })
-  respuestas: { correcta: boolean }[];
+  respuestas: { seleccionada: number; correcta: boolean }[];
 
   @CreateDateColumn()
   creadoEn: Date;

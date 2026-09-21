@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull } from 'typeorm';
 import { Reto, TipoReto, EstadoReto } from './reto.entity';
@@ -217,10 +217,14 @@ async crearRetoUsuario(
     throw new BadRequestException(`${retado.nick ?? retado.nombre} está en una convocatoria distinta a la tuya`);
   }
 
-  const preguntas = await this.testService.generarTest(oposicionId, numPreguntas, temaId, versionLeyId);
+  // ⭐ Límite razonable: evita retos absurdamente largos/costosos por un valor manipulado del cliente
+  const numPreguntasFinal = Math.min(Math.max(Math.trunc(numPreguntas) || 10, 1), 30);
 
+  const preguntas = await this.testService.generarTest(oposicionId, numPreguntasFinal, temaId, versionLeyId);
+
+   const horasPlazoFinal = horasPlazo && horasPlazo > 0 ? horasPlazo : 48;
    const fechaFin = new Date();
-    fechaFin.setHours(fechaFin.getHours() + (horasPlazo ?? 48));
+    fechaFin.setHours(fechaFin.getHours() + horasPlazoFinal);
 
     const reto = this.retoRepo.create({
   tipo: TipoReto.USUARIO,
@@ -258,7 +262,7 @@ async crearRetoUsuario(
       usuarioId: retado.id,
       tipo: TipoNotificacion.RETO_RECIBIDO,
       titulo: `${retador.nick ?? retador.nombre} te reta ⚡`,
-      mensaje: `Te han enviado un reto. Tienes 48h para completarlo. ¿Aceptas el desafío?`,
+      mensaje: `Te han enviado un reto. Tienes ${horasPlazoFinal}h para completarlo. ¿Aceptas el desafío?`,
       prioridad: PrioridadNotificacion.MEDIA,
       urlAccion: `/app/retos/${retoGuardado.id}`,
     });
@@ -271,10 +275,10 @@ async crearRetoUsuario(
 async completarReto(
   retoId: string,
   usuarioId: string,
-  respuestas: any[],
+  respuestasSeleccionadas: number[],
   tiempoSegundos: number,
 ): Promise<ParticipacionReto> {
-  
+
   const participacion = await this.participacionRepo.findOne({
     where: {
       reto: { id: retoId },
@@ -292,6 +296,31 @@ async completarReto(
   });
   if (!reto) throw new NotFoundException('Reto no encontrado');
 
+  const yaExpirado =
+    reto.estado === EstadoReto.EXPIRADO ||
+    (reto.fechaFin && new Date(reto.fechaFin) < new Date());
+  if (yaExpirado) {
+    if (reto.estado !== EstadoReto.EXPIRADO) {
+      await this.retoRepo.update(reto.id, { estado: EstadoReto.EXPIRADO });
+    }
+    throw new BadRequestException('Este reto ya ha expirado, no puedes completarlo');
+  }
+
+  if (
+    !Array.isArray(respuestasSeleccionadas) ||
+    respuestasSeleccionadas.length !== reto.preguntas.length
+  ) {
+    throw new BadRequestException(
+      'El número de respuestas no coincide con el número de preguntas del reto',
+    );
+  }
+
+  // ⭐ La corrección se calcula en el servidor a partir de las preguntas
+  // reales del reto, nunca a partir de lo que envíe el cliente.
+  const respuestas = reto.preguntas.map((p: any, i: number) => ({
+    seleccionada: respuestasSeleccionadas[i],
+    correcta: respuestasSeleccionadas[i] === p.correcta,
+  }));
   const correctas = respuestas.filter((r) => r.correcta).length;
   const porcentaje = Math.round((correctas / reto.preguntas.length) * 100);
 
@@ -304,13 +333,16 @@ async completarReto(
 
   await this.darPuntosPorReto(usuarioId, (reto.oposicion as any).id, correctas, false);
 
-   // Verificar si todos han completado
+   // Verificar si todos han completado (el cierre con ganador/perdedor solo aplica a duelos entre usuarios;
+  // los retos diario/semanal comparten cohortes grandes y no deben cerrarse como si fueran un duelo 1 a 1)
   const todasCompletadas = reto.participaciones.every(
     (p) => p.id === participacion.id || p.completado
   );
 
-  if (todasCompletadas) {
+  if (todasCompletadas && reto.tipo === TipoReto.USUARIO) {
     await this.cerrarRetoUsuario(reto);
+  } else if (todasCompletadas) {
+    await this.retoRepo.update(reto.id, { estado: EstadoReto.COMPLETADO });
   }
 
   return this.participacionRepo.findOne({
@@ -318,6 +350,8 @@ async completarReto(
   }) as Promise<ParticipacionReto>;
 }
 
+ // ⭐ Generalizado para cualquier número de participantes (hoy siempre 2 en retos de tipo
+ // usuario, pero ya no asume índices fijos [0]/[1] ni rompe si algún día hay más).
  private async cerrarRetoUsuario(reto: Reto): Promise<void> {
   const participaciones = await this.participacionRepo.find({
     where: { reto: { id: reto.id } },
@@ -327,56 +361,74 @@ async completarReto(
 
   await this.retoRepo.update(reto.id, { estado: EstadoReto.COMPLETADO });
 
-  const primera = participaciones[0];
-  const segunda = participaciones[1];
+  if (participaciones.length < 2) return;
 
-  if (!primera || !segunda) return;
+  const mejor = participaciones[0];
+  const ganadores = participaciones.filter(
+    (p) => p.porcentaje === mejor.porcentaje && p.tiempoSegundos === mejor.tiempoSegundos,
+  );
+  const empateGeneral = ganadores.length === participaciones.length;
 
-  const empate = primera.porcentaje === segunda.porcentaje &&
-    primera.tiempoSegundos === segunda.tiempoSegundos;
+  // Asignar posiciones: los empatados en cabeza comparten puesto; el resto se numera
+  // correlativamente a partir de ahí (en vez de asumir exactamente 2 participantes).
+  let posicionActual = 1;
+  let i = 0;
+  while (i < participaciones.length) {
+    const actual = participaciones[i];
+    const empatadosConActual = participaciones.filter(
+      (p) => p.porcentaje === actual.porcentaje && p.tiempoSegundos === actual.tiempoSegundos,
+    );
+    for (const p of empatadosConActual) {
+      await this.participacionRepo.update(p.id, { posicion: posicionActual });
+    }
+    i += empatadosConActual.length;
+    posicionActual += empatadosConActual.length;
+  }
 
-  if (empate) {
-    await this.participacionRepo.update(primera.id, { posicion: 1 });
-    await this.participacionRepo.update(segunda.id, { posicion: 1 });
-
-    const primerUsuario = primera.usuario as any;
-    const segundoUsuario = segunda.usuario as any;
-
-    for (const u of [primerUsuario, segundoUsuario]) {
+  if (empateGeneral) {
+    for (const p of participaciones) {
+      const u = p.usuario as any;
       await this.notificacionService.crear({
         usuarioId: u.id,
         tipo: TipoNotificacion.RETO_RESULTADO,
         titulo: '¡Empate en el reto! 🤝',
-        mensaje: `Empate perfecto con ${u.id === primerUsuario.id ? segundoUsuario.nick ?? segundoUsuario.nombre : primerUsuario.nick ?? primerUsuario.nombre}`,
+        mensaje: `Habéis empatado con ${mejor.porcentaje}% de acierto`,
         prioridad: PrioridadNotificacion.MEDIA,
       });
     }
-} else {
-  for (let i = 0; i < participaciones.length; i++) {
-    await this.participacionRepo.update(participaciones[i].id, { posicion: i + 1 });
+    return;
   }
 
-  const ganador = participaciones[0].usuario as any;
-  const perdedor = participaciones[1].usuario as any;
+  for (const p of participaciones) {
+    const usuario = p.usuario as any;
+    const esGanador = ganadores.some((g) => g.id === p.id);
 
-  await this.notificacionService.crear({
-    usuarioId: ganador.id,
-    tipo: TipoNotificacion.RETO_RESULTADO,
-    titulo: '¡Has ganado el reto! 🏆',
-    mensaje: `Has ganado a ${perdedor.nick ?? perdedor.nombre} con ${primera.porcentaje}% de acierto`,
-    prioridad: PrioridadNotificacion.MEDIA,
-  });
-
-  await this.notificacionService.crear({
-    usuarioId: perdedor.id,
-    tipo: TipoNotificacion.RETO_RESULTADO,
-    titulo: 'Reto finalizado',
-    mensaje: `${ganador.nick ?? ganador.nombre} ha ganado con ${primera.porcentaje}%. ¡Sigue practicando!`,
-    prioridad: PrioridadNotificacion.MEDIA,
-  });
-
-   await this.darPuntosPorReto(ganador.id, (reto.oposicion as any).id, 0, true);
-}
+    if (esGanador) {
+      const rival = participaciones.find((r) => r.id !== p.id);
+      const rivalUsuario = rival?.usuario as any;
+      await this.notificacionService.crear({
+        usuarioId: usuario.id,
+        tipo: TipoNotificacion.RETO_RESULTADO,
+        titulo: '¡Has ganado el reto! 🏆',
+        mensaje: rivalUsuario
+          ? `Has ganado a ${rivalUsuario.nick ?? rivalUsuario.nombre} con ${p.porcentaje}% de acierto`
+          : `Has terminado con ${p.porcentaje}% de acierto`,
+        prioridad: PrioridadNotificacion.MEDIA,
+      });
+      await this.darPuntosPorReto(usuario.id, (reto.oposicion as any).id, 0, true);
+    } else {
+      const ganador = ganadores[0]?.usuario as any;
+      await this.notificacionService.crear({
+        usuarioId: usuario.id,
+        tipo: TipoNotificacion.RETO_RESULTADO,
+        titulo: 'Reto finalizado',
+        mensaje: ganador
+          ? `${ganador.nick ?? ganador.nombre} ha ganado con ${mejor.porcentaje}%. ¡Sigue practicando!`
+          : `Has terminado con ${p.porcentaje}% de acierto. ¡Sigue practicando!`,
+        prioridad: PrioridadNotificacion.MEDIA,
+      });
+    }
+  }
 }
   
 
@@ -398,16 +450,49 @@ async completarReto(
   return participaciones;
 }
 
-  async getReto(retoId: string): Promise<Reto> {
+  async getReto(retoId: string, usuarioId: string): Promise<Reto> {
     const reto = await this.retoRepo.findOne({
       where: { id: retoId },
       relations: ['participaciones', 'participaciones.usuario', 'creador', 'tema', 'oposicion'],
     });
     if (!reto) throw new NotFoundException('Reto no encontrado');
+
+    const miParticipacion = reto.participaciones?.find(
+      (p) => (p.usuario as any)?.id === usuarioId,
+    );
+    const esCreador = reto.creador?.id === usuarioId;
+    const esParticipante = esCreador || !!miParticipacion;
+
+    // Los retos entre usuarios son privados: solo sus participantes pueden verlos.
+    if (reto.tipo === TipoReto.USUARIO && !esParticipante) {
+      throw new ForbiddenException('No tienes acceso a este reto');
+    }
+
+    // No exponer la respuesta correcta hasta que el usuario haya completado su participación.
+    if (!miParticipacion?.completado) {
+      reto.preguntas = (reto.preguntas ?? []).map((p: any) => {
+        const { correcta, ...resto } = p;
+        return resto;
+      });
+    }
+
     return this.enriquecerNivelesParticipantes(reto, (reto.oposicion as any).id);
   }
 
-  async getRanking(retoId: string): Promise<ParticipacionReto[]> {
+  async getRanking(retoId: string, usuarioId: string): Promise<ParticipacionReto[]> {
+    const reto = await this.retoRepo.findOne({
+      where: { id: retoId },
+      relations: ['participaciones', 'participaciones.usuario', 'creador'],
+    });
+    if (!reto) throw new NotFoundException('Reto no encontrado');
+
+    if (reto.tipo === TipoReto.USUARIO) {
+      const esParticipante =
+        reto.creador?.id === usuarioId ||
+        reto.participaciones?.some((p) => (p.usuario as any)?.id === usuarioId);
+      if (!esParticipante) throw new ForbiddenException('No tienes acceso a este reto');
+    }
+
     return this.participacionRepo.find({
       where: { reto: { id: retoId }, completado: true },
       relations: ['usuario'],
@@ -524,13 +609,23 @@ private async darPuntosPorReto(usuarioId: string, oposicionId: string, correctas
 
   if (puntosGanados === 0) return;
 
-  const nuevosPuntos = usuarioOposicion.puntos + puntosGanados;
-  const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(nuevosPuntos);
+  // ⭐ Incremento atómico a nivel de base de datos (evita perder puntos si dos
+  // actualizaciones concurrentes leen el mismo valor antes de escribir).
+  await this.usuarioOposicionRepo.increment(
+    { id: usuarioOposicion.id },
+    'puntos',
+    puntosGanados,
+  );
 
-  await this.usuarioOposicionRepo.update(usuarioOposicion.id, {
-    puntos: nuevosPuntos,
-    nivel: nuevoNivel,
+  const actualizado = await this.usuarioOposicionRepo.findOne({
+    where: { id: usuarioOposicion.id },
   });
+  if (!actualizado) return;
+
+  const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(actualizado.puntos);
+  if (nuevoNivel !== actualizado.nivel) {
+    await this.usuarioOposicionRepo.update(usuarioOposicion.id, { nivel: nuevoNivel });
+  }
 }
 
 async eliminarRetoUsuario(retoId: string, usuarioId: string): Promise<void> {
@@ -550,6 +645,14 @@ async eliminarRetoUsuario(retoId: string, usuarioId: string): Promise<void> {
   // ⭐ Solo bloquea si el usuario que cancela YA completó su parte
   if (miParticipacion?.completado) {
     throw new BadRequestException('No puedes cancelar un reto que ya has completado');
+  }
+
+  // ⭐ Evita la carrera cancelar/completar: si para cuando llegamos aquí el reto ya se
+  // cerró (p. ej. el rival completó justo antes), no lo borramos por debajo del cierre.
+  const retoActual = await this.retoRepo.findOne({ where: { id: retoId } });
+  if (!retoActual) return; // ya no existe, nada que cancelar
+  if (retoActual.estado === EstadoReto.COMPLETADO) {
+    throw new BadRequestException('Este reto ya se ha completado y no se puede cancelar');
   }
 
   await this.participacionRepo.delete({ reto: { id: retoId } as any });
