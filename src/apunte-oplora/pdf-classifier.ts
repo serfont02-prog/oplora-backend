@@ -306,9 +306,19 @@ export function clasificarDocumento(
   };
 
   // RECORRIDO PRINCIPAL
-  for (const pagina of paginas) {
-    const lineas = pagina.lineas;
+  // ⭐ Aplanamos las líneas de TODAS las páginas en un único array antes de recorrerlas.
+  // Antes se recorría página a página (for pagina -> for lineas de esa página), y la
+  // búsqueda del "]" que cierra un marcador [EJ|ID|ES|TR|RE|PR ...] solo miraba dentro
+  // de las líneas de la página en la que empezaba (`j + 1 < lineas.length` usaba el
+  // length de esa página). Si el marcador se abría cerca del final de una página y su
+  // texto continuaba en la siguiente, la búsqueda se quedaba sin líneas que mirar, el
+  // marcador se cerraba a la fuerza ahí mismo y el resto del texto (incluido el "]" real)
+  // aparecía suelto como párrafo normal en la página siguiente. Con un único array que
+  // cruza páginas, la búsqueda del cierre sigue funcionando aunque el salto de página
+  // caiga en mitad del contenido del marcador.
+  const lineas: LineaExtraida[] = paginas.flatMap((p) => p.lineas);
 
+  {
     for (let i = 0; i < lineas.length; i++) {
       const linea = lineas[i];
       contadorLineasEntrantes++;
@@ -324,7 +334,7 @@ export function clasificarDocumento(
       }
 
       // Ignorar portada (título gigante)
-      const esPrimeraPagina = pagina.pagina === 1;
+      const esPrimeraPagina = linea.pagina === 1;
       const esTextoMuyGrande = linea.fontSize >= fontSizeBase * 1.8;
       if (esPrimeraPagina && esTextoMuyGrande) {
         markSkip('portada');
@@ -342,12 +352,21 @@ export function clasificarDocumento(
         const key = matchMarcador[1].toUpperCase();
         const lineasContenido: string[] = [];
         const primerSegmento = (matchMarcador[2] || '').trim();
+        // ⭐ Texto que pueda venir DESPUÉS del "]" en la misma línea física de cierre.
+        // Antes se descartaba sin más, así que si en el PDF el cierre de la etiqueta y el
+        // inicio del párrafo siguiente caían en la misma línea (el propio "]Después de la
+        // etiqueta..."), ese texto desaparecía. Ahora lo guardamos y lo reinsertamos como
+        // una línea nueva justo a continuación, para que se procese como su propio párrafo
+        // (con su salto de línea) en vez de perderse o quedar pegado a otra cosa.
+        let restanteTrasCierre: string | null = null;
 
         let cerrado = primerSegmento.includes(']');
         if (cerrado) {
           const idxCierre = primerSegmento.indexOf(']');
           const trozo = primerSegmento.slice(0, idxCierre).trim();
           if (trozo) lineasContenido.push(trozo);
+          const restante = primerSegmento.slice(idxCierre + 1).trim();
+          if (restante) restanteTrasCierre = restante;
         } else if (primerSegmento) {
           lineasContenido.push(primerSegmento);
         }
@@ -364,12 +383,22 @@ export function clasificarDocumento(
               const idxCierre = siguienteTexto.indexOf(']');
               const trozo = siguienteTexto.slice(0, idxCierre).trim();
               if (trozo) lineasContenido.push(trozo);
+              const restante = siguienteTexto.slice(idxCierre + 1).trim();
+              if (restante) restanteTrasCierre = restante;
               cerrado = true;
             } else {
               lineasContenido.push(siguienteTexto);
             }
           }
           consumidas++;
+        }
+
+        // Si había texto tras el "]" en la línea de cierre, lo insertamos como una línea
+        // independiente inmediatamente después, para que el recorrido principal la procese
+        // como el inicio de un párrafo/bloque nuevo (respetando el salto de línea).
+        if (restanteTrasCierre) {
+          const lineaCierre = lineas[j];
+          lineas.splice(j + 1, 0, { ...lineaCierre, texto: restanteTrasCierre });
         }
 
         const tituloMap: Record<string, string> = {
@@ -501,9 +530,7 @@ export function clasificarDocumento(
         flushParrafo();
       }
     } // fin for lineas
-
-    // No cerramos párrafo al final de página para permitir continuidad entre páginas
-  } // fin for paginas
+  }
 
   // FLUSH FINAL
   flushParrafo();
