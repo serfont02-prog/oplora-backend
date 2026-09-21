@@ -271,12 +271,15 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
 
     for (let li = 0; li < (estructura.libros ?? []).length; li++) {
       const lData = estructura.libros![li];
-      const libro = await this.libroRepo.save(this.libroRepo.create({
+      // ⭐ El "as any" en el objeto de create() hace que TS no pueda inferir si save()
+      // devuelve una entidad o un array (ambigüedad de sobrecarga), así que forzamos
+      // el tipo del resultado explícitamente para poder acceder a `.id`.
+      const libro = (await this.libroRepo.save(this.libroRepo.create({
         orden: li + 1,
         numero: lData.numero,
         nombre: lData.nombre,
         versionLey: { id: versionId } as any,
-      } as any));
+      } as any))) as unknown as Libro;
       totalLibros++;
       gruposDeTitulos.push({ titulos: lData.titulos ?? [], libroId: libro.id });
     }
@@ -419,12 +422,12 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
   });
   const mapaLibroOrigenANuevo = new Map<string, string>();
   for (const libroOrigen of librosOrigen) {
-    const nuevoLibro = await this.libroRepo.save(this.libroRepo.create({
+    const nuevoLibro = (await this.libroRepo.save(this.libroRepo.create({
       orden: libroOrigen.orden,
       numero: libroOrigen.numero,
       nombre: libroOrigen.nombre,
       versionLey: { id: nuevaVersion.id } as any,
-    } as any));
+    } as any))) as unknown as Libro;
     mapaLibroOrigenANuevo.set(libroOrigen.id, nuevoLibro.id);
   }
 
