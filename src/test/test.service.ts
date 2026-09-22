@@ -659,21 +659,36 @@ async importarPorConvocatoria(
 
   let importadas = 0;
   const errores: string[] = [];
+  const enunciadosDeEsteLote = new Set<string>();
 
-  for (const p of preguntas) {
+  for (const [i, p] of preguntas.entries()) {
+    const etiqueta = `Fila ${i + 1} (Tema ${p?.temaNumero ?? '?'})`;
+
+    const errorValidacion = this.validarPreguntaImportada(p);
+    if (errorValidacion) {
+      errores.push(`${etiqueta}: ${errorValidacion}`);
+      continue;
+    }
+
     const tema = temas.find(t => t.numero === p.temaNumero);
 
     if (!tema) {
-      errores.push(`Tema ${p.temaNumero} no encontrado en esta convocatoria`);
+      errores.push(`${etiqueta}: tema no encontrado en esta convocatoria`);
       continue;
     }
 
-    // ⭐ Evitar duplicados: misma pregunta ya importada previamente
-    const existente = await this.preguntaRepo.findOne({ where: { enunciado: p.enunciado } });
-    if (existente) {
-      errores.push(`Pregunta duplicada omitida: "${p.enunciado.slice(0, 60)}..."`);
+    // ⭐ Evitar duplicados: dentro del mismo lote y contra preguntas ya existentes
+    const enunciadoNormalizado = p.enunciado.trim();
+    if (enunciadosDeEsteLote.has(enunciadoNormalizado)) {
+      errores.push(`${etiqueta}: pregunta duplicada dentro del propio archivo — "${enunciadoNormalizado.slice(0, 60)}..."`);
       continue;
     }
+    const existente = await this.preguntaRepo.findOne({ where: { enunciado: enunciadoNormalizado } });
+    if (existente) {
+      errores.push(`${etiqueta}: pregunta ya existente en el banco — "${enunciadoNormalizado.slice(0, 60)}..."`);
+      continue;
+    }
+    enunciadosDeEsteLote.add(enunciadoNormalizado);
 
     const pregunta = this.preguntaRepo.create({
       enunciado: p.enunciado,
@@ -730,21 +745,36 @@ async importarPorVersionLey(
 
   let importadas = 0;
   const errores: string[] = [];
+  const enunciadosDeEsteLote = new Set<string>();
 
-  for (const p of preguntas) {
+  for (const [i, p] of preguntas.entries()) {
+    const etiqueta = `Fila ${i + 1} (Art. ${p?.articuloNumero ?? '?'})`;
+
+    const errorValidacion = this.validarPreguntaImportada(p);
+    if (errorValidacion) {
+      errores.push(`${etiqueta}: ${errorValidacion}`);
+      continue;
+    }
+
     const articulo = articulos.find(a => a.numero === p.articuloNumero);
 
     if (!articulo) {
-      errores.push(`Artículo ${p.articuloNumero} no encontrado en esta versión de ley`);
+      errores.push(`${etiqueta}: artículo no encontrado en esta versión de ley`);
       continue;
     }
 
-    // ⭐ Evitar duplicados: misma pregunta ya importada previamente
-    const existente = await this.preguntaRepo.findOne({ where: { enunciado: p.enunciado } });
-    if (existente) {
-      errores.push(`Pregunta duplicada omitida: "${p.enunciado.slice(0, 60)}..."`);
+    // ⭐ Evitar duplicados: dentro del mismo lote y contra preguntas ya existentes
+    const enunciadoNormalizado = p.enunciado.trim();
+    if (enunciadosDeEsteLote.has(enunciadoNormalizado)) {
+      errores.push(`${etiqueta}: pregunta duplicada dentro del propio archivo — "${enunciadoNormalizado.slice(0, 60)}..."`);
       continue;
     }
+    const existente = await this.preguntaRepo.findOne({ where: { enunciado: enunciadoNormalizado } });
+    if (existente) {
+      errores.push(`${etiqueta}: pregunta ya existente en el banco — "${enunciadoNormalizado.slice(0, 60)}..."`);
+      continue;
+    }
+    enunciadosDeEsteLote.add(enunciadoNormalizado);
 
     const pregunta = this.preguntaRepo.create({
       enunciado: p.enunciado,
@@ -867,6 +897,44 @@ async generarRepasoInteligente(
     preguntas: [...payloadPrioritario, ...relleno].slice(0, numPreguntas),
     basadoEnHistorial: payloadPrioritario.length,
   };
+}
+
+/* =========================================================
+   ⭐ VALIDACIÓN DE PREGUNTAS IMPORTADAS
+   Se aplica a cualquier vía de importación (por convocatoria o
+   por versión de ley) para evitar que un JSON mal formado
+   corrompa el banco de preguntas en producción.
+========================================================= */
+private validarPreguntaImportada(p: any): string | null {
+  if (!p || typeof p !== 'object') return 'la pregunta no es un objeto válido';
+
+  if (typeof p.enunciado !== 'string' || !p.enunciado.trim()) {
+    return 'falta el enunciado o está vacío';
+  }
+
+  if (!Array.isArray(p.opciones) || (p.opciones.length !== 3 && p.opciones.length !== 4)) {
+    return `el número de opciones debe ser 3 o 4 (recibido: ${Array.isArray(p.opciones) ? p.opciones.length : 'no es un array'})`;
+  }
+
+  if (p.opciones.some((o: any) => typeof o !== 'string' || !o.trim())) {
+    return 'hay alguna opción vacía o que no es texto';
+  }
+
+  const opcionesNormalizadas = p.opciones.map((o: string) => o.trim().toLowerCase());
+  if (new Set(opcionesNormalizadas).size !== opcionesNormalizadas.length) {
+    return 'hay opciones repetidas';
+  }
+
+  if (
+    typeof p.correcta !== 'number' ||
+    !Number.isInteger(p.correcta) ||
+    p.correcta < 0 ||
+    p.correcta >= p.opciones.length
+  ) {
+    return `el índice "correcta" (${p.correcta}) está fuera de rango para ${p.opciones.length} opciones`;
+  }
+
+  return null;
 }
 
 async verificarLimiteTest(
