@@ -2,10 +2,13 @@ import {
   Controller,
   Post,
   Get,
+  Patch,
+  Delete,
   Body,
   UseGuards,
   Request,
   Param,
+  Query,
 } from '@nestjs/common';
 
 import { TestService } from './test.service';
@@ -181,4 +184,39 @@ importarPorVersionLey(
 ) {
   return this.testService.importarPorVersionLey(versionLeyId, preguntas);
 }
+
+  /* =========================================================
+     GESTIÓN DEL BANCO DE PREGUNTAS (listar / editar / eliminar)
+  ========================================================= */
+
+  @Get('banco/:convocatoriaId')
+  @UseGuards(JwtAuthGuard)
+  listarBanco(
+    @Param('convocatoriaId') convocatoriaId: string,
+    @Query('temaId') temaId?: string,
+    @Query('pagina') pagina?: string,
+    @Query('porPagina') porPagina?: string,
+  ) {
+    return this.testService.listarPreguntasBanco(
+      convocatoriaId,
+      temaId,
+      pagina ? Number(pagina) : 1,
+      porPagina ? Number(porPagina) : 30,
+    );
+  }
+
+  @Patch('banco/:preguntaId')
+  @UseGuards(JwtAuthGuard)
+  actualizarBanco(
+    @Param('preguntaId') preguntaId: string,
+    @Body() cambios: any,
+  ) {
+    return this.testService.actualizarPreguntaBanco(preguntaId, cambios);
+  }
+
+  @Delete('banco/:preguntaId')
+  @UseGuards(JwtAuthGuard)
+  eliminarBanco(@Param('preguntaId') preguntaId: string) {
+    return this.testService.eliminarPreguntaBanco(preguntaId);
+  }
 }

@@ -900,6 +900,95 @@ async generarRepasoInteligente(
 }
 
 /* =========================================================
+   ⭐ GESTIÓN DEL BANCO DE PREGUNTAS (listar / editar / eliminar)
+   Permite mantener el banco entre convocatorias sin tener que
+   borrarlo entero cuando cambia el contenido de un tema.
+========================================================= */
+async listarPreguntasBanco(
+  convocatoriaId: string,
+  temaId?: string,
+  pagina = 1,
+  porPagina = 30,
+): Promise<{ preguntas: any[]; total: number; pagina: number; totalPaginas: number }> {
+
+  let query = this.preguntaRepo
+    .createQueryBuilder('pregunta')
+    .leftJoinAndSelect('pregunta.temas', 'tema')
+    .leftJoinAndSelect('pregunta.articulos', 'articulo')
+    .leftJoin('tema.convocatoria', 'convocatoria')
+    .where('convocatoria.id = :convocatoriaId', { convocatoriaId })
+    .orderBy('pregunta.creadoEn', 'DESC');
+
+  if (temaId) {
+    query = query.andWhere('tema.id = :temaId', { temaId });
+  }
+
+  const total = await query.getCount();
+  const preguntas = await query
+    .skip((pagina - 1) * porPagina)
+    .take(porPagina)
+    .getMany();
+
+  return {
+    preguntas,
+    total,
+    pagina,
+    totalPaginas: Math.max(1, Math.ceil(total / porPagina)),
+  };
+}
+
+async actualizarPreguntaBanco(preguntaId: string, cambios: {
+  enunciado?: string;
+  opciones?: string[];
+  correcta?: number;
+  explicacion?: string;
+  dificultad?: number;
+  activa?: boolean;
+}): Promise<PreguntaTest> {
+  const pregunta = await this.preguntaRepo.findOne({ where: { id: preguntaId } });
+  if (!pregunta) throw new NotFoundException('Pregunta no encontrada');
+
+  // Si se tocan enunciado/opciones/correcta, validamos el resultado final igual que en la importación
+  const propuesta = {
+    enunciado: cambios.enunciado ?? pregunta.enunciado,
+    opciones: cambios.opciones ?? pregunta.opciones,
+    correcta: cambios.correcta ?? pregunta.correcta,
+  };
+  if (cambios.enunciado !== undefined || cambios.opciones !== undefined || cambios.correcta !== undefined) {
+    const errorValidacion = this.validarPreguntaImportada(propuesta);
+    if (errorValidacion) throw new ForbiddenException(`Cambios inválidos: ${errorValidacion}`);
+  }
+
+  await this.preguntaRepo.update(preguntaId, {
+    ...(cambios.enunciado !== undefined && { enunciado: cambios.enunciado.trim() }),
+    ...(cambios.opciones !== undefined && { opciones: cambios.opciones }),
+    ...(cambios.correcta !== undefined && { correcta: cambios.correcta }),
+    ...(cambios.explicacion !== undefined && { explicacion: cambios.explicacion }),
+    ...(cambios.dificultad !== undefined && { dificultad: cambios.dificultad }),
+    ...(cambios.activa !== undefined && { activa: cambios.activa }),
+  });
+
+  return this.preguntaRepo.findOne({ where: { id: preguntaId }, relations: ['temas', 'articulos'] }) as Promise<PreguntaTest>;
+}
+
+async eliminarPreguntaBanco(preguntaId: string): Promise<{ eliminada: boolean }> {
+  const pregunta = await this.preguntaRepo.findOne({ where: { id: preguntaId } });
+  if (!pregunta) throw new NotFoundException('Pregunta no encontrada');
+
+  // Limpiamos primero las relaciones M2M (temas/articulos) para evitar
+  // violaciones de FK en las tablas intermedias antes de borrar la fila.
+  await this.preguntaRepo.createQueryBuilder().relation(PreguntaTest, 'temas').of(preguntaId).remove(
+    (await this.preguntaRepo.findOne({ where: { id: preguntaId }, relations: ['temas'] }))?.temas ?? [],
+  );
+  await this.preguntaRepo.createQueryBuilder().relation(PreguntaTest, 'articulos').of(preguntaId).remove(
+    (await this.preguntaRepo.findOne({ where: { id: preguntaId }, relations: ['articulos'] }))?.articulos ?? [],
+  );
+
+  await this.preguntaRepo.delete(preguntaId);
+  return { eliminada: true };
+}
+
+/* =========================================================
    ⭐ VALIDACIÓN DE PREGUNTAS IMPORTADAS
    Se aplica a cualquier vía de importación (por convocatoria o
    por versión de ley) para evitar que un JSON mal formado
