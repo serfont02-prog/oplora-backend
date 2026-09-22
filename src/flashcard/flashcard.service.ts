@@ -35,6 +35,31 @@ export class FlashcardService {
 
   // ─── CRUD FLASHCARDS ─────────────────────────────────────
 
+  // ⭐ Antes esto no validaba nada (ni tipo/nivel válidos, ni pregunta/respuesta vacías), no
+  // detectaba duplicados dentro del propio lote ni contra el banco existente, y un solo objeto
+  // mal formado en 200 tiraba abajo TODO el import con un error genérico de TypeORM sin decir
+  // cuál era la fila problemática — exactamente los mismos fallos que ya se corrigieron en la
+  // importación de preguntas de test (TestService.importarPorConvocatoria/validarPreguntaImportada).
+  // Se replica aquí el mismo patrón: validar fila a fila, seguir con las demás si una falla,
+  // y devolver un desglose de qué se importó y qué no (y por qué).
+  private validarFlashcardImportada(fc: any): string | null {
+    if (!fc || typeof fc !== 'object') return 'la flashcard no es un objeto válido';
+    const tiposValidos = Object.values(TipoFlashcard) as string[];
+    if (typeof fc.tipo !== 'string' || !tiposValidos.includes(fc.tipo)) {
+      return `"tipo" inválido (recibido: ${JSON.stringify(fc.tipo)}); debe ser uno de: ${tiposValidos.join(', ')}`;
+    }
+    const nivelesValidos = Object.values(NivelFlashcard) as string[];
+    if (fc.nivel !== undefined && !nivelesValidos.includes(fc.nivel)) {
+      return `"nivel" inválido (recibido: ${JSON.stringify(fc.nivel)}); debe ser uno de: ${nivelesValidos.join(', ')}`;
+    }
+    if (typeof fc.pregunta !== 'string' || !fc.pregunta.trim()) return 'falta "pregunta" o está vacía';
+    if (typeof fc.respuesta !== 'string' || !fc.respuesta.trim()) return 'falta "respuesta" o está vacía';
+    if ((fc.tipo === TipoFlashcard.VF || fc.tipo === TipoFlashcard.TRAMPA) && !['true', 'false'].includes(fc.respuesta.trim().toLowerCase())) {
+      return `"respuesta" debe ser "true" o "false" para el tipo "${fc.tipo}" (recibido: ${JSON.stringify(fc.respuesta)})`;
+    }
+    return null;
+  }
+
   async importar(flashcards: {
     tipo: TipoFlashcard;
     nivel: NivelFlashcard;
@@ -45,22 +70,55 @@ export class FlashcardService {
     articuloId?: string;
     temaId?: string;
     oposicionId?: string;
-  }[]): Promise<{ importadas: number }> {
-    for (const fc of flashcards) {
-      await this.fcRepo.save(this.fcRepo.create({
-        tipo: fc.tipo,
-        nivel: fc.nivel,
-        pregunta: fc.pregunta,
-        respuesta: fc.respuesta,
-        explicacion: fc.explicacion,
-        esParaDuelo: fc.esParaDuelo ?? (fc.tipo === TipoFlashcard.VF || fc.tipo === TipoFlashcard.ARTICULO),
-        articulo: fc.articuloId ? { id: fc.articuloId } as any : undefined,
-        tema: fc.temaId ? { id: fc.temaId } as any : undefined,
-        oposicion: fc.oposicionId ? { id: fc.oposicionId } as any : undefined,
-        creadaPor: 'admin',
-      }));
+  }[]): Promise<{ importadas: number; errores: string[]; sinVincular: number }> {
+    const errores: string[] = [];
+    const preguntasDeEsteLote = new Set<string>();
+    let importadas = 0;
+    let sinVincular = 0;
+
+    for (const [i, fc] of flashcards.entries()) {
+      const etiqueta = `Fila ${i + 1}`;
+      const errorValidacion = this.validarFlashcardImportada(fc);
+      if (errorValidacion) {
+        errores.push(`${etiqueta}: ${errorValidacion}`);
+        continue;
+      }
+
+      const preguntaNormalizada = fc.pregunta.trim().toLowerCase();
+      if (preguntasDeEsteLote.has(preguntaNormalizada)) {
+        errores.push(`${etiqueta}: flashcard duplicada dentro del propio lote — "${fc.pregunta.trim().slice(0, 60)}..."`);
+        continue;
+      }
+      const existente = await this.fcRepo.findOne({ where: { pregunta: fc.pregunta.trim() } });
+      if (existente) {
+        errores.push(`${etiqueta}: ya existe una flashcard con esa pregunta en el banco — "${fc.pregunta.trim().slice(0, 60)}..."`);
+        continue;
+      }
+      preguntasDeEsteLote.add(preguntaNormalizada);
+
+      try {
+        await this.fcRepo.save(this.fcRepo.create({
+          tipo: fc.tipo,
+          nivel: fc.nivel ?? NivelFlashcard.BASICO,
+          pregunta: fc.pregunta.trim(),
+          respuesta: fc.respuesta.trim(),
+          explicacion: fc.explicacion,
+          esParaDuelo: fc.esParaDuelo ?? (fc.tipo === TipoFlashcard.VF || fc.tipo === TipoFlashcard.ARTICULO),
+          articulo: fc.articuloId ? { id: fc.articuloId } as any : undefined,
+          tema: fc.temaId ? { id: fc.temaId } as any : undefined,
+          oposicion: fc.oposicionId ? { id: fc.oposicionId } as any : undefined,
+          creadaPor: 'admin',
+        }));
+        importadas++;
+        if (!fc.temaId && !fc.articuloId) sinVincular++;
+      } catch (e: any) {
+        // ⭐ Lo más habitual aquí es un temaId/articuloId/oposicionId con un UUID que no existe
+        // (violación de FK) — antes esto tiraba abajo el resto del lote entero sin guardar nada.
+        errores.push(`${etiqueta}: error al guardar — ${e?.message ?? 'error desconocido'}`);
+      }
     }
-    return { importadas: flashcards.length };
+
+    return { importadas, errores, sinVincular };
   }
 
   async findByArticulo(articuloId: string): Promise<Flashcard[]> {

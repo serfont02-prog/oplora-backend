@@ -159,6 +159,19 @@ function esTodoMayusculas(texto: string): boolean {
   return soloLetras === soloLetras.toUpperCase();
 }
 
+// ⭐ El extractor (pdf-extractor.ts) parte deliberadamente una misma línea visual del PDF en
+// varios objetos LineaExtraida cuando cambia la negrita a media línea (para no perder, p.ej.,
+// una etiqueta corta en negrita al final de una frase corrida). Eso significa que un tramo en
+// negrita puede ser: (a) una línea completa por sí misma (un mini-subtítulo real, tipo
+// "Concepto"), o (b) solo un fragmento de una frase más larga que sigue en líneas hermanas NO
+// en negrita a la MISMA altura (mismo "y" y misma página). El clasificador solo debe tratar el
+// caso (a) como el inicio de un párrafo en negrita aparte; el caso (b) debe fusionarse sin más
+// en el flujo normal del párrafo, o la frase queda partida en 2-3 bloques con puntuación suelta.
+function compartenLineaFisica(a: LineaExtraida | undefined, b: LineaExtraida | undefined): boolean {
+  if (!a || !b) return false;
+  return a.pagina === b.pagina && Math.abs(a.y - b.y) <= 2;
+}
+
 // =====================================================
 // DETECCIÓN DE TÍTULOS (niveles)
 // =====================================================
@@ -298,6 +311,19 @@ export function clasificarDocumento(
   const tituloState: { actual: BloqueTitulo | null } = { actual: null };
   let destacadoAbierto: { titulo: string; contenido: Bloque[]; idInterno: number } | null = null;
 
+  // ⭐ LISTA "INVISIBLE": algunos documentos (p.ej. Tema 1) usan viñetas de fuente
+  // Wingdings/Symbol que, al exportar a PDF, no dejan NINGÚN carácter en la capa de texto
+  // (ni siquiera el código crudo que ya cubre REGEX_BULLET) — la línea del ítem llega sin
+  // más marca que su propia indentación (x mayor que el margen del párrafo introductorio).
+  // Sin esto, cada ítem se colaba como su propio párrafo suelto (o se fusionaba mal con la
+  // frase introductoria), perdiendo por completo la estructura de lista.
+  const UMBRAL_INDENT_LISTA_INVISIBLE = 8;
+  let bufferListaInvisibleItems: string[] = [];
+  // x de la línea introductoria (termina en ":") tras la que se espera una lista invisible.
+  let xIntroListaInvisible: number | null = null;
+  // x real de los ítems ya detectados de la lista invisible en curso.
+  let xListaInvisibleActiva: number | null = null;
+
   // Debug counters
   let contadorLineasEntrantes = 0;
   let contadorSaltadas = 0;
@@ -346,10 +372,20 @@ export function clasificarDocumento(
     ultimoTipo = 'lista';
   };
 
+  const flushListaInvisible = () => {
+    if (bufferListaInvisibleItems.length === 0) return;
+    añadirBloque({ id: idCounter++, tipo: 'lista', ordenada: false, items: bufferListaInvisibleItems.map(normalizarEspacios) });
+    bufferListaInvisibleItems = [];
+    xListaInvisibleActiva = null;
+    xIntroListaInvisible = null;
+    ultimoTipo = 'lista';
+  };
+
   const cerrarDestacado = () => {
     if (!destacadoAbierto) return;
     flushParrafo();
     flushLista();
+    flushListaInvisible();
     bloques.push({ id: destacadoAbierto.idInterno, tipo: 'destacado', titulo: destacadoAbierto.titulo, contenido: destacadoAbierto.contenido });
     destacadoAbierto = null;
   };
@@ -534,10 +570,36 @@ export function clasificarDocumento(
 
         flushParrafo();
         flushLista();
+        flushListaInvisible();
         cerrarDestacado();
 
-        // cada línea original se conserva como su propio párrafo dentro de la caja
-        const contenidoBloques: Bloque[] = lineasContenido
+        // ⭐ Dentro de una caja [ES ...] cada ítem suele venir en 2-3 líneas físicas propias:
+        // la viñeta ("", código crudo de Wingdings que SÍ sobrevive como carácter,
+        // a diferencia del caso "invisible" de la lista de fuera de estas cajas), la
+        // etiqueta ("Derecho objetivo:") y su continuación ("conjunto de normas."). Antes
+        // cada una de esas líneas se conservaba como su propio párrafo suelto dentro de la
+        // caja, así que un ítem de "Etiqueta: definición." salía partido en 2-3 líneas
+        // (incluida una con solo el carácter de la viñeta). Aquí quitamos las líneas que son
+        // solo el carácter de viñeta y fusionamos una etiqueta terminada en ":" con la línea
+        // que la sigue, para que cada ítem quede como un único párrafo "Etiqueta: definición.".
+        const lineasSinViñetasSueltas = lineasContenido
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0)
+          .filter((l) => !/^[•▪◦·●○■□▶►‣∙]$/.test(l));
+        // ⭐ Más general: un ítem puede venir partido en más de 2 líneas físicas (p.ej. una
+        // frase en negrita a caballo entre líneas, "Derecho objetivo equivale a" + "norma
+        // jurídica" + "."), no solo el caso "Etiqueta:" + continuación. En vez de fusionar
+        // solo el caso ":", volvemos a unir TODO el contenido en un único texto y lo
+        // recortamos por frase (tras cada punto, antes de la siguiente mayúscula/dígito),
+        // igual que ya se hace con el texto normal fuera de estas cajas.
+        const textoUnido = normalizarEspacios(lineasSinViñetasSueltas.join(' '));
+        const lineasFusionadas: string[] = textoUnido
+          .split(/(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÜÑ0-9¿¡])/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        // cada línea (ya fusionada por ítem) se conserva como su propio párrafo dentro de la caja
+        const contenidoBloques: Bloque[] = lineasFusionadas
           .filter(Boolean)
           .map((linea) => ({ id: idCounter++, tipo: 'parrafo' as const, texto: normalizarEspacios(linea) }));
 
@@ -557,6 +619,7 @@ export function clasificarDocumento(
       if (esTituloOrdinal(linea)) {
         flushParrafo();
         flushLista();
+        flushListaInvisible();
         cerrarDestacado();
         añadirTitulo(texto, 2); // nivel 2, mismo peso visual que "1.1."
         if (DEBUG) console.debug('TITULO_ORDINAL', { texto });
@@ -567,6 +630,7 @@ export function clasificarDocumento(
       if (esTituloNivel1(linea, fontSizeBase)) {
         flushParrafo();
         flushLista();
+        flushListaInvisible();
         cerrarDestacado();
         añadirTitulo(texto, 1);
         if (DEBUG) console.debug('TITULO1', { texto });
@@ -577,6 +641,7 @@ export function clasificarDocumento(
       if (esTituloNivel2(linea, fontSizeBase)) {
         flushParrafo();
         flushLista();
+        flushListaInvisible();
         cerrarDestacado();
         añadirTitulo(texto, 2);
         if (DEBUG) console.debug('TITULO2', { texto });
@@ -588,6 +653,7 @@ export function clasificarDocumento(
       if (REGEX_SUBAPARTADO_LETRA.test(texto)) {
         flushParrafo();
         flushLista();
+        flushListaInvisible();
         añadirBloque({ id: idCounter++, tipo: 'parrafo', texto });
         ultimoTipo = 'parrafo';
         if (DEBUG) console.debug('SUBAPARTADO como parrafo (salto)', { texto });
@@ -599,6 +665,7 @@ export function clasificarDocumento(
       if (matchArticulo) {
         flushParrafo();
         flushLista();
+        flushListaInvisible();
         añadirBloque({ id: idCounter++, tipo: 'articulo_legal', numero: matchArticulo[1], texto });
         ultimoTipo = 'titulo';
         if (DEBUG) console.debug('ARTICULO', { numero: matchArticulo[1], texto });
@@ -610,6 +677,7 @@ export function clasificarDocumento(
       if (esBulletLinea) {
         flushParrafo();
         if (bufferListaItems.length > 0 && bufferListaOrdenada) flushLista();
+        flushListaInvisible();
         bufferListaOrdenada = false;
         bufferListaItems.push(limpiarBullet(texto));
         ultimaXBullet = typeof linea.x === 'number' ? linea.x : null;
@@ -621,6 +689,7 @@ export function clasificarDocumento(
       // LISTAS NUMERADAS
       if (esListaNumerada(texto)) {
         if (bufferListaItems.length > 0 && !bufferListaOrdenada) flushLista();
+        flushListaInvisible();
         flushParrafo();
         bufferListaOrdenada = true;
         bufferListaItems.push(limpiarNumeroLista(texto));
@@ -641,6 +710,7 @@ export function clasificarDocumento(
       // CERRAR LISTA SI EMPIEZA PÁRRAFO
       if (bufferListaItems.length > 0) {
         flushLista();
+        flushListaInvisible();
       }
 
       // CONTINUACIÓN (ajuste de línea) DE UN TÍTULO LARGO
@@ -677,22 +747,76 @@ export function clasificarDocumento(
         }
       }
 
+      // LISTA INVISIBLE (ver declaración de bufferListaInvisibleItems / UMBRAL más arriba):
+      // continuación o inicio de una lista cuyas viñetas no dejaron carácter en el PDF.
+      if (
+        typeof linea.x === 'number' &&
+        !esTituloEstaLinea &&
+        !REGEX_SUBAPARTADO_LETRA.test(texto) &&
+        !matchArticulo
+      ) {
+        if (xListaInvisibleActiva !== null && bufferListaInvisibleItems.length > 0) {
+          if (Math.abs(linea.x - xListaInvisibleActiva) <= 3) {
+            bufferListaInvisibleItems.push(texto);
+            ultimoTipo = 'lista';
+            if (DEBUG) console.debug('LISTA_INVISIBLE_ITEM', { texto });
+            continue;
+          } else if (linea.x > xListaInvisibleActiva + 3) {
+            const idx = bufferListaInvisibleItems.length - 1;
+            bufferListaInvisibleItems[idx] = normalizarEspacios(bufferListaInvisibleItems[idx] + ' ' + texto);
+            if (DEBUG) console.debug('LISTA_INVISIBLE_CONTINUACION', { texto });
+            continue;
+          } else {
+            // vuelve a un x menor o igual al del cuerpo: la lista invisible ha terminado
+            flushListaInvisible();
+          }
+        } else if (
+          xIntroListaInvisible !== null &&
+          linea.x > xIntroListaInvisible + UMBRAL_INDENT_LISTA_INVISIBLE
+        ) {
+          bufferListaInvisibleItems.push(texto);
+          xListaInvisibleActiva = linea.x;
+          xIntroListaInvisible = null;
+          ultimoTipo = 'lista';
+          if (DEBUG) console.debug('LISTA_INVISIBLE_INICIO', { texto });
+          continue;
+        } else if (xIntroListaInvisible !== null) {
+          // la línea que sigue a la intro no está más indentada: no era una lista invisible
+          xIntroListaInvisible = null;
+        }
+      }
+
       // TEXTO EN NEGRITA (mini-subtítulo tipo "Concepto", o una frase entera en negrita)
       // ⭐ El buffer de párrafo normal solo corta con un punto y aparte, así que una línea
       // corta sin punto (un mini-encabezado como "Concepto") se quedaba pegada al párrafo
       // siguiente, perdiendo su salto de línea, y además la negrita del PDF nunca llegaba
-      // al frontend. Si la línea viene en negrita la acumulamos en su propio buffer
-      // (cerrando antes cualquier párrafo normal pendiente); mientras las líneas siguientes
+      // al frontend. Si la línea viene en negrita Y no hay ningún párrafo normal ya empezado
+      // (ver más abajo), la acumulamos en su propio buffer; mientras las líneas siguientes
       // sigan en negrita se van sumando a ese MISMO bloque, para que una frase en negrita
       // que ocupa dos o más líneas por el ajuste de línea normal del PDF salga seguida, sin
       // saltos de línea de más. El bloque se cierra en cuanto aparece una línea que ya no
       // es negrita (ver flushParrafo, que cierra ambos buffers).
+      // ⭐ PERO: si ya hay un párrafo normal EN CURSO (bufferParrafo no vacío, es decir, la
+      // frase empezó en texto normal y aún no ha cerrado con un punto), un tramo en negrita
+      // que llega ahora es solo ÉNFASIS dentro de esa misma frase (p.ej. "El Derecho puede
+      // definirse como el **conjunto de normas...**", donde la parte en negrita puede incluso
+      // ocupar varias líneas de ajuste). Antes esto abría/cerraba un bloque de párrafo en
+      // negrita aparte, partiendo una única frase en 2-3 bloques (con puntuación suelta como
+      // un "." solo en su propio bloque). Ahora, en ese caso, el tramo se anexa directamente
+      // al párrafo normal en curso (perdiendo el marcado de negrita, pero conservando la
+      // frase como un único párrafo), y dejamos que el cierre por punto de más abajo actúe
+      // con normalidad sobre ese párrafo.
       if (linea.bold) {
-        if (bufferParrafoNegrita.length === 0) flushParrafo();
-        bufferParrafoNegrita.push(texto);
-        ultimoTipo = 'parrafo';
-        if (DEBUG) console.debug('NEGRITA_ACUMULADA', { texto });
-        continue;
+        const yaHayParrafoNormalEnCurso = bufferParrafo.length > 0 && bufferParrafoNegrita.length === 0;
+        if (!yaHayParrafoNormalEnCurso) {
+          if (bufferParrafoNegrita.length === 0) flushParrafo();
+          bufferParrafoNegrita.push(texto);
+          ultimoTipo = 'parrafo';
+          if (DEBUG) console.debug('NEGRITA_ACUMULADA', { texto });
+          continue;
+        }
+        // yaHayParrafoNormalEnCurso: cae al bloque de PÁRRAFO normal de más abajo (énfasis
+        // dentro de la misma frase), sin pasar por el buffer de negrita.
       }
       if (bufferParrafoNegrita.length > 0) flushParrafoNegrita();
 
@@ -700,15 +824,40 @@ export function clasificarDocumento(
       bufferParrafo.push(texto);
       ultimoTipo = 'parrafo';
 
-      // Cierre de párrafo: punto y aparte, o dos puntos al final de línea.
+      // Cierre de párrafo: punto y aparte, o dos puntos al final de línea cuando lo que
+      // sigue es realmente una lista.
       // ⭐ Una línea como "La Constitución Española es:" iba directa al buffer (no acaba
       // en punto) y se quedaba pegada a lo que viniera después hasta el siguiente punto
       // final, perdiendo el salto de línea justo tras los ":". Los dos puntos ya anuncian
-      // el fin de esa frase (lo que sigue es la lista/explicación), así que cortamos ahí
-      // también.
-      const termina = /[.:]\s*$/.test(texto);
+      // el fin de esa frase cuando anteceden a una lista, así que cortamos ahí también.
+      // ⭐ Pero un ":" seguido de una frase corrida (sin viñetas ni numeración, solo texto
+      // separado por comas o punto y coma, p.ej. "...entre ellas: nacionalidad, inmigración,
+      // ...") NO es el final del párrafo — es solo puntuación dentro de la misma frase. Antes
+      // se cortaba igualmente en CUALQUIER ":", partiendo esa frase en dos bloques con un
+      // salto de línea artificial en medio. Ahora solo tratamos el ":" como cierre cuando la
+      // línea siguiente es de verdad el inicio de una lista (viñeta o numerada); un punto
+      // final "." sigue cerrando siempre, sea lo que sea lo que venga después.
+      const terminaPunto = /\.\s*$/.test(texto);
+      const terminaDosPuntos = /:\s*$/.test(texto);
+      const siguienteEsInicioDeLista =
+        !!siguiente && (esBullet(siguiente.texto.trim()) || esListaNumerada(siguiente.texto.trim()));
+      // ⭐ Además de una lista con viñeta real, los ":" también pueden anunciar una lista
+      // INVISIBLE (ver más arriba): la línea siguiente no lleva ningún carácter de viñeta,
+      // pero está más indentada que esta línea introductoria — señal de que el PDF perdió
+      // el glifo de la viñeta en la extracción de texto, no de que sea una frase corrida.
+      const siguienteParaceInicioListaInvisible =
+        !!siguiente &&
+        !siguienteEsInicioDeLista &&
+        typeof linea.x === 'number' &&
+        typeof siguiente.x === 'number' &&
+        siguiente.x > linea.x + UMBRAL_INDENT_LISTA_INVISIBLE;
+      const termina =
+        terminaPunto || (terminaDosPuntos && (siguienteEsInicioDeLista || siguienteParaceInicioListaInvisible));
       if (termina) {
         flushParrafo();
+        if (terminaDosPuntos && siguienteParaceInicioListaInvisible && typeof linea.x === 'number') {
+          xIntroListaInvisible = linea.x;
+        }
       }
     } // fin for lineas
   }
@@ -716,6 +865,7 @@ export function clasificarDocumento(
   // FLUSH FINAL
   flushParrafo();
   flushLista();
+  flushListaInvisible();
   cerrarDestacado();
 
   if (DEBUG) {
