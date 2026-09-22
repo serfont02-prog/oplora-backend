@@ -157,6 +157,15 @@ export class Convocatoria {
   @Column({ type: 'text', nullable: true })
   descripcionAdicional: string;
 
+  // ── Nº de opciones de respuesta del examen tipo test de ESTA convocatoria ──
+  // Puede variar entre convocatorias de una misma oposición (esta puede ser de
+  // 3 y la siguiente de 4). Las preguntas vinculadas a artículo se guardan con
+  // un "pool" de 4 opciones (1 correcta + 3 distractoras) y se recortan en
+  // tiempo de generación de test según este valor. Las preguntas por tema no
+  // se ven afectadas por este campo.
+  @Column({ type: 'int', nullable: true })
+  numOpcionesTest: number | null;
+
   @ManyToOne(() => Oposicion, (o) => o.convocatorias)
   oposicion: Oposicion;
 

@@ -175,6 +175,7 @@ export class ConvocatoriaService {
     fasesAdicionales: dto.fasesAdicionales as any,
     puestos: dto.puestos as any,
     bloquesTemario: dto.bloquesTemario as any,
+    numOpcionesTest: dto.numOpcionesTest ?? null,
     oposicion: { id: dto.oposicionId } as any,
   });
 
@@ -210,6 +211,7 @@ private async actualizarEstadoOposicion(oposicionId: string): Promise<void> {
   // Convertir cadenas vacías en null para campos numéricos
   if (payload.numeroSolicitudes === '' as any) payload.numeroSolicitudes = null;
   if (payload.numeroPresentados === '' as any) payload.numeroPresentados = null;
+  if (payload.numOpcionesTest === '' as any) payload.numOpcionesTest = null;
 
   await this.convocatoriaRepo.update(id, payload);
   const convocatoria = await this.findOne(id);

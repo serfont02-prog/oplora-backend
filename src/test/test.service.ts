@@ -13,6 +13,42 @@ import { resetearConsumosSiEsNuevoDia } from '../common/helpers/consumo.helper';
 import { ConfiguracionService } from '../config/configuracion.service';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 
+/**
+ * Recorta el pool de opciones de una pregunta vinculada a artículo (autoradas
+ * con 4 opciones: 1 correcta + 3 distractoras) al número de opciones que use
+ * la convocatoria activa del usuario (numOpcionesTest en Convocatoria).
+ * No muta la fila guardada: opera sobre una copia y devuelve un nuevo índice
+ * "correcta" recalculado tras el recorte + reordenado aleatorio.
+ * Si numOpciones es null/undefined o >= opciones.length, devuelve tal cual.
+ */
+function recortarOpcionesArticulo(
+  opciones: string[],
+  correcta: number,
+  numOpciones?: number | null,
+): { opciones: string[]; correcta: number } {
+  if (!numOpciones || numOpciones >= opciones.length || numOpciones < 2) {
+    return { opciones, correcta };
+  }
+
+  const correctaTexto = opciones[correcta];
+  const distractores = opciones.filter((_, i) => i !== correcta);
+
+  // Barajar distractores y quedarnos con (numOpciones - 1)
+  for (let i = distractores.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [distractores[i], distractores[j]] = [distractores[j], distractores[i]];
+  }
+  const seleccion = [correctaTexto, ...distractores.slice(0, numOpciones - 1)];
+
+  // Barajar posición final para no dejar siempre la correcta en el índice 0
+  for (let i = seleccion.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [seleccion[i], seleccion[j]] = [seleccion[j], seleccion[i]];
+  }
+
+  return { opciones: seleccion, correcta: seleccion.indexOf(correctaTexto) };
+}
+
 export interface Pregunta {
   id?: string;
 
@@ -174,12 +210,14 @@ if (modo === 'primer_reto') {
 
         // Resolver la convocatoria activa del usuario para esta oposición (si la tenemos)
     let convocatoriaActivaId: string | undefined;
+    let numOpcionesTestActiva: number | null | undefined;
     if (usuarioId) {
       const uo = await this.usuarioOposicionRepo.findOne({
         where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
         relations: ['convocatoriaActiva'],
       });
       convocatoriaActivaId = uo?.convocatoriaActiva?.id;
+      numOpcionesTestActiva = uo?.convocatoriaActiva?.numOpcionesTest;
     }
 
     /* =========================================================
@@ -271,18 +309,27 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
   return true;
 }).slice(0, numPreguntas);
 
-    return preguntas.map((p) => ({
+    return preguntas.map((p) => {
+      // El recorte de opciones (4→N) solo aplica a preguntas vinculadas a
+      // artículo (banco compartido entre oposiciones/convocatorias). Las
+      // preguntas por tema mantienen siempre sus opciones tal cual.
+      const esArticulo = !!p.articulos?.length;
+      const { opciones, correcta } = esArticulo
+        ? recortarOpcionesArticulo(p.opciones, p.correcta, numOpcionesTestActiva)
+        : { opciones: p.opciones, correcta: p.correcta };
 
-      id: p.id,
-      enunciado: p.enunciado,
-      opciones: p.opciones,
-      correcta: p.correcta,
-      explicacion: p.explicacion ?? '',
-      articulo: p.articulos?.[0] ? `Art. ${p.articulos[0].numero}` : undefined,
-      articuloId: p.articulos?.[0]?.id ?? null,  
-      temaId: p.temas?.[0]?.id ?? null,          
-      fuente: 'banco',
-    }));
+      return {
+        id: p.id,
+        enunciado: p.enunciado,
+        opciones,
+        correcta,
+        explicacion: p.explicacion ?? '',
+        articulo: p.articulos?.[0] ? `Art. ${p.articulos[0].numero}` : undefined,
+        articuloId: p.articulos?.[0]?.id ?? null,
+        temaId: p.temas?.[0]?.id ?? null,
+        fuente: 'banco',
+      };
+    });
   }
 
   /* =========================================================
@@ -861,17 +908,32 @@ async generarRepasoInteligente(
       .filter((p): p is PreguntaTest => !!p);
   }
 
-  const payloadPrioritario: Pregunta[] = preguntasPrioritarias.map((p) => ({
-    id: p.id,
-    enunciado: p.enunciado,
-    opciones: p.opciones,
-    correcta: p.correcta,
-    explicacion: p.explicacion ?? '',
-    articulo: p.articulos?.[0] ? `Art. ${p.articulos[0].numero}` : undefined,
-    articuloId: p.articulos?.[0]?.id ?? null,
-    temaId: p.temas?.[0]?.id ?? null,
-    fuente: 'repaso_inteligente',
-  } as any));
+  // Convocatoria activa del usuario, para recortar opciones en preguntas de artículo
+  let numOpcionesTestActiva: number | null | undefined;
+  const uoRepaso = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    relations: ['convocatoriaActiva'],
+  });
+  numOpcionesTestActiva = uoRepaso?.convocatoriaActiva?.numOpcionesTest;
+
+  const payloadPrioritario: Pregunta[] = preguntasPrioritarias.map((p) => {
+    const esArticulo = !!p.articulos?.length;
+    const { opciones, correcta } = esArticulo
+      ? recortarOpcionesArticulo(p.opciones, p.correcta, numOpcionesTestActiva)
+      : { opciones: p.opciones, correcta: p.correcta };
+
+    return {
+      id: p.id,
+      enunciado: p.enunciado,
+      opciones,
+      correcta,
+      explicacion: p.explicacion ?? '',
+      articulo: p.articulos?.[0] ? `Art. ${p.articulos[0].numero}` : undefined,
+      articuloId: p.articulos?.[0]?.id ?? null,
+      temaId: p.temas?.[0]?.id ?? null,
+      fuente: 'repaso_inteligente',
+    } as any;
+  });
 
   // Si no hay histórico suficiente, completamos con un test general (sin repetir preguntas)
   const faltan = numPreguntas - payloadPrioritario.length;

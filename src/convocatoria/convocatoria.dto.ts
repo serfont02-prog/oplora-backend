@@ -57,6 +57,7 @@ export class CreateConvocatoriaDto {
     nombre: string;
     descripcion?: string;
   }[];
+  numOpcionesTest?: number;
 }
 
 export class UpdateConvocatoriaDto {
@@ -116,4 +117,5 @@ export class UpdateConvocatoriaDto {
     nombre: string;
     descripcion?: string;
   }[];
+  numOpcionesTest?: number;
 }
