@@ -73,6 +73,7 @@ export class TestController {
       nivel,
       dificultad,
       req?.user?.id,
+      temasIds,
     );
   }
 

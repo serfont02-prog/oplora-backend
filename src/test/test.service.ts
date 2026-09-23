@@ -1,5 +1,5 @@
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Brackets } from 'typeorm';
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { ResultadoTest } from './resultado-test.entity';
 import { Usuario } from '../usuario/usuario.entity';
@@ -226,10 +226,18 @@ if (modo === 'primer_reto') {
 
     if (versionLeyId) {
     query = query
+      // ⭐ El artículo puede colgar de un Capítulo (capitulo → tituloRef → versionLey)
+      // o, si su Título no tiene capítulos (ej. Título Preliminar de la CE, arts. 1-9,
+      // o el Título X, arts. 166-169), colgar directamente de un Título (tituloRef → versionLey).
       .leftJoin('articulo.capitulo', 'capituloLey')
-      .leftJoin('capituloLey.tituloRef', 'tituloLey')
-      .leftJoin('tituloLey.versionLey', 'versionLey')
-      .andWhere('versionLey.id = :versionLeyId', { versionLeyId })
+      .leftJoin('capituloLey.tituloRef', 'tituloViaCapituloLey')
+      .leftJoin('articulo.tituloRef', 'tituloDirectoLey')
+      .andWhere(
+        new Brackets((qb) => {
+          qb.where('tituloViaCapituloLey.versionLeyId = :versionLeyId', { versionLeyId })
+            .orWhere('tituloDirectoLey.versionLeyId = :versionLeyId', { versionLeyId });
+        }),
+      )
       // ⭐ Exigir que el artículo esté realmente vinculado a algún tema del temario real
       .leftJoin(TemaNormativa, 'tnLey', 'tnLey."articuloId" = articulo.id')
       .leftJoin('tnLey.tema', 'temaLey')
@@ -247,7 +255,7 @@ if (modo === 'primer_reto') {
        TEST GENERAL OPOSICION
     ========================================================= */
 
-if (!temaId && !versionLeyId && !tituloId && !capituloId) {
+if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloId && !capituloId) {
   query = query
     .leftJoin('tema.convocatoria', 'convocatoria')
     .leftJoin('convocatoria.oposicion', 'oposicion')
@@ -259,13 +267,16 @@ if (!temaId && !versionLeyId && !tituloId && !capituloId) {
     .leftJoin('tn.tema', 'temaNorm')
     .leftJoin('temaNorm.convocatoria', 'convocatoriaNorm')
     .leftJoin('convocatoriaNorm.oposicion', 'oposicionNorm')
+    // ⭐ Igual que arriba: el artículo puede colgar de Capítulo o directamente de Título
     .leftJoin('articulo.capitulo', 'capituloArt')
     .leftJoin('capituloArt.tituloRef', 'tituloRefArt')
     .leftJoin('tituloRefArt.versionLey', 'versionLeyArt')
+    .leftJoin('articulo.tituloRef', 'tituloDirectoArt')
+    .leftJoin('tituloDirectoArt.versionLey', 'versionLeyDirectoArt')
     .leftJoin(
       OposicionLey,
       'ol',
-      'ol."versionLeyId" = versionLeyArt.id'
+      'ol."versionLeyId" = versionLeyArt.id OR ol."versionLeyId" = versionLeyDirectoArt.id'
     )
     .leftJoin('ol.oposicion', 'oposicionLey');
 
@@ -778,17 +789,23 @@ async importarPorVersionLey(
   }[],
 ): Promise<{ importadas: number; errores: string[] }> {
 
-  // Obtener artículos de la versión de ley
-  const articulos = await this.articuloRepo.find({
-    where: {
-      capitulo: {
-        tituloRef: {
-          versionLey: { id: versionLeyId }
-        }
-      }
-    },
-    relations: ['capitulo', 'capitulo.tituloRef', 'capitulo.tituloRef.versionLey'],
-  });
+  // Obtener artículos de la versión de ley.
+  // ⭐ Un artículo puede colgar de un Capítulo (capitulo → tituloRef → versionLey)
+  // O, si su Título no tiene capítulos (ej. Título Preliminar de la CE, arts. 1-9,
+  // o el Título X, arts. 166-169), colgar directamente de un Título (tituloRef → versionLey).
+  // Hay que buscar por ambos caminos o se pierden los artículos sin capítulo.
+  const articulos = await this.articuloRepo
+    .createQueryBuilder('articulo')
+    .leftJoin('articulo.capitulo', 'capitulo')
+    .leftJoin('capitulo.tituloRef', 'tituloViaCapitulo')
+    .leftJoin('articulo.tituloRef', 'tituloDirecto')
+    .where(
+      new Brackets((qb) => {
+        qb.where('tituloViaCapitulo.versionLeyId = :versionLeyId', { versionLeyId })
+          .orWhere('tituloDirecto.versionLeyId = :versionLeyId', { versionLeyId });
+      }),
+    )
+    .getMany();
 
   let importadas = 0;
   const errores: string[] = [];
