@@ -486,7 +486,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
         vigente: art.vigente,
         pesoExamen: art.pesoExamen,
         tituloRef: { id: nuevoTitulo.id } as any,
-      } as any)) as Articulo;
+      } as any)) as unknown as Articulo;
       await this.copiarPreguntasDeArticulo(art.id, nuevoArt.id);
     }
 
@@ -513,7 +513,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
           vigente: art.vigente,
           pesoExamen: art.pesoExamen,
           capitulo: { id: nuevoCapitulo.id } as any,
-        } as any)) as Articulo;
+        } as any)) as unknown as Articulo;
         await this.copiarPreguntasDeArticulo(art.id, nuevoArt.id);
       }
 
@@ -540,7 +540,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
             vigente: art.vigente,
             pesoExamen: art.pesoExamen,
             seccion: { id: nuevaSeccion.id } as any,
-          } as any)) as Articulo;
+          } as any)) as unknown as Articulo;
           await this.copiarPreguntasDeArticulo(art.id, nuevoArt.id);
         }
       }
