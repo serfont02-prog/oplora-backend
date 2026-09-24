@@ -331,7 +331,11 @@ async completarReto(
     respuestas,
   });
 
-  await this.darPuntosPorReto(usuarioId, (reto.oposicion as any).id, correctas, false);
+  // ⭐ Nota: al completar, todavía no sabemos si el usuario "gana" el reto (en los
+  // retos de tipo USUARIO eso depende de que el rival también termine), así que aquí
+  // solo se abonan los puntos por aciertos; el bonus por ganar (si aplica) se añade
+  // más tarde en cerrarRetoUsuario y no llega a este toast de feedback inmediato.
+  const gamificacion = await this.darPuntosPorReto(usuarioId, (reto.oposicion as any).id, correctas, false);
 
    // Verificar si todos han completado (el cierre con ganador/perdedor solo aplica a duelos entre usuarios;
   // los retos diario/semanal comparten cohortes grandes y no deben cerrarse como si fueran un duelo 1 a 1)
@@ -345,9 +349,11 @@ async completarReto(
     await this.retoRepo.update(reto.id, { estado: EstadoReto.COMPLETADO });
   }
 
-  return this.participacionRepo.findOne({
+  const participacionFinal = await this.participacionRepo.findOne({
     where: { id: participacion.id },
-  }) as Promise<ParticipacionReto>;
+  });
+
+  return { ...participacionFinal, gamificacion } as any;
 }
 
  // ⭐ Generalizado para cualquier número de participantes (hoy siempre 2 en retos de tipo
@@ -596,18 +602,28 @@ private async guardarContactoReciente(usuarioId: string, contactoId: string): Pr
   }
 }
 
-private async darPuntosPorReto(usuarioId: string, oposicionId: string, correctas: number, gano: boolean): Promise<void> {
+private async darPuntosPorReto(usuarioId: string, oposicionId: string, correctas: number, gano: boolean): Promise<{
+  puntosGanados: number;
+  puntosTotales: number;
+  nivelAnterior: number;
+  nivelNuevo: number;
+  subioNivel: boolean;
+  nombreNivel: string;
+  badgeNivel: string;
+} | null> {
   const puntosAcciones = await this.configuracionService.getPuntosAcciones();
 
   const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
     where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
   });
-  if (!usuarioOposicion) return;
+  if (!usuarioOposicion) return null;
 
   let puntosGanados = correctas * (puntosAcciones.preguntaCorrecta ?? 2);
   if (gano) puntosGanados += (puntosAcciones.ganarReto ?? 20);
 
-  if (puntosGanados === 0) return;
+  if (puntosGanados === 0) return null;
+
+  const nivelAnterior = usuarioOposicion.nivel;
 
   // ⭐ Incremento atómico a nivel de base de datos (evita perder puntos si dos
   // actualizaciones concurrentes leen el mismo valor antes de escribir).
@@ -620,12 +636,25 @@ private async darPuntosPorReto(usuarioId: string, oposicionId: string, correctas
   const actualizado = await this.usuarioOposicionRepo.findOne({
     where: { id: usuarioOposicion.id },
   });
-  if (!actualizado) return;
+  if (!actualizado) return null;
 
   const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(actualizado.puntos);
   if (nuevoNivel !== actualizado.nivel) {
     await this.usuarioOposicionRepo.update(usuarioOposicion.id, { nivel: nuevoNivel });
   }
+
+  const nivelesEstudio = await this.configuracionService.getNivelesEstudio();
+  const infoNivel = nivelesEstudio.find((n: any) => n.nivel === nuevoNivel);
+
+  return {
+    puntosGanados,
+    puntosTotales: actualizado.puntos,
+    nivelAnterior,
+    nivelNuevo: nuevoNivel,
+    subioNivel: nuevoNivel > nivelAnterior,
+    nombreNivel: infoNivel?.nombre ?? '',
+    badgeNivel: infoNivel?.badge ?? '',
+  };
 }
 
 async eliminarRetoUsuario(retoId: string, usuarioId: string): Promise<void> {

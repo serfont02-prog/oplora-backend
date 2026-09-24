@@ -10,6 +10,7 @@ import { Libro } from '../normativa/libro.entity';
 import { Disposicion } from '../normativa/disposicion.entity';
 import { TipoCambio } from '../ley/version-ley.entity'; // ajusta la ruta si el enum está en otro archivo
 import { NoticiaService } from '../noticia/noticia.service';
+import { PreguntaTest } from '../test/pregunta-test.entity';
 
 interface NodoParseado {
   tipo: 'libro' | 'titulo' | 'capitulo' | 'seccion' | 'articulo';
@@ -46,8 +47,33 @@ export class ParseoService {
     private readonly libroRepo: Repository<Libro>,
     @InjectRepository(Disposicion)
     private readonly disposicionRepo: Repository<Disposicion>,
+    @InjectRepository(PreguntaTest)
+    private readonly preguntaRepo: Repository<PreguntaTest>,
     private readonly noticiaService: NoticiaService,
   ) {}
+
+  /**
+   * ⭐ Copia el vínculo pregunta↔artículo (tabla intermedia M2M) del artículo
+   * origen al artículo nuevo, SIN duplicar la fila de PreguntaTest — el mismo
+   * patrón que usa Convocatoria al copiarse para vincular temas a preguntas ya
+   * existentes. Así, al crear una nueva versión de una ley (ej. una reforma de
+   * la CE), las preguntas ya redactadas para el artículo siguen sirviendo para
+   * la nueva versión salvo que alguien las edite/retire manualmente.
+   */
+  private async copiarPreguntasDeArticulo(articuloOrigenId: string, articuloNuevoId: string): Promise<void> {
+    // Vinculamos por SQL directo sobre la tabla intermedia real, igual que ya
+    // hace convocatoria.service.ts con preguntas_test_temas_temas.
+    const filas = await this.preguntaRepo.query(
+      `SELECT "preguntasTestId" FROM preguntas_test_articulos_articulos WHERE "articulosId" = $1`,
+      [articuloOrigenId],
+    );
+    for (const fila of filas) {
+      await this.preguntaRepo.query(
+        `INSERT INTO preguntas_test_articulos_articulos ("articulosId", "preguntasTestId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [articuloNuevoId, fila.preguntasTestId],
+      );
+    }
+  }
 
   async parsearVersion(versionId: string): Promise<{ ok: boolean; resumen: any }> {
     const version = await this.versionRepo.findOne({
@@ -452,7 +478,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     // Artículos directos del título (sin capítulo)
     const articulosDelTitulo = await this.articuloRepo.find({ where: { tituloRef: { id: tituloOrigen.id } } });
     for (const art of articulosDelTitulo) {
-      await this.articuloRepo.save(this.articuloRepo.create({
+      const nuevoArt = await this.articuloRepo.save(this.articuloRepo.create({
         orden: art.orden,
         numero: art.numero,
         titulo: art.titulo,
@@ -461,6 +487,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
         pesoExamen: art.pesoExamen,
         tituloRef: { id: nuevoTitulo.id } as any,
       } as any));
+      await this.copiarPreguntasDeArticulo(art.id, nuevoArt.id);
     }
 
     const capitulosOrigen = await this.capituloRepo.find({
@@ -478,7 +505,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
 
       const articulosDelCapitulo = await this.articuloRepo.find({ where: { capitulo: { id: capOrigen.id } } });
       for (const art of articulosDelCapitulo) {
-        await this.articuloRepo.save(this.articuloRepo.create({
+        const nuevoArt = await this.articuloRepo.save(this.articuloRepo.create({
           orden: art.orden,
           numero: art.numero,
           titulo: art.titulo,
@@ -487,6 +514,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
           pesoExamen: art.pesoExamen,
           capitulo: { id: nuevoCapitulo.id } as any,
         } as any));
+        await this.copiarPreguntasDeArticulo(art.id, nuevoArt.id);
       }
 
       const seccionesOrigen = await this.seccionRepo.find({
@@ -504,7 +532,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
 
         const articulosDeSeccion = await this.articuloRepo.find({ where: { seccion: { id: secOrigen.id } } });
         for (const art of articulosDeSeccion) {
-          await this.articuloRepo.save(this.articuloRepo.create({
+          const nuevoArt = await this.articuloRepo.save(this.articuloRepo.create({
             orden: art.orden,
             numero: art.numero,
             titulo: art.titulo,
@@ -513,6 +541,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
             pesoExamen: art.pesoExamen,
             seccion: { id: nuevaSeccion.id } as any,
           } as any));
+          await this.copiarPreguntasDeArticulo(art.id, nuevoArt.id);
         }
       }
     }

@@ -206,6 +206,22 @@ importarPorVersionLey(
     );
   }
 
+  @Get('banco-ley/:versionLeyId')
+  @UseGuards(JwtAuthGuard)
+  listarBancoLey(
+    @Param('versionLeyId') versionLeyId: string,
+    @Query('articuloId') articuloId?: string,
+    @Query('pagina') pagina?: string,
+    @Query('porPagina') porPagina?: string,
+  ) {
+    return this.testService.listarPreguntasPorVersionLey(
+      versionLeyId,
+      articuloId,
+      pagina ? Number(pagina) : 1,
+      porPagina ? Number(porPagina) : 30,
+    );
+  }
+
   @Patch('banco/:preguntaId')
   @UseGuards(JwtAuthGuard)
   actualizarBanco(

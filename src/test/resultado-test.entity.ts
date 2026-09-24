@@ -35,6 +35,21 @@ detallePreguntas: {
   articuloId?: string;
 }[];
 
+  // ⭐ Snapshot de puntos/nivel ganados con ESTE resultado concreto, para poder
+  // mostrar el feedback de gamificación (tarjeta de OPLO) incluso después de
+  // navegar a la pantalla de resultado, que relee el último resultado por GET
+  // en vez de recibir la respuesta del POST original.
+  @Column({ type: 'jsonb', nullable: true })
+  gamificacion: {
+    puntosGanados: number;
+    puntosTotales: number;
+    nivelAnterior: number;
+    nivelNuevo: number;
+    subioNivel: boolean;
+    nombreNivel: string;
+    badgeNivel: string;
+  } | null;
+
   @CreateDateColumn()
   creadoEn: Date;
 

@@ -592,11 +592,56 @@ export function clasificarDocumento(
         // solo el caso ":", volvemos a unir TODO el contenido en un único texto y lo
         // recortamos por frase (tras cada punto, antes de la siguiente mayúscula/dígito),
         // igual que ya se hace con el texto normal fuera de estas cajas.
-        const textoUnido = normalizarEspacios(lineasSinViñetasSueltas.join(' '));
-        const lineasFusionadas: string[] = textoUnido
-          .split(/(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÜÑ0-9¿¡])/)
-          .map((s) => s.trim())
-          .filter(Boolean);
+        //
+        // ⭐ BUG: si dentro de la caja hay una lista (bullets "•" o numerada "1.", "2.")
+        // el texto de cada ítem se unía con el resto SIN quitar la viñeta/número, y el
+        // split por frase exige que tras el punto venga una mayúscula/dígito — pero un
+        // ítem siguiente empieza por "•" o similar, así que ese carácter nunca cumplía
+        // la condición y el split no partía ahí: todos los ítems de la lista quedaban
+        // pegados en un único párrafo sin salto de línea. Ahora tratamos cada línea que
+        // sea un ítem de lista (viñeta o numeración) como el inicio forzoso de un nuevo
+        // párrafo dentro de la caja, igual que ya hacemos fuera de ellas, y solo aplicamos
+        // el split por frase al texto que NO forma parte de una lista.
+        const esLineaListaDentroCaja = (l: string) => REGEX_BULLET.test(l) || esListaNumerada(l);
+        const limpiarMarcaListaDentroCaja = (l: string) =>
+          REGEX_BULLET.test(l) ? limpiarBullet(l) : limpiarNumeroLista(l);
+
+        const lineasFusionadas: string[] = [];
+        let bufferTextoLibre: string[] = [];
+        let bufferItemLista: string[] | null = null;
+
+        const cerrarBufferTextoLibre = () => {
+          if (bufferTextoLibre.length === 0) return;
+          const textoUnido = normalizarEspacios(bufferTextoLibre.join(' '));
+          lineasFusionadas.push(
+            ...textoUnido
+              .split(/(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÜÑ0-9¿¡])/)
+              .map((s) => s.trim())
+              .filter(Boolean),
+          );
+          bufferTextoLibre = [];
+        };
+
+        const cerrarBufferItemLista = () => {
+          if (!bufferItemLista) return;
+          lineasFusionadas.push(normalizarEspacios(bufferItemLista.join(' ')));
+          bufferItemLista = null;
+        };
+
+        for (const l of lineasSinViñetasSueltas) {
+          if (esLineaListaDentroCaja(l)) {
+            cerrarBufferTextoLibre();
+            cerrarBufferItemLista();
+            bufferItemLista = [limpiarMarcaListaDentroCaja(l)];
+          } else if (bufferItemLista) {
+            // continuación (ajuste de línea) del ítem de lista en curso
+            bufferItemLista.push(l);
+          } else {
+            bufferTextoLibre.push(l);
+          }
+        }
+        cerrarBufferTextoLibre();
+        cerrarBufferItemLista();
 
         // cada línea (ya fusionada por ítem) se conserva como su propio párrafo dentro de la caja
         const contenidoBloques: Bloque[] = lineasFusionadas

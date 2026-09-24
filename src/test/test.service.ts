@@ -448,18 +448,39 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
 
   /* =========================================================
      PUNTOS (si quieres excluir el primer reto, lo hacemos aquí)
+     ⭐ Devolvemos el detalle de puntos/nivel ganados junto con el resultado
+     para que el frontend pueda mostrar el feedback de gamificación
+     (antes se calculaban y guardaban en BD pero no llegaban a la UI).
   ========================================================= */
-  if (datos.tipoTest !== 'primer_reto') {
-  await this.actualizarPuntos(
-    datos.usuarioId,
-    datos.oposicionId, // ⭐ nuevo
-    totalPreguntasVerificado,
-    correctasVerificadas,
-    porcentaje,
-  );
-}
+  let gamificacion: {
+    puntosGanados: number;
+    puntosTotales: number;
+    nivelAnterior: number;
+    nivelNuevo: number;
+    subioNivel: boolean;
+    nombreNivel: string;
+    badgeNivel: string;
+  } | null = null;
 
-  return resultado;
+  if (datos.tipoTest !== 'primer_reto') {
+    gamificacion = await this.actualizarPuntos(
+      datos.usuarioId,
+      datos.oposicionId, // ⭐ nuevo
+      totalPreguntasVerificado,
+      correctasVerificadas,
+      porcentaje,
+    );
+  }
+
+  // ⭐ Guardamos el snapshot en el propio resultado (no solo en la respuesta del POST)
+  // porque la pantalla de resultado navega con router.replace y relee el último
+  // resultado por GET, sin recibir nunca esta respuesta directamente.
+  if (gamificacion) {
+    resultado.gamificacion = gamificacion;
+    await this.resultadoRepo.update(resultado.id, { gamificacion });
+  }
+
+  return { ...resultado, gamificacion } as any;
 }
 
 
@@ -473,13 +494,21 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
   numPreguntas: number,
   correctas: number,
   porcentaje: number,
-): Promise<void> {
+): Promise<{
+  puntosGanados: number;
+  puntosTotales: number;
+  nivelAnterior: number;
+  nivelNuevo: number;
+  subioNivel: boolean;
+  nombreNivel: string;
+  badgeNivel: string;
+} | null> {
   const puntosAcciones = await this.configuracionService.getPuntosAcciones();
 
   const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
     where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
   });
-  if (!usuarioOposicion) return;
+  if (!usuarioOposicion) return null;
 
   // Puntos por preguntas correctas
   let puntosGanados = correctas * puntosAcciones.preguntaCorrecta;
@@ -491,8 +520,9 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
     puntosGanados += puntosAcciones.testCompletadoMas60;
   }
 
-  if (puntosGanados === 0) return;
+  if (puntosGanados === 0) return null;
 
+  const nivelAnterior = usuarioOposicion.nivel;
   const nuevosPuntos = usuarioOposicion.puntos + puntosGanados;
   const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(nuevosPuntos);
 
@@ -500,6 +530,19 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
     puntos: nuevosPuntos,
     nivel: nuevoNivel,
   });
+
+  const nivelesEstudio = await this.configuracionService.getNivelesEstudio();
+  const infoNivel = nivelesEstudio.find((n: any) => n.nivel === nuevoNivel);
+
+  return {
+    puntosGanados,
+    puntosTotales: nuevosPuntos,
+    nivelAnterior,
+    nivelNuevo: nuevoNivel,
+    subioNivel: nuevoNivel > nivelAnterior,
+    nombreNivel: infoNivel?.nombre ?? '',
+    badgeNivel: infoNivel?.badge ?? '',
+  };
 }
 
   /* =========================================================
@@ -556,6 +599,7 @@ return {
   mediaAcierto,
   mejorResultado,
   totalTestsRealizados: resultados.length,
+  gamificacion: resultado.gamificacion ?? null,
 };}
 
   async getProgresoTema(
@@ -878,6 +922,21 @@ async generarRepasoInteligente(
   numPreguntas = 10,
 ): Promise<{ preguntas: Pregunta[]; basadoEnHistorial: number }> {
 
+  // ⭐ A diferencia de generarTest, este método no tenía NINGUNA comprobación de
+  // límites de plan. El relleno con preguntas generales solo pasa por
+  // verificarLimiteTest de rebote (dentro de generarTest, y solo para "faltan",
+  // no para numPreguntas total) — si el usuario tiene histórico de fallos
+  // suficiente para cubrir todo el repaso con preguntas prioritarias, "faltan"
+  // sale 0 y ese generarTest interno ni se llama, saltándose el límite diario
+  // y el límite por test por completo. Lo comprobamos aquí, para el total.
+  const verificacion = await this.verificarLimiteTest(usuarioId, numPreguntas, 'repaso');
+  if (!verificacion.permitido) {
+    throw new ForbiddenException(JSON.stringify({
+      motivo: verificacion.motivo,
+      limite: verificacion.limite,
+    }));
+  }
+
   // Historial reciente del usuario en esta oposición
   const resultados = await this.resultadoRepo.find({
     where: {
@@ -1000,6 +1059,55 @@ async listarPreguntasBanco(
 
   if (temaId) {
     query = query.andWhere('tema.id = :temaId', { temaId });
+  }
+
+  const total = await query.getCount();
+  const preguntas = await query
+    .skip((pagina - 1) * porPagina)
+    .take(porPagina)
+    .getMany();
+
+  return {
+    preguntas,
+    total,
+    pagina,
+    totalPaginas: Math.max(1, Math.ceil(total / porPagina)),
+  };
+}
+
+/**
+ * ⭐ Equivalente a listarPreguntasBanco pero para el banco de preguntas
+ * vinculadas a artículos de una versión de ley (ej. Constitución Española),
+ * que no cuelgan de ninguna convocatoria/tema. Usa el mismo doble camino
+ * (capítulo o título directo) que el resto de queries por versión de ley,
+ * para no perderse los artículos del Título Preliminar o el Título X.
+ */
+async listarPreguntasPorVersionLey(
+  versionLeyId: string,
+  articuloId?: string,
+  pagina = 1,
+  porPagina = 30,
+): Promise<{ preguntas: any[]; total: number; pagina: number; totalPaginas: number }> {
+
+  let query = this.preguntaRepo
+    .createQueryBuilder('pregunta')
+    .leftJoinAndSelect('pregunta.articulos', 'articulo')
+    .leftJoinAndSelect('pregunta.temas', 'tema')
+    .leftJoin('articulo.capitulo', 'capitulo')
+    .leftJoin('capitulo.tituloRef', 'tituloViaCapitulo')
+    .leftJoin('tituloViaCapitulo.versionLey', 'versionLeyViaCapitulo')
+    .leftJoin('articulo.tituloRef', 'tituloDirecto')
+    .leftJoin('tituloDirecto.versionLey', 'versionLeyDirecto')
+    .where(
+      new Brackets((qb) => {
+        qb.where('versionLeyViaCapitulo.id = :versionLeyId', { versionLeyId })
+          .orWhere('versionLeyDirecto.id = :versionLeyId', { versionLeyId });
+      }),
+    )
+    .orderBy('pregunta.creadoEn', 'DESC');
+
+  if (articuloId) {
+    query = query.andWhere('articulo.id = :articuloId', { articuloId });
   }
 
   const total = await query.getCount();
