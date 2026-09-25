@@ -197,12 +197,14 @@ importarPorVersionLey(
     @Query('temaId') temaId?: string,
     @Query('pagina') pagina?: string,
     @Query('porPagina') porPagina?: string,
+    @Query('examenAnteriorId') examenAnteriorId?: string,
   ) {
     return this.testService.listarPreguntasBanco(
       convocatoriaId,
       temaId,
       pagina ? Number(pagina) : 1,
       porPagina ? Number(porPagina) : 30,
+      examenAnteriorId,
     );
   }
 

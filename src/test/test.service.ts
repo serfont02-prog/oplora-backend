@@ -1047,18 +1047,25 @@ async listarPreguntasBanco(
   temaId?: string,
   pagina = 1,
   porPagina = 30,
+  examenAnteriorId?: string,
 ): Promise<{ preguntas: any[]; total: number; pagina: number; totalPaginas: number }> {
 
   let query = this.preguntaRepo
     .createQueryBuilder('pregunta')
     .leftJoinAndSelect('pregunta.temas', 'tema')
     .leftJoinAndSelect('pregunta.articulos', 'articulo')
+    .leftJoinAndSelect('pregunta.examenAnterior', 'examenAnterior')
     .leftJoin('tema.convocatoria', 'convocatoria')
     .where('convocatoria.id = :convocatoriaId', { convocatoriaId })
     .orderBy('pregunta.creadoEn', 'DESC');
 
   if (temaId) {
     query = query.andWhere('tema.id = :temaId', { temaId });
+  }
+
+  // ⭐ Filtro por examen anterior concreto (para "Gestionar preguntas" → modo Examen)
+  if (examenAnteriorId) {
+    query = query.andWhere('examenAnterior.id = :examenAnteriorId', { examenAnteriorId });
   }
 
   const total = await query.getCount();
