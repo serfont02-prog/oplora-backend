@@ -336,6 +336,121 @@ export class PsicotecnicoService {
   }
 
   /* =========================================================
+     ADMIN — banco de preguntas global (catálogo, sin scope de oposición)
+  ========================================================= */
+
+  async listarPreguntasAdmin(filtros: {
+    tipo?: PsicotecnicoTipo;
+    subtipo?: string;
+    dificultad?: PsicotecnicoDificultad;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(filtros.page ?? 1, 1);
+    const limit = Math.min(Math.max(filtros.limit ?? 20, 1), 100);
+
+    const qb = this.preguntaRepo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.oposicion', 'oposicion')
+      .orderBy('p.creadoEn', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (filtros.tipo) qb.andWhere('p.tipo = :tipo', { tipo: filtros.tipo });
+    if (filtros.subtipo) qb.andWhere('p.subtipo = :subtipo', { subtipo: filtros.subtipo });
+    if (filtros.dificultad) qb.andWhere('p.dificultad = :dificultad', { dificultad: filtros.dificultad });
+
+    const [items, total] = await qb.getManyAndCount();
+    return { items, total, page, limit };
+  }
+
+  async crearPreguntaAdmin(datos: {
+    tipo: PsicotecnicoTipo;
+    subtipo?: string;
+    dificultad?: PsicotecnicoDificultad;
+    enunciado: string;
+    imagenUrl?: string;
+    opciones: string[];
+    correcta: number;
+    explicacion?: string;
+    tiempoRecomendadoSegundos?: number;
+    etiquetas?: string[];
+    oposicionId?: string | null;
+  }) {
+    if (!Object.values(PsicotecnicoTipo).includes(datos.tipo)) {
+      throw new BadRequestException(`Tipo "${datos.tipo}" no reconocido`);
+    }
+    if (!datos.enunciado || !Array.isArray(datos.opciones) || typeof datos.correcta !== 'number') {
+      throw new BadRequestException('Faltan campos obligatorios (enunciado/opciones/correcta)');
+    }
+
+    return this.preguntaRepo.save(
+      this.preguntaRepo.create({
+        tipo: datos.tipo,
+        subtipo: datos.subtipo,
+        dificultad: datos.dificultad ?? PsicotecnicoDificultad.MEDIO,
+        enunciado: datos.enunciado,
+        imagenUrl: datos.imagenUrl,
+        opciones: datos.opciones,
+        correcta: datos.correcta,
+        explicacion: datos.explicacion,
+        tiempoRecomendadoSegundos: datos.tiempoRecomendadoSegundos,
+        etiquetas: datos.etiquetas,
+        origen: 'oplora',
+        oposicion: datos.oposicionId ? ({ id: datos.oposicionId } as any) : null,
+      }),
+    );
+  }
+
+  async actualizarPreguntaAdmin(id: string, datos: Partial<{
+    tipo: PsicotecnicoTipo;
+    subtipo: string;
+    dificultad: PsicotecnicoDificultad;
+    enunciado: string;
+    imagenUrl: string;
+    opciones: string[];
+    correcta: number;
+    explicacion: string;
+    tiempoRecomendadoSegundos: number;
+    etiquetas: string[];
+    activa: boolean;
+    oposicionId: string | null;
+  }>) {
+    const existente = await this.preguntaRepo.findOne({ where: { id } });
+    if (!existente) throw new BadRequestException('Pregunta no encontrada');
+
+    const { oposicionId, ...resto } = datos;
+    await this.preguntaRepo.update(id, {
+      ...resto,
+      ...(oposicionId !== undefined ? { oposicion: oposicionId ? ({ id: oposicionId } as any) : null } : {}),
+    });
+    return this.preguntaRepo.findOne({ where: { id }, relations: ['oposicion'] });
+  }
+
+  async eliminarPreguntaAdmin(id: string) {
+    await this.preguntaRepo.delete(id);
+    return { ok: true };
+  }
+
+  async getSubtiposAdmin(tipo: PsicotecnicoTipo) {
+    if (!Object.values(PsicotecnicoTipo).includes(tipo)) {
+      throw new BadRequestException(`Tipo "${tipo}" no reconocido`);
+    }
+
+    const filas = await this.preguntaRepo
+      .createQueryBuilder('p')
+      .select('DISTINCT p.subtipo', 'subtipo')
+      .where('p.tipo = :tipo', { tipo })
+      .andWhere('p.subtipo IS NOT NULL')
+      .getRawMany();
+
+    const existentes = filas.map((f) => f.subtipo).filter(Boolean) as string[];
+    const sugeridos = SUBTIPOS_SUGERIDOS[tipo] ?? [];
+    const combinados = Array.from(new Set([...sugeridos, ...existentes])).sort();
+    return combinados;
+  }
+
+  /* =========================================================
      IMPORTAR PREGUNTAS (admin)
   ========================================================= */
 

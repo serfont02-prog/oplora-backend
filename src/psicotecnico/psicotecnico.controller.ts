@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Param, Body, Query, Request, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Request, UseGuards } from '@nestjs/common';
 import { PsicotecnicoService } from './psicotecnico.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -89,6 +89,57 @@ export class PsicotecnicoController {
   @Roles('admin')
   eliminarConfig(@Param('id') id: string) {
     return this.service.eliminarConfig(id);
+  }
+
+  /* =========================================================
+     ADMIN — banco de preguntas global (catálogo, sin scope de oposición)
+  ========================================================= */
+
+  @Get('admin/preguntas')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  listarPreguntasAdmin(
+    @Query('tipo') tipo?: PsicotecnicoTipo,
+    @Query('subtipo') subtipo?: string,
+    @Query('dificultad') dificultad?: PsicotecnicoDificultad,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.service.listarPreguntasAdmin({
+      tipo,
+      subtipo,
+      dificultad,
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+  }
+
+  @Post('admin/preguntas')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  crearPreguntaAdmin(@Body() body: any) {
+    return this.service.crearPreguntaAdmin(body);
+  }
+
+  @Patch('admin/preguntas/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  actualizarPreguntaAdmin(@Param('id') id: string, @Body() body: any) {
+    return this.service.actualizarPreguntaAdmin(id, body);
+  }
+
+  @Delete('admin/preguntas/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  eliminarPreguntaAdmin(@Param('id') id: string) {
+    return this.service.eliminarPreguntaAdmin(id);
+  }
+
+  @Get('admin/subtipos/:tipo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  getSubtiposAdmin(@Param('tipo') tipo: PsicotecnicoTipo) {
+    return this.service.getSubtiposAdmin(tipo);
   }
 
   @Post('admin/preguntas/importar')
