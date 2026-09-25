@@ -106,6 +106,17 @@ export class TestController {
     );
   }
 
+  @Get('disponibles-por-tema/:oposicionId')
+  @UseGuards(JwtAuthGuard)
+  contarDisponiblesPorTema(
+    @Param('oposicionId') oposicionId: string,
+    @Query('temasIds') temasIds: string,
+    @Request() req?: any,
+  ) {
+    const ids = temasIds ? temasIds.split(',').filter(Boolean) : [];
+    return this.testService.contarPreguntasPorTemas(oposicionId, ids, req?.user?.id);
+  }
+
   /* =========================================================
      REPASO INTELIGENTE
   ========================================================= */

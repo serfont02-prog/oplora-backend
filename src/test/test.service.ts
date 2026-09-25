@@ -439,6 +439,43 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
     return { total };
   }
 
+  /**
+   * ⭐ Desglose por tema: cuántas preguntas hay disponibles PARA CADA tema
+   * de la lista, además del total combinado. Permite que la pantalla de
+   * selección de test (temas o bloque) avise de qué temas concretos no
+   * tienen preguntas SIN bloquear el avance si al menos uno sí las tiene.
+   */
+  async contarPreguntasPorTemas(
+    oposicionId: string,
+    temasIds: string[],
+    usuarioId?: string,
+  ): Promise<{ porTema: Record<string, number>; total: number }> {
+    const porTema: Record<string, number> = {};
+    for (const temaId of temasIds) {
+      const { query } = await this.construirQueryPreguntas(
+        oposicionId,
+        temaId,
+        undefined,
+        undefined,
+        undefined,
+        usuarioId,
+        undefined,
+      );
+      porTema[temaId] = await query.getCount();
+    }
+    const { query: queryTotal } = await this.construirQueryPreguntas(
+      oposicionId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      usuarioId,
+      temasIds,
+    );
+    const total = await queryTotal.getCount();
+    return { porTema, total };
+  }
+
   /* =========================================================
      GUARDAR RESULTADO
   ========================================================= */
