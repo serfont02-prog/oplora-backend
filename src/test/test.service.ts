@@ -99,45 +99,24 @@ export class TestService {
      GENERAR TEST
   ========================================================= */
 
-  async generarTest(
-  oposicionId: string,
-  numPreguntas = 10,
-  temaId?: string,
-  versionLeyId?: string,
-  capituloId?: string,
-  tituloId?: string,
-  modo?: string,          
-  nivel?: number,         
-  dificultad?: string,  
-  usuarioId?: string,
-  temasIds?: string[],  
-): Promise<Pregunta[]> {
-
-  // Verificar límites si hay usuarioId
-  if (usuarioId && modo !== 'primer_reto') {
-    const tipoTest = temaId ? 'tema' : modo ?? 'rapido';
-    const verificacion = await this.verificarLimiteTest(
-      usuarioId,
-      numPreguntas,
-      tipoTest,
-    );
-    if (!verificacion.permitido) {
-      throw new ForbiddenException(JSON.stringify({
-        motivo: verificacion.motivo,
-        limite: verificacion.limite,
-      }));
-    }
-  }
-
-// =========================================================
-// PRIMER RETO (nivel 1, 5 preguntas, dificultad fácil)
-// =========================================================
-if (modo === 'primer_reto') {
-  nivel = 1;
-  numPreguntas = 5;
-  dificultad = 'facil';
-}
-
+  /**
+   * ⭐ Construye la query de preguntas con todos los filtros (tema, ley,
+   * capítulo, título, oposición/convocatoria) SIN aplicar random/límite.
+   * La usan tanto generarTest() (que además hace RANDOM()+limit+getMany)
+   * como contarPreguntasDisponibles() (que solo hace getCount()), para que
+   * ambos midan EXACTAMENTE lo mismo. Antes cada uno tenía su propia copia
+   * de estos filtros y se desincronizaban con facilidad (fue la causa del
+   * bug de "Test por Ley sin preguntas" del 25/09).
+   */
+  private async construirQueryPreguntas(
+    oposicionId: string,
+    temaId?: string,
+    versionLeyId?: string,
+    capituloId?: string,
+    tituloId?: string,
+    usuarioId?: string,
+    temasIds?: string[],
+  ) {
     let query = this.preguntaRepo
       .createQueryBuilder('pregunta')
       .leftJoinAndSelect(
@@ -255,11 +234,22 @@ if (modo === 'primer_reto') {
       .leftJoin('tnLey.tema', 'temaLey')
       .leftJoin('temaLey.convocatoria', 'convocatoriaTemaLey')
       .leftJoin('convocatoriaTemaLey.oposicion', 'oposicionTemaLey')
+      .andWhere('temaLey.id IS NOT NULL')
       .andWhere(
-        convocatoriaActivaId
-          ? 'temaLey.id IS NOT NULL AND temaLey."convocatoriaId" = :convocatoriaActivaId'
-          : 'temaLey.id IS NOT NULL AND oposicionTemaLey.id = :oposicionId',
-        convocatoriaActivaId ? { convocatoriaActivaId } : { oposicionId },
+        // ⭐ El tema puede tener la convocatoria seteada directamente (caso
+        // ideal, se compara con la convocatoria activa del usuario) o no
+        // tenerla (campo nullable) y solo poder verificarse por oposición.
+        // Antes esto era un AND estricto contra convocatoriaActivaId: si el
+        // tema no tenía convocatoria asignada, la condición nunca se cumplía
+        // y "Test por Ley" no devolvía NINGUNA pregunta aunque hubiera
+        // artículos correctamente vinculados. Ahora, igual que en el test
+        // general, se acepta cualquiera de los dos caminos.
+        new Brackets((qb) => {
+          if (convocatoriaActivaId) {
+            qb.where('convocatoriaTemaLey.id = :convocatoriaActivaId', { convocatoriaActivaId });
+          }
+          qb.orWhere('oposicionTemaLey.id = :oposicionId', { oposicionId });
+        }),
       );
   }
 
@@ -324,20 +314,76 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
       'pregunta.activa = true',
     );
 
+    return { query, numOpcionesTestActiva };
+  }
+
+  /* =========================================================
+     GENERAR TEST
+  ========================================================= */
+
+  async generarTest(
+    oposicionId: string,
+    numPreguntas = 10,
+    temaId?: string,
+    versionLeyId?: string,
+    capituloId?: string,
+    tituloId?: string,
+    modo?: string,
+    nivel?: number,
+    dificultad?: string,
+    usuarioId?: string,
+    temasIds?: string[],
+  ): Promise<Pregunta[]> {
+
+    // Verificar límites si hay usuarioId
+    if (usuarioId && modo !== 'primer_reto') {
+      const tipoTest = temaId ? 'tema' : modo ?? 'rapido';
+      const verificacion = await this.verificarLimiteTest(
+        usuarioId,
+        numPreguntas,
+        tipoTest,
+      );
+      if (!verificacion.permitido) {
+        throw new ForbiddenException(JSON.stringify({
+          motivo: verificacion.motivo,
+          limite: verificacion.limite,
+        }));
+      }
+    }
+
+    // =========================================================
+    // PRIMER RETO (nivel 1, 5 preguntas, dificultad fácil)
+    // =========================================================
+    if (modo === 'primer_reto') {
+      nivel = 1;
+      numPreguntas = 5;
+      dificultad = 'facil';
+    }
+
+    const { query, numOpcionesTestActiva } = await this.construirQueryPreguntas(
+      oposicionId,
+      temaId,
+      versionLeyId,
+      capituloId,
+      tituloId,
+      usuarioId,
+      temasIds,
+    );
+
     /* =========================================================
        RANDOM
     ========================================================= */
-const preguntasSinDeduplicar = await query
-  .orderBy('RANDOM()')
-  .limit(numPreguntas * 3)
-  .getMany();
+    const preguntasSinDeduplicar = await query
+      .orderBy('RANDOM()')
+      .limit(numPreguntas * 3)
+      .getMany();
 
-const vistas = new Set<string>();
-const preguntas = preguntasSinDeduplicar.filter(p => {
-  if (vistas.has(p.id)) return false;
-  vistas.add(p.id);
-  return true;
-}).slice(0, numPreguntas);
+    const vistas = new Set<string>();
+    const preguntas = preguntasSinDeduplicar.filter(p => {
+      if (vistas.has(p.id)) return false;
+      vistas.add(p.id);
+      return true;
+    }).slice(0, numPreguntas);
 
     return preguntas.map((p) => {
       // El recorte de opciones (4→N) solo aplica a preguntas vinculadas a
@@ -360,6 +406,37 @@ const preguntas = preguntasSinDeduplicar.filter(p => {
         fuente: 'banco',
       };
     });
+  }
+
+  /**
+   * ⭐ Cuenta cuántas preguntas hay disponibles para una combinación de
+   * filtros (tema/varios temas/ley/capítulo/título), SIN generar el test.
+   * Usa exactamente los mismos filtros que generarTest() (misma query
+   * base vía construirQueryPreguntas), para que la pantalla de selección
+   * de test pueda avisar ANTES de navegar a /app/test/:id si esa
+   * combinación no tiene preguntas, en vez de dejar que el usuario
+   * configure algo que luego no genera nada.
+   */
+  async contarPreguntasDisponibles(
+    oposicionId: string,
+    temaId?: string,
+    versionLeyId?: string,
+    capituloId?: string,
+    tituloId?: string,
+    usuarioId?: string,
+    temasIds?: string[],
+  ): Promise<{ total: number }> {
+    const { query } = await this.construirQueryPreguntas(
+      oposicionId,
+      temaId,
+      versionLeyId,
+      capituloId,
+      tituloId,
+      usuarioId,
+      temasIds,
+    );
+    const total = await query.getCount();
+    return { total };
   }
 
   /* =========================================================

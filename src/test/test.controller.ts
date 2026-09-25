@@ -78,6 +78,35 @@ export class TestController {
   }
 
   /* =========================================================
+     ⭐ DISPONIBILIDAD (cuántas preguntas hay para una combinación de
+     filtros, SIN generar el test). Usado por la pantalla de selección
+     de test para avisar antes de empezar si esa combinación (tema,
+     ley, capítulo, título o general) no tiene preguntas.
+  ========================================================= */
+
+  @Get('disponibles/:oposicionId')
+  @UseGuards(JwtAuthGuard)
+  contarDisponibles(
+    @Param('oposicionId') oposicionId: string,
+    @Query('temaId') temaId?: string,
+    @Query('temasIds') temasIds?: string,
+    @Query('versionLeyId') versionLeyId?: string,
+    @Query('capituloId') capituloId?: string,
+    @Query('tituloId') tituloId?: string,
+    @Request() req?: any,
+  ) {
+    return this.testService.contarPreguntasDisponibles(
+      oposicionId,
+      temaId,
+      versionLeyId,
+      capituloId,
+      tituloId,
+      req?.user?.id,
+      temasIds ? temasIds.split(',') : undefined,
+    );
+  }
+
+  /* =========================================================
      REPASO INTELIGENTE
   ========================================================= */
 
