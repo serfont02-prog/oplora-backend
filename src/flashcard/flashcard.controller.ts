@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Body, Param, UseGuards, Request, Query } from '@nestjs/common';
 import { FlashcardService } from './flashcard.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
 @Controller('flashcards')
 @UseGuards(JwtAuthGuard)
@@ -8,8 +10,15 @@ export class FlashcardController {
   constructor(private readonly service: FlashcardService) {}
 
   @Post('importar')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   importar(@Body('flashcards') flashcards: any[]) {
     return this.service.importar(flashcards);
+  }
+
+  @Get('mis-retos')
+  getMisRetos(@Request() req: any) {
+    return this.service.getMisRetosFC(req.user.id);
   }
 
   @Get('stats/:oposicionId/:temaId')
@@ -84,9 +93,11 @@ getPendientes(
     @Body('retadoNickOEmail') retadoNickOEmail: string,
     @Body('oposicionId') oposicionId: string,
     @Body('numFC') numFC: number,
+    @Body('temaId') temaId: string,
+    @Body('versionLeyId') versionLeyId: string,
     @Request() req: any,
   ) {
-    return this.service.crearDueloFC(req.user.id, retadoNickOEmail, oposicionId, numFC ?? 5);
+    return this.service.crearDueloFC(req.user.id, retadoNickOEmail, oposicionId, numFC ?? 5, temaId, versionLeyId);
   }
 
   @Post('enviar')

@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Brackets } from 'typeorm';
 import { Flashcard, TipoFlashcard, NivelFlashcard } from './flashcard.entity';
 import { RepasoFC, EstadoFC } from './repaso-fc.entity';
 import { RetoFC, TipoRetoFC, EstadoRetoFC } from './reto-fc.entity';
@@ -76,6 +76,15 @@ export class FlashcardService {
     let importadas = 0;
     let sinVincular = 0;
 
+    // ⭐ Antes se hacía un findOne por cada fila del lote (N+1 queries) y la comparación era
+    // sensible a mayúsculas/tildes de espacios, así que "¿Qué es...?" y "¿qué es...? " (con un
+    // espacio final) se consideraban distintas y colaban duplicados reales. Se trae una sola vez
+    // el conjunto de preguntas existentes, normalizado, y se compara en memoria.
+    const existentes = await this.fcRepo.find({ select: ['pregunta'] });
+    const preguntasExistentes = new Set(
+      existentes.map((e) => e.pregunta.trim().toLowerCase()),
+    );
+
     for (const [i, fc] of flashcards.entries()) {
       const etiqueta = `Fila ${i + 1}`;
       const errorValidacion = this.validarFlashcardImportada(fc);
@@ -89,8 +98,7 @@ export class FlashcardService {
         errores.push(`${etiqueta}: flashcard duplicada dentro del propio lote — "${fc.pregunta.trim().slice(0, 60)}..."`);
         continue;
       }
-      const existente = await this.fcRepo.findOne({ where: { pregunta: fc.pregunta.trim() } });
-      if (existente) {
+      if (preguntasExistentes.has(preguntaNormalizada)) {
         errores.push(`${etiqueta}: ya existe una flashcard con esa pregunta en el banco — "${fc.pregunta.trim().slice(0, 60)}..."`);
         continue;
       }
@@ -152,7 +160,55 @@ export class FlashcardService {
     });
   }
 
-  async findParaDuelo(oposicionId: string, limite = 10): Promise<Flashcard[]> {
+  async findParaDuelo(
+    oposicionId: string,
+    limite = 10,
+    temaId?: string,
+    versionLeyId?: string,
+  ): Promise<Flashcard[]> {
+    // ⭐ Antes findParaDuelo solo filtraba por oposicionId, ignorando temaId. Se añade el mismo
+    // patrón "vía tema_normativa" ya usado en findByTema para poder acotar el duelo a un tema,
+    // y ahora también por versionLeyId, replicando el join
+    // articulo→capitulo→tituloRef→versionLey (o vía sección, o vía título directo) con Brackets
+    // tal como en test.service.ts#construirQueryPreguntas.
+    if (temaId || versionLeyId) {
+      let query = this.fcRepo
+        .createQueryBuilder('fc')
+        .leftJoin('fc.articulo', 'art')
+        .leftJoin('fc.tema', 'tema')
+        .where('fc.activa = true')
+        .andWhere('fc.esParaDuelo = true');
+
+      if (temaId) {
+        query = query.andWhere(
+          `(tema.id = :temaId OR EXISTS (
+            SELECT 1 FROM temas_normativa tn
+            WHERE tn."articuloId" = art.id
+            AND tn."temaId" = :temaId
+          ))`,
+          { temaId },
+        );
+      }
+
+      if (versionLeyId) {
+        query = query
+          .leftJoin('art.capitulo', 'capituloDuelo')
+          .leftJoin('capituloDuelo.tituloRef', 'tituloViaCapituloDuelo')
+          .leftJoin('art.seccion', 'seccionDuelo')
+          .leftJoin('seccionDuelo.capitulo', 'capituloViaSeccionDuelo')
+          .leftJoin('capituloViaSeccionDuelo.tituloRef', 'tituloViaSeccionDuelo')
+          .leftJoin('art.tituloRef', 'tituloDirectoDuelo')
+          .andWhere(
+            new Brackets((qb) => {
+              qb.where('tituloViaCapituloDuelo.versionLeyId = :versionLeyId', { versionLeyId })
+                .orWhere('tituloViaSeccionDuelo.versionLeyId = :versionLeyId', { versionLeyId })
+                .orWhere('tituloDirectoDuelo.versionLeyId = :versionLeyId', { versionLeyId });
+            }),
+          );
+      }
+
+      return query.orderBy('fc.creadoEn', 'ASC').take(limite).getMany();
+    }
     return this.fcRepo.find({
       where: { oposicion: { id: oposicionId }, activa: true, esParaDuelo: true },
       take: limite,
@@ -166,6 +222,10 @@ export class FlashcardService {
   const ahora = new Date();
 
   // FC con repaso pendiente — busca por oposicion, tema o articulo vinculado
+  // ⭐ Antes solo se unía art.capitulo→tituloRef→versionLey, así que las flashcards ligadas a un
+  // artículo colgado de una Sección (en vez de directamente de un Capítulo) quedaban invisibles
+  // para el repaso. Se añade también el camino art.seccion→capitulo→tituloRef, igual que en
+  // test.service.ts#construirQueryPreguntas.
   const conRepaso = await this.repasoRepo
     .createQueryBuilder('r')
     .leftJoinAndSelect('r.flashcard', 'fc')
@@ -173,6 +233,9 @@ export class FlashcardService {
     .leftJoin('art.capitulo', 'cap')
     .leftJoin('cap.tituloRef', 'tit')
     .leftJoin('tit.versionLey', 'vl')
+    .leftJoin('art.seccion', 'secc')
+    .leftJoin('secc.capitulo', 'capViaSecc')
+    .leftJoin('capViaSecc.tituloRef', 'titViaSecc')
     .leftJoin('fc.tema', 'tema')
     .leftJoin('fc.oposicion', 'opo')
     .where('r.usuario = :usuarioId', { usuarioId })
@@ -196,19 +259,30 @@ export class FlashcardService {
     .leftJoin('cap.tituloRef', 'tit')
     .leftJoin('tit.versionLey', 'vl')
     .leftJoin('vl.oposicionLeyes', 'ol')
+    // ⭐ Camino "vía sección": el artículo puede colgar de una Sección dentro de un Capítulo
+    // (art.seccion → seccion.capitulo → capitulo.tituloRef → tituloRef.versionLey) en vez de
+    // colgar directamente de un Capítulo. Sin este segundo camino, las flashcards de artículos
+    // dentro de una Sección quedaban invisibles aquí, igual que ya se corrigió en
+    // test.service.ts#construirQueryPreguntas.
+    .leftJoin('art.seccion', 'secc')
+    .leftJoin('secc.capitulo', 'capViaSecc')
+    .leftJoin('capViaSecc.tituloRef', 'titViaSecc')
+    .leftJoin('titViaSecc.versionLey', 'vlViaSecc')
+    .leftJoin('vlViaSecc.oposicionLeyes', 'olViaSecc')
     .leftJoin('fc.tema', 'tema')
     .leftJoin('fc.oposicion', 'opo')
     .where('fc.activa = true')
     .andWhere('r.id IS NULL')
     .andWhere(
-      `(opo.id = :oposicionId 
+      `(opo.id = :oposicionId
         OR EXISTS (
-          SELECT 1 FROM convocatorias conv 
-          JOIN oposiciones op ON op.id = conv."oposicionId" 
-          WHERE conv.id = tema."convocatoriaId" 
+          SELECT 1 FROM convocatorias conv
+          JOIN oposiciones op ON op.id = conv."oposicionId"
+          WHERE conv.id = tema."convocatoriaId"
           AND op.id = :oposicionId
-        ) 
+        )
         OR ol.oposicion = :oposicionId
+        OR olViaSecc.oposicion = :oposicionId
         OR EXISTS (
           SELECT 1 FROM temas_normativa tn
           JOIN temas t ON t.id = tn."temaId"
@@ -234,6 +308,18 @@ async registrarRespuesta(
   calificacion: number,
   tiempoMs: number,
 ): Promise<RepasoFC> {
+  // ⭐ calificacion debe estar en el rango 0-5 que usa el algoritmo SM2; sin esta validación
+  // un valor fuera de rango (p.ej. negativo o 100) desestabilizaba el cálculo de factorFacilidad
+  // e intervalo de forma silenciosa.
+  if (
+    typeof calificacion !== 'number' ||
+    Number.isNaN(calificacion) ||
+    calificacion < 0 ||
+    calificacion > 5
+  ) {
+    throw new BadRequestException('"calificacion" debe ser un número entre 0 y 5');
+  }
+
   let repaso = await this.repasoRepo.findOne({
     where: { usuario: { id: usuarioId }, flashcard: { id: flashcardId } },
   });
@@ -288,9 +374,14 @@ async registrarRespuesta(
   }
 
   repaso.ultimaVista = ahora;
-  repaso.proximoRepaso = new Date(
-    ahora.getTime() + nuevoIntervalo * 24 * 60 * 60 * 1000
-  );
+  // ⭐ Antes proximoRepaso se calculaba sumando milisegundos directamente a "ahora", así que una
+  // tarjeta repasada a las 23:58 quedaba "pendiente" casi de inmediato en vez de al día siguiente.
+  // Se normaliza al mediodía del día objetivo para que el intervalo en días sea consistente
+  // independientemente de la hora en la que se responda.
+  const proximoRepaso = new Date(ahora);
+  proximoRepaso.setDate(proximoRepaso.getDate() + nuevoIntervalo);
+  proximoRepaso.setHours(12, 0, 0, 0);
+  repaso.proximoRepaso = proximoRepaso;
 
   const repasoGuardado = await this.repasoRepo.save(repaso);
 
@@ -359,6 +450,10 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
     nuevoIntervalo = Math.round(intervalo * nuevoEF);
   }
 
+  // ⭐ Sin tope, el intervalo crecía sin límite (factorFacilidad compuesto), llevando a repasos
+  // programados a años vista. Se limita a un máximo razonable de 365 días.
+  nuevoIntervalo = Math.min(nuevoIntervalo, 365);
+
   return {
     nuevoIntervalo,
     nuevasRepeticiones: repeticiones + 1,
@@ -398,8 +493,10 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
       fecha.setHours(9, 0, 0, 0);
     } else if (cuando === 'finde') {
       fecha = new Date(ahora);
-      const diasHastaViernes = (5 - fecha.getDay() + 7) % 7 || 7;
-      fecha.setDate(fecha.getDate() + diasHastaViernes);
+      // ⭐ 'finde' (fin de semana) debe apuntar al sábado (índice 6), no al viernes (índice 5)
+      // como hacía el cálculo anterior.
+      const diasHastaSabado = (6 - fecha.getDay() + 7) % 7 || 7;
+      fecha.setDate(fecha.getDate() + diasHastaSabado);
       fecha.setHours(10, 0, 0, 0);
     } else {
       fecha = cuando;
@@ -457,8 +554,44 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
     retadoNickOEmail: string,
     oposicionId: string,
     numFC = 5,
+    temaId?: string,
+    versionLeyId?: string,
   ): Promise<RetoFC> {
-    const flashcards = await this.findParaDuelo(oposicionId, numFC);
+    // ⭐ Reescrito por completo: la versión anterior recibía retadoNickOEmail pero nunca lo
+    // usaba, así que el campo "retado" del RetoFC nunca se rellenaba (el duelo no tenía
+    // segundo participante). Se replica el mismo patrón de validación que
+    // reto.service.ts#crearRetoUsuario: buscar por nick y luego por email, rechazar auto-reto,
+    // y comprobar que ambos usuarios están vinculados a la oposición en la misma convocatoria.
+    const retador = await this.usuarioRepo.findOne({ where: { id: retadorId } });
+    if (!retador) throw new NotFoundException('Retador no encontrado');
+
+    const busqueda = retadoNickOEmail.toLowerCase().trim();
+    let retado = await this.usuarioRepo.findOne({ where: { nick: busqueda } });
+    if (!retado) retado = await this.usuarioRepo.findOne({ where: { email: busqueda } });
+    if (!retado) throw new NotFoundException('Usuario no encontrado con ese nick o email');
+    if (retado.id === retadorId) throw new BadRequestException('No puedes retarte a ti mismo');
+
+    const retadorOposicion = await this.usuarioOposicionRepo.findOne({
+      where: { usuario: { id: retadorId } as any, oposicion: { id: oposicionId } as any },
+      relations: ['convocatoriaActiva'],
+    });
+    if (!retadorOposicion) throw new BadRequestException('No estás vinculado a esta oposición');
+
+    const retadoOposicion = await this.usuarioOposicionRepo.findOne({
+      where: { usuario: { id: retado.id } as any, oposicion: { id: oposicionId } as any },
+      relations: ['convocatoriaActiva'],
+    });
+    if (!retadoOposicion) {
+      throw new BadRequestException(`${retado.nick ?? retado.nombre} no está preparando esta oposición`);
+    }
+
+    const convocatoriaRetador = (retadorOposicion as any).convocatoriaActiva?.id;
+    const convocatoriaRetado = (retadoOposicion as any).convocatoriaActiva?.id;
+    if (convocatoriaRetador !== convocatoriaRetado) {
+      throw new BadRequestException(`${retado.nick ?? retado.nombre} está en una convocatoria distinta a la tuya`);
+    }
+
+    const flashcards = await this.findParaDuelo(oposicionId, numFC, temaId, versionLeyId);
     if (flashcards.length === 0) throw new BadRequestException('No hay flashcards de duelo disponibles');
 
     const fechaFin = new Date();
@@ -469,8 +602,18 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
       flashcards,
       fechaFin,
       retador: { id: retadorId } as any,
+      retado: { id: retado.id } as any,
       oposicion: { id: oposicionId } as any,
     }));
+
+    await this.notificacionService.crear({
+      usuarioId: retado.id,
+      tipo: TipoNotificacion.RETO_RECIBIDO,
+      titulo: '🃏 ¡Nuevo duelo de flashcards!',
+      mensaje: `${retador.nick ?? retador.nombre} te ha retado a un duelo de flashcards`,
+      prioridad: PrioridadNotificacion.MEDIA,
+      urlAccion: `/app/flashcards/duelo/${reto.id}`,
+    });
 
     return reto;
   }
@@ -581,9 +724,30 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
   ): Promise<ResultadoRetoFC> {
     const reto = await this.retoFcRepo.findOne({
       where: { id: retoId },
-      relations: ['resultados', 'resultados.usuario'],
+      relations: ['resultados', 'resultados.usuario', 'flashcards', 'retador', 'retado'],
     });
     if (!reto) throw new NotFoundException('Reto FC no encontrado');
+
+    // ⭐ Antes no se comprobaba que usuarioId fuera realmente el retador o el retado de este
+    // reto — cualquier usuario autenticado podía "completar" el reto de otro.
+    const retadorId = (reto.retador as any)?.id;
+    const retadoId = (reto.retado as any)?.id;
+    const esParticipante = usuarioId === retadorId || usuarioId === retadoId;
+    if (!esParticipante) {
+      throw new ForbiddenException('No eres participante de este reto');
+    }
+
+    // ⭐ Antes no se validaba que las flashcardId respondidas pertenecieran realmente a las
+    // flashcards congeladas del reto — se podían colar ids arbitrarias.
+    const idsValidos = new Set((reto.flashcards ?? []).map((fc) => fc.id));
+    const idsInvalidos = respuestas
+      .map((r) => r.flashcardId)
+      .filter((id) => !idsValidos.has(id));
+    if (idsInvalidos.length > 0) {
+      throw new BadRequestException(
+        `Las siguientes flashcards no pertenecen a este reto: ${idsInvalidos.join(', ')}`,
+      );
+    }
 
     const yaCompletado = reto.resultados?.some(
       (r) => (r.usuario as any).id === usuarioId && r.completado
@@ -593,20 +757,27 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     const aciertos = respuestas.filter((r) => r.correcta).length;
     const tiempoTotal = respuestas.reduce((acc, r) => acc + r.tiempoRespuesta, 0);
 
-    // Registrar cada respuesta en el repaso individual
-    for (const r of respuestas) {
-      await this.registrarRespuesta(usuarioId, r.flashcardId, r.correcta ? 4 : 1, r.tiempoRespuesta);
-    }
+    // ⭐ Antes el bucle de registrarRespuesta y el guardado del resultado no estaban en una
+    // transacción: si el proceso fallaba a mitad del bucle, quedaban repasos SM2 actualizados
+    // sin fila de resultado, y el usuario podía volver a responder y "doblar" los puntos.
+    // Se envuelve todo en una transacción del manager de resultadoRepo.
+    const resultado = await this.resultadoRepo.manager.transaction(async (manager) => {
+      for (const r of respuestas) {
+        await this.registrarRespuesta(usuarioId, r.flashcardId, r.correcta ? 4 : 1, r.tiempoRespuesta);
+      }
 
-    const resultado = await this.resultadoRepo.save(this.resultadoRepo.create({
-      retoFc: { id: retoId } as any,
-      usuario: { id: usuarioId } as any,
-      completado: true,
-      aciertos,
-      fallos: respuestas.length - aciertos,
-      tiempoTotal,
-      respuestas,
-    }));
+      return manager.save(
+        manager.create(ResultadoRetoFC, {
+          retoFc: { id: retoId } as any,
+          usuario: { id: usuarioId } as any,
+          completado: true,
+          aciertos,
+          fallos: respuestas.length - aciertos,
+          tiempoTotal,
+          respuestas,
+        }),
+      );
+    });
 
     // Si es duelo y ambos completaron — determinar ganador
     if (reto.tipo === TipoRetoFC.DUELO) {
@@ -656,9 +827,31 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     }
   }
 
+  // ⭐ No existía ningún listado de duelos de FC: crearDueloFC guardaba el RetoFC pero no había
+  // forma de recuperarlo desde el frontend salvo por id directo. Se replica el patrón de
+  // reto.service.ts#getMisRetos (retos donde el usuario es retador o retado, con relaciones
+  // cargadas y ordenados por fecha de creación descendente).
+  async getMisRetosFC(usuarioId: string): Promise<RetoFC[]> {
+    return this.retoFcRepo
+      .createQueryBuilder('reto')
+      .leftJoinAndSelect('reto.retador', 'retador')
+      .leftJoinAndSelect('reto.retado', 'retado')
+      .leftJoinAndSelect('reto.oposicion', 'oposicion')
+      .leftJoinAndSelect('reto.tema', 'tema')
+      .leftJoinAndSelect('reto.resultados', 'resultados')
+      .leftJoinAndSelect('resultados.usuario', 'resultadoUsuario')
+      .where('retador.id = :usuarioId', { usuarioId })
+      .orWhere('retado.id = :usuarioId', { usuarioId })
+      .orderBy('reto.creadoEn', 'DESC')
+      .getMany();
+  }
+
   // ─── STATS ───────────────────────────────────────────────
 
   async getEstadisticasFC(usuarioId: string, oposicionId: string): Promise<any> {
+  // ⭐ Igual que en getPendientesRepaso, se añade el camino "vía sección"
+  // (art.seccion→capitulo→tituloRef→versionLey) para no dejar fuera del total las flashcards
+  // de artículos colgados de una Sección.
   const total = await this.fcRepo
     .createQueryBuilder('fc')
     .leftJoin('fc.articulo', 'art')
@@ -666,11 +859,16 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     .leftJoin('cap.tituloRef', 'tit')
     .leftJoin('tit.versionLey', 'vl')
     .leftJoin('vl.oposicionLeyes', 'ol')
+    .leftJoin('art.seccion', 'secc')
+    .leftJoin('secc.capitulo', 'capViaSecc')
+    .leftJoin('capViaSecc.tituloRef', 'titViaSecc')
+    .leftJoin('titViaSecc.versionLey', 'vlViaSecc')
+    .leftJoin('vlViaSecc.oposicionLeyes', 'olViaSecc')
     .leftJoin('fc.tema', 'tema')
     .leftJoin('fc.oposicion', 'opo')
     .where('fc.activa = true')
     .andWhere(
-      '(opo.id = :oposicionId OR EXISTS (SELECT 1 FROM convocatorias conv JOIN oposiciones op ON op.id = conv."oposicionId" WHERE conv.id = tema."convocatoriaId" AND op.id = :oposicionId) OR ol.oposicion = :oposicionId)',
+      '(opo.id = :oposicionId OR EXISTS (SELECT 1 FROM convocatorias conv JOIN oposiciones op ON op.id = conv."oposicionId" WHERE conv.id = tema."convocatoriaId" AND op.id = :oposicionId) OR ol.oposicion = :oposicionId OR olViaSecc.oposicion = :oposicionId)',
       { oposicionId }
     )
     .getCount();

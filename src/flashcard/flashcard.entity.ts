@@ -50,16 +50,19 @@ export class Flashcard {
   @CreateDateColumn()
   creadoEn: Date;
 
-  @ManyToOne(() => Articulo, { nullable: true })
+  // ⭐ synchronize=true en TypeORM: sin onDelete, borrar un Articulo/Tema/Oposicion/Usuario
+  // referenciado dejaba la FK huérfana bloqueando el borrado (o fallando) en la BD. Al ser
+  // relaciones nullable, SET NULL es lo correcto: la flashcard sobrevive sin el vínculo.
+  @ManyToOne(() => Articulo, { nullable: true, onDelete: 'SET NULL' })
   articulo: Articulo;
 
-  @ManyToOne(() => Tema, { nullable: true })
+  @ManyToOne(() => Tema, { nullable: true, onDelete: 'SET NULL' })
   tema: Tema;
 
-  @ManyToOne(() => Oposicion, { nullable: true })
+  @ManyToOne(() => Oposicion, { nullable: true, onDelete: 'SET NULL' })
   oposicion: Oposicion;
 
-  @ManyToOne(() => Usuario, { nullable: true })
+  @ManyToOne(() => Usuario, { nullable: true, onDelete: 'SET NULL' })
   usuario: Usuario;
 
   @OneToMany(() => RepasoFC, (r) => r.flashcard)

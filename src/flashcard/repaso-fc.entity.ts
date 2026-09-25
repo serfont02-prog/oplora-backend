@@ -46,9 +46,12 @@ export class RepasoFC {
   @UpdateDateColumn()
   actualizadoEn!: Date;
 
-  @ManyToOne(() => Flashcard)
+  // ⭐ synchronize=true: estas relaciones no son nullable (no tiene sentido un repaso sin
+  // flashcard o sin usuario), así que al borrar el padre debe borrarse en cascada el repaso en
+  // vez de dejar una FK apuntando a una fila inexistente.
+  @ManyToOne(() => Flashcard, { onDelete: 'CASCADE' })
   flashcard!: Flashcard;
 
-  @ManyToOne(() => Usuario)
+  @ManyToOne(() => Usuario, { onDelete: 'CASCADE' })
   usuario!: Usuario;
 }
