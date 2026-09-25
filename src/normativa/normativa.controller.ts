@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Delete, Param, Body, UseGuards, Request, Query, Patch } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Brackets } from 'typeorm';
 import { Titulo } from './titulo.entity';
 import { Capitulo } from './capitulo.entity';
 import { Articulo } from './articulo.entity';
@@ -192,6 +192,34 @@ getDisposiciones(@Param('versionLeyId') versionLeyId: string) {
       });
     }
 
+// ⭐ Busca un artículo "vigente" cuyo capítulo sea capituloId, ya cuelgue
+// directamente del capítulo o de una sección dentro de ese capítulo (sin
+// este camino, los artículos de una sección quedaban invisibles a la
+// navegación anterior/siguiente y hacía saltar al siguiente capítulo entero).
+private async buscarArticuloDeCapitulo(
+  capituloId: string,
+  opts: { orden?: number; extremo?: 'ASC' | 'DESC' },
+): Promise<Articulo | null> {
+  let qb = this.articuloRepo
+    .createQueryBuilder('articulo')
+    .leftJoin('articulo.seccion', 'seccion')
+    .where(
+      new Brackets((qbb) => {
+        qbb.where('articulo.capitulo = :capituloId', { capituloId })
+          .orWhere('seccion.capitulo = :capituloId', { capituloId });
+      }),
+    )
+    .andWhere('articulo.vigente = true');
+
+  if (opts.orden !== undefined) {
+    qb = qb.andWhere('articulo.orden = :orden', { orden: opts.orden });
+  }
+  if (opts.extremo) {
+    qb = qb.orderBy('articulo.orden', opts.extremo).limit(1);
+  }
+  return qb.getOne();
+}
+
 @Get('articulo/:id/anterior-siguiente')
 async anteriorSiguiente(@Param('id') id: string) {
   const articulo = await this.articuloRepo.findOne({
@@ -202,31 +230,38 @@ async anteriorSiguiente(@Param('id') id: string) {
       'capitulo.tituloRef.versionLey',
       'tituloRef',
       'tituloRef.versionLey',
+      'seccion',
+      'seccion.capitulo',
+      'seccion.capitulo.tituloRef',
+      'seccion.capitulo.tituloRef.versionLey',
     ],
   });
   if (!articulo) return { anterior: null, siguiente: null };
 
   const orden = articulo.orden;
-  const capituloId = articulo.capitulo?.id;
-  const tituloId = (articulo as any).tituloRef?.id ?? articulo.capitulo?.tituloRef?.id;
+  // ⭐ Si el artículo cuelga de una Sección, su capítulo/título "efectivo"
+  // es el de esa sección, no un campo directo del propio artículo.
+  const capituloId = articulo.capitulo?.id ?? articulo.seccion?.capitulo?.id;
+  const capituloOrdenPropio = articulo.capitulo?.orden ?? articulo.seccion?.capitulo?.orden;
+  const tituloId = (articulo as any).tituloRef?.id
+    ?? articulo.capitulo?.tituloRef?.id
+    ?? articulo.seccion?.capitulo?.tituloRef?.id;
   const versionLeyId = articulo.capitulo?.tituloRef?.versionLey?.id
+    ?? articulo.seccion?.capitulo?.tituloRef?.versionLey?.id
     ?? (articulo as any).tituloRef?.versionLey?.id;
   const tituloOrden = articulo.capitulo?.tituloRef?.orden
+    ?? articulo.seccion?.capitulo?.tituloRef?.orden
     ?? (articulo as any).tituloRef?.orden;
 
   let anterior: Articulo | null = null;
   let siguiente: Articulo | null = null;
 
   if (capituloId) {
-    const capituloOrden = articulo.capitulo?.orden ?? 1;
+    const capituloOrden = capituloOrdenPropio ?? 1;
 
-    // Buscar en el mismo capítulo
-    anterior = await this.articuloRepo.findOne({
-      where: { capitulo: { id: capituloId }, orden: orden - 1, vigente: true },
-    });
-    siguiente = await this.articuloRepo.findOne({
-      where: { capitulo: { id: capituloId }, orden: orden + 1, vigente: true },
-    });
+    // Buscar en el mismo capítulo (incluyendo artículos dentro de sus secciones)
+    anterior = await this.buscarArticuloDeCapitulo(capituloId, { orden: orden - 1 });
+    siguiente = await this.buscarArticuloDeCapitulo(capituloId, { orden: orden + 1 });
 
     // Si no hay anterior → buscar en capítulo anterior del mismo título
     if (!anterior && tituloId) {
@@ -234,10 +269,7 @@ async anteriorSiguiente(@Param('id') id: string) {
         where: { tituloRef: { id: tituloId }, orden: capituloOrden - 1 },
       });
       if (capituloAnterior) {
-        anterior = await this.articuloRepo.findOne({
-          where: { capitulo: { id: capituloAnterior.id }, vigente: true },
-          order: { orden: 'DESC' },
-        });
+        anterior = await this.buscarArticuloDeCapitulo(capituloAnterior.id, { extremo: 'DESC' });
       }
       // Si no hay capítulo anterior → buscar artículos directos del mismo título
       if (!anterior) {
@@ -257,10 +289,7 @@ async anteriorSiguiente(@Param('id') id: string) {
             order: { orden: 'DESC' },
           });
           if (ultimoCap) {
-            anterior = await this.articuloRepo.findOne({
-              where: { capitulo: { id: ultimoCap.id }, vigente: true },
-              order: { orden: 'DESC' },
-            });
+            anterior = await this.buscarArticuloDeCapitulo(ultimoCap.id, { extremo: 'DESC' });
           }
           if (!anterior) {
             anterior = await this.articuloRepo.findOne({
@@ -278,10 +307,7 @@ async anteriorSiguiente(@Param('id') id: string) {
         where: { tituloRef: { id: tituloId }, orden: capituloOrden + 1 },
       });
       if (siguienteCapitulo) {
-        siguiente = await this.articuloRepo.findOne({
-          where: { capitulo: { id: siguienteCapitulo.id }, vigente: true },
-          order: { orden: 'ASC' },
-        });
+        siguiente = await this.buscarArticuloDeCapitulo(siguienteCapitulo.id, { extremo: 'ASC' });
       }
     }
 
@@ -301,10 +327,7 @@ async anteriorSiguiente(@Param('id') id: string) {
             order: { orden: 'ASC' },
           });
           if (primerCap) {
-            siguiente = await this.articuloRepo.findOne({
-              where: { capitulo: { id: primerCap.id }, vigente: true },
-              order: { orden: 'ASC' },
-            });
+            siguiente = await this.buscarArticuloDeCapitulo(primerCap.id, { extremo: 'ASC' });
           }
         }
       }
@@ -330,10 +353,7 @@ async anteriorSiguiente(@Param('id') id: string) {
           order: { orden: 'DESC' },
         });
         if (ultimoCap) {
-          anterior = await this.articuloRepo.findOne({
-            where: { capitulo: { id: ultimoCap.id }, vigente: true },
-            order: { orden: 'DESC' },
-          });
+          anterior = await this.buscarArticuloDeCapitulo(ultimoCap.id, { extremo: 'DESC' });
         }
         if (!anterior) {
           anterior = await this.articuloRepo.findOne({
@@ -351,10 +371,7 @@ async anteriorSiguiente(@Param('id') id: string) {
         order: { orden: 'ASC' },
       });
       if (primerCapitulo) {
-        siguiente = await this.articuloRepo.findOne({
-          where: { capitulo: { id: primerCapitulo.id }, vigente: true },
-          order: { orden: 'ASC' },
-        });
+        siguiente = await this.buscarArticuloDeCapitulo(primerCapitulo.id, { extremo: 'ASC' });
       }
     }
 
@@ -374,10 +391,7 @@ async anteriorSiguiente(@Param('id') id: string) {
             order: { orden: 'ASC' },
           });
           if (primerCap) {
-            siguiente = await this.articuloRepo.findOne({
-              where: { capitulo: { id: primerCap.id }, vigente: true },
-              order: { orden: 'ASC' },
-            });
+            siguiente = await this.buscarArticuloDeCapitulo(primerCap.id, { extremo: 'ASC' });
           }
         }
       }

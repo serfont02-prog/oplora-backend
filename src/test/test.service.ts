@@ -226,26 +226,40 @@ if (modo === 'primer_reto') {
 
     if (versionLeyId) {
     query = query
-      // ⭐ El artículo puede colgar de un Capítulo (capitulo → tituloRef → versionLey)
+      // ⭐ El artículo puede colgar de un Capítulo (capitulo → tituloRef → versionLey),
+      // de una Sección dentro de un Capítulo (seccion → capitulo → tituloRef → versionLey),
       // o, si su Título no tiene capítulos (ej. Título Preliminar de la CE, arts. 1-9,
       // o el Título X, arts. 166-169), colgar directamente de un Título (tituloRef → versionLey).
+      // Sin el camino de Sección, todos los artículos dentro de una sección (ej. CE
+      // arts. 15-38, "De los derechos y libertades") quedaban invisibles para test,
+      // consulta e importación por ley.
       .leftJoin('articulo.capitulo', 'capituloLey')
       .leftJoin('capituloLey.tituloRef', 'tituloViaCapituloLey')
+      .leftJoin('articulo.seccion', 'seccionLey')
+      .leftJoin('seccionLey.capitulo', 'capituloViaSeccionLey')
+      .leftJoin('capituloViaSeccionLey.tituloRef', 'tituloViaSeccionLey')
       .leftJoin('articulo.tituloRef', 'tituloDirectoLey')
       .andWhere(
         new Brackets((qb) => {
           qb.where('tituloViaCapituloLey.versionLeyId = :versionLeyId', { versionLeyId })
+            .orWhere('tituloViaSeccionLey.versionLeyId = :versionLeyId', { versionLeyId })
             .orWhere('tituloDirectoLey.versionLeyId = :versionLeyId', { versionLeyId });
         }),
       )
-      // ⭐ Exigir que el artículo esté realmente vinculado a algún tema del temario real
+      // ⭐ Exigir que el artículo esté realmente vinculado a algún tema del
+      // temario real DE ESTA OPOSICIÓN (no de cualquier otra oposición que
+      // también use la misma ley, ej. la Constitución). Sin este join a
+      // oposicionLeyFiltro, cuando no había convocatoria activa resuelta se
+      // colaban preguntas de artículos vinculados a temas de otras oposiciones.
       .leftJoin(TemaNormativa, 'tnLey', 'tnLey."articuloId" = articulo.id')
       .leftJoin('tnLey.tema', 'temaLey')
+      .leftJoin('temaLey.convocatoria', 'convocatoriaTemaLey')
+      .leftJoin('convocatoriaTemaLey.oposicion', 'oposicionTemaLey')
       .andWhere(
         convocatoriaActivaId
           ? 'temaLey.id IS NOT NULL AND temaLey."convocatoriaId" = :convocatoriaActivaId'
-          : 'temaLey.id IS NOT NULL',
-        convocatoriaActivaId ? { convocatoriaActivaId } : {},
+          : 'temaLey.id IS NOT NULL AND oposicionTemaLey.id = :oposicionId',
+        convocatoriaActivaId ? { convocatoriaActivaId } : { oposicionId },
       );
   }
 
@@ -267,16 +281,21 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
     .leftJoin('tn.tema', 'temaNorm')
     .leftJoin('temaNorm.convocatoria', 'convocatoriaNorm')
     .leftJoin('convocatoriaNorm.oposicion', 'oposicionNorm')
-    // ⭐ Igual que arriba: el artículo puede colgar de Capítulo o directamente de Título
+    // ⭐ Igual que arriba: el artículo puede colgar de Capítulo, de una Sección
+    // dentro de un Capítulo, o directamente de Título
     .leftJoin('articulo.capitulo', 'capituloArt')
     .leftJoin('capituloArt.tituloRef', 'tituloRefArt')
     .leftJoin('tituloRefArt.versionLey', 'versionLeyArt')
+    .leftJoin('articulo.seccion', 'seccionArt')
+    .leftJoin('seccionArt.capitulo', 'capituloViaSeccionArt')
+    .leftJoin('capituloViaSeccionArt.tituloRef', 'tituloViaSeccionArt')
+    .leftJoin('tituloViaSeccionArt.versionLey', 'versionLeyViaSeccionArt')
     .leftJoin('articulo.tituloRef', 'tituloDirectoArt')
     .leftJoin('tituloDirectoArt.versionLey', 'versionLeyDirectoArt')
     .leftJoin(
       OposicionLey,
       'ol',
-      'ol."versionLeyId" = versionLeyArt.id OR ol."versionLeyId" = versionLeyDirectoArt.id'
+      'ol."versionLeyId" = versionLeyArt.id OR ol."versionLeyId" = versionLeyViaSeccionArt.id OR ol."versionLeyId" = versionLeyDirectoArt.id'
     )
     .leftJoin('ol.oposicion', 'oposicionLey');
 
@@ -834,18 +853,24 @@ async importarPorVersionLey(
 ): Promise<{ importadas: number; errores: string[] }> {
 
   // Obtener artículos de la versión de ley.
-  // ⭐ Un artículo puede colgar de un Capítulo (capitulo → tituloRef → versionLey)
+  // ⭐ Un artículo puede colgar de un Capítulo (capitulo → tituloRef → versionLey),
+  // de una Sección dentro de un Capítulo (seccion → capitulo → tituloRef → versionLey),
   // O, si su Título no tiene capítulos (ej. Título Preliminar de la CE, arts. 1-9,
   // o el Título X, arts. 166-169), colgar directamente de un Título (tituloRef → versionLey).
-  // Hay que buscar por ambos caminos o se pierden los artículos sin capítulo.
+  // Hay que buscar por los tres caminos o se pierden artículos (ej. los que están
+  // dentro de una sección, como CE arts. 15-38 "De los derechos y libertades").
   const articulos = await this.articuloRepo
     .createQueryBuilder('articulo')
     .leftJoin('articulo.capitulo', 'capitulo')
     .leftJoin('capitulo.tituloRef', 'tituloViaCapitulo')
+    .leftJoin('articulo.seccion', 'seccion')
+    .leftJoin('seccion.capitulo', 'capituloViaSeccion')
+    .leftJoin('capituloViaSeccion.tituloRef', 'tituloViaSeccion')
     .leftJoin('articulo.tituloRef', 'tituloDirecto')
     .where(
       new Brackets((qb) => {
         qb.where('tituloViaCapitulo.versionLeyId = :versionLeyId', { versionLeyId })
+          .orWhere('tituloViaSeccion.versionLeyId = :versionLeyId', { versionLeyId })
           .orWhere('tituloDirecto.versionLeyId = :versionLeyId', { versionLeyId });
       }),
     )
@@ -1103,11 +1128,18 @@ async listarPreguntasPorVersionLey(
     .leftJoin('articulo.capitulo', 'capitulo')
     .leftJoin('capitulo.tituloRef', 'tituloViaCapitulo')
     .leftJoin('tituloViaCapitulo.versionLey', 'versionLeyViaCapitulo')
+    // ⭐ Camino vía Sección (capitulo → seccion → articulo), sin el cual los
+    // artículos dentro de una sección quedaban fuera del banco por ley.
+    .leftJoin('articulo.seccion', 'seccion')
+    .leftJoin('seccion.capitulo', 'capituloViaSeccion')
+    .leftJoin('capituloViaSeccion.tituloRef', 'tituloViaSeccion')
+    .leftJoin('tituloViaSeccion.versionLey', 'versionLeyViaSeccion')
     .leftJoin('articulo.tituloRef', 'tituloDirecto')
     .leftJoin('tituloDirecto.versionLey', 'versionLeyDirecto')
     .where(
       new Brackets((qb) => {
         qb.where('versionLeyViaCapitulo.id = :versionLeyId', { versionLeyId })
+          .orWhere('versionLeyViaSeccion.id = :versionLeyId', { versionLeyId })
           .orWhere('versionLeyDirecto.id = :versionLeyId', { versionLeyId });
       }),
     )
