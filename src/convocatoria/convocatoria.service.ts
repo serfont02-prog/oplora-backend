@@ -176,6 +176,8 @@ export class ConvocatoriaService {
     puestos: dto.puestos as any,
     bloquesTemario: dto.bloquesTemario as any,
     numOpcionesTest: dto.numOpcionesTest ?? null,
+    numOpcionesPsicotecnico: dto.numOpcionesPsicotecnico ?? null,
+    tienePsicotecnicos: dto.tienePsicotecnicos ?? true,
     oposicion: { id: dto.oposicionId } as any,
   });
 
@@ -212,6 +214,7 @@ private async actualizarEstadoOposicion(oposicionId: string): Promise<void> {
   if (payload.numeroSolicitudes === '' as any) payload.numeroSolicitudes = null;
   if (payload.numeroPresentados === '' as any) payload.numeroPresentados = null;
   if (payload.numOpcionesTest === '' as any) payload.numOpcionesTest = null;
+  if (payload.numOpcionesPsicotecnico === '' as any) payload.numOpcionesPsicotecnico = null;
 
   await this.convocatoriaRepo.update(id, payload);
   const convocatoria = await this.findOne(id);

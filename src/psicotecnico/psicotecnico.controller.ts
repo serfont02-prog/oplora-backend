@@ -60,6 +60,12 @@ export class PsicotecnicoController {
     return this.service.guardarResultado({ ...body, usuarioId: req.user.id });
   }
 
+  @Get('preguntas/:id/correcta')
+  @UseGuards(JwtAuthGuard)
+  getRespuestaCorrecta(@Param('id') id: string) {
+    return this.service.getRespuestaCorrecta(id);
+  }
+
   @Get('progreso-periodo/:oposicionId')
   @UseGuards(JwtAuthGuard)
   getProgresoPorPeriodo(@Param('oposicionId') oposicionId: string, @Request() req: any) {

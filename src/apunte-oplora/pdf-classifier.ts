@@ -529,7 +529,16 @@ export function clasificarDocumento(
         }
 
         let j = i;
-        const MAX_LINEAS_MARCADOR = 15;
+        // ⭐ BUG: este límite se usa como red de seguridad para no tragarse el documento
+        // entero si a un marcador [EJ|ID|ES|TR|RE|PR ...] le falta el "]" de cierre por un
+        // error en el PDF. Pero cada ítem de una caja (p.ej. un [ES ...] con viñetas) suele
+        // ocupar 2-3 líneas físicas propias (viñeta, etiqueta, continuación), así que con un
+        // límite de 15 líneas una caja de más de ~5 ítems se queda corta: el bucle se rendía
+        // ANTES de encontrar el "]" real, el marcador se daba por "no cerrado" y el resto del
+        // contenido (incluido el último ítem y el "]" real) se colaba fuera de la caja como
+        // texto/viñeta suelta, con el corchete de cierre literal pegado al final. Se sube el
+        // límite para admitir cajas con muchos ítems, manteniendo la red de seguridad.
+        const MAX_LINEAS_MARCADOR = 300;
         let consumidas = 0;
 
         while (!cerrado && consumidas < MAX_LINEAS_MARCADOR && j + 1 < lineas.length) {

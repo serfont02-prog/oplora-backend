@@ -166,6 +166,18 @@ export class Convocatoria {
   @Column({ type: 'int', nullable: true })
   numOpcionesTest: number | null;
 
+  // ── Psicotécnicos: nº de opciones de respuesta de ESTA convocatoria ──
+  // Igual que numOpcionesTest pero para el banco de PreguntaPsicotecnica.
+  // null = mostrar todas las opciones guardadas en la pregunta, sin recortar.
+  @Column({ type: 'int', nullable: true })
+  numOpcionesPsicotecnico: number | null;
+
+  // ── Interruptor maestro: ¿esta convocatoria tiene fase de psicotécnicos? ──
+  // true/null = comportamiento actual (visibilidad según habilitado por tipo).
+  // false = oculta psicotécnicos por completo, sin mirar la config por tipo.
+  @Column({ type: 'boolean', nullable: true, default: true })
+  tienePsicotecnicos: boolean;
+
   @ManyToOne(() => Oposicion, (o) => o.convocatorias)
   oposicion: Oposicion;
 

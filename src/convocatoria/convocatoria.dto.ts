@@ -58,6 +58,8 @@ export class CreateConvocatoriaDto {
     descripcion?: string;
   }[];
   numOpcionesTest?: number;
+  numOpcionesPsicotecnico?: number;
+  tienePsicotecnicos?: boolean;
 }
 
 export class UpdateConvocatoriaDto {
@@ -118,4 +120,6 @@ export class UpdateConvocatoriaDto {
     descripcion?: string;
   }[];
   numOpcionesTest?: number;
+  numOpcionesPsicotecnico?: number;
+  tienePsicotecnicos?: boolean;
 }

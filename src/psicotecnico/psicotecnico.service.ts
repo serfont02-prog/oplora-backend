@@ -5,6 +5,7 @@ import { PsicotecnicoConfigOposicion } from './psicotecnico-config-oposicion.ent
 import { PreguntaPsicotecnica } from './pregunta-psicotecnica.entity';
 import { ResultadoPsicotecnico } from './resultado-psicotecnico.entity';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import {
   PsicotecnicoTipo,
   PsicotecnicoDificultad,
@@ -12,6 +13,41 @@ import {
   SUBTIPOS_SUGERIDOS,
   DIFICULTADES_DEFECTO,
 } from './psicotecnico-tipo.enum';
+
+/**
+ * Recorta el pool de opciones de una PreguntaPsicotecnica al número de
+ * opciones que use la convocatoria activa del usuario (numOpcionesPsicotecnico
+ * en Convocatoria). Espejo exacto de recortarOpcionesArticulo() en
+ * test.service.ts: no muta la fila guardada, opera sobre una copia y
+ * devuelve un nuevo índice "correcta" recalculado tras el recorte +
+ * reordenado aleatorio. Si numOpciones es null/undefined, >= opciones.length
+ * o < 2, devuelve tal cual.
+ */
+function recortarOpcionesPsicotecnico(
+  opciones: string[],
+  correcta: number,
+  numOpciones?: number | null,
+): { opciones: string[]; correcta: number } {
+  if (!numOpciones || numOpciones >= opciones.length || numOpciones < 2) {
+    return { opciones, correcta };
+  }
+
+  const correctaTexto = opciones[correcta];
+  const distractores = opciones.filter((_, i) => i !== correcta);
+
+  for (let i = distractores.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [distractores[i], distractores[j]] = [distractores[j], distractores[i]];
+  }
+  const seleccion = [correctaTexto, ...distractores.slice(0, numOpciones - 1)];
+
+  for (let i = seleccion.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [seleccion[i], seleccion[j]] = [seleccion[j], seleccion[i]];
+  }
+
+  return { opciones: seleccion, correcta: seleccion.indexOf(correctaTexto) };
+}
 
 @Injectable()
 export class PsicotecnicoService {
@@ -24,6 +60,8 @@ export class PsicotecnicoService {
     private readonly resultadoRepo: Repository<ResultadoPsicotecnico>,
     @InjectRepository(UsuarioOposicion)
     private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
+    @InjectRepository(Convocatoria)
+    private readonly convocatoriaRepo: Repository<Convocatoria>,
   ) {}
 
   /* =========================================================
@@ -76,6 +114,13 @@ export class PsicotecnicoService {
 
   async getConfigParaUsuario(usuarioId: string, oposicionId: string, convocatoriaId?: string) {
     const convocatoriaResuelta = await this.resolverConvocatoria(usuarioId, oposicionId, convocatoriaId);
+
+    // Interruptor maestro: si la convocatoria tiene tienePsicotecnicos = false
+    // explícitamente, se ocultan por completo, sin mirar la config por tipo.
+    if (convocatoriaResuelta) {
+      const convocatoria = await this.convocatoriaRepo.findOne({ where: { id: convocatoriaResuelta } });
+      if (convocatoria && convocatoria.tienePsicotecnicos === false) return [];
+    }
 
     const config = (await this.getConfigEfectiva(oposicionId, convocatoriaResuelta)).filter((c) => c.habilitado);
 
@@ -166,6 +211,14 @@ export class PsicotecnicoService {
     const numPreguntas = Math.min(Math.max(datos.numPreguntas ?? 10, 1), 50);
     const convocatoriaResuelta = await this.resolverConvocatoria(datos.usuarioId, datos.oposicionId, datos.convocatoriaId);
 
+    // Nº de opciones de la convocatoria activa, para recortar el pool de
+    // opciones de cada pregunta (igual que numOpcionesTest en test.service.ts).
+    let numOpcionesPsicotecnicoActiva: number | null | undefined;
+    if (convocatoriaResuelta) {
+      const convocatoria = await this.convocatoriaRepo.findOne({ where: { id: convocatoriaResuelta } });
+      numOpcionesPsicotecnicoActiva = convocatoria?.numOpcionesPsicotecnico;
+    }
+
     const qb = this.preguntaRepo
       .createQueryBuilder('p')
       .where('p.activa = true')
@@ -210,8 +263,35 @@ export class PsicotecnicoService {
       throw new BadRequestException('No hay preguntas disponibles para esta modalidad todavía.');
     }
 
+    // Recortar opciones (si procede) ANTES de despojar `correcta`, ya que el
+    // recorte necesita recalcular en qué posición queda la opción correcta.
     // No se envía `correcta` al cliente: se corrige en el servidor al guardar el resultado.
-    return preguntas.map(({ correcta, ...resto }) => resto);
+    return preguntas.map((p) => {
+      const { opciones } = recortarOpcionesPsicotecnico(p.opciones, p.correcta, numOpcionesPsicotecnicoActiva);
+      const { correcta, ...resto } = p;
+      return { ...resto, opciones };
+    });
+  }
+
+  /* =========================================================
+     REVELAR RESPUESTA CORRECTA (solo tras contestar esa pregunta)
+  ========================================================= */
+
+  // Se llama SOLO cuando el cliente ya ha respondido esa pregunta concreta
+  // (mostrarCorreccion pasa a true), nunca antes. Devuelve el TEXTO de la
+  // opción correcta (no el índice), consistente con la corrección por texto
+  // de guardarResultado(): el índice original no es válido contra el array
+  // de opciones recortado/reordenado que vio el cliente.
+  // Guardia mínima: solo preguntas activas, para no exponer preguntas
+  // retiradas/deshabilitadas del banco. No se comprueba pertenencia a
+  // oposición/convocatoria concreta (ver tradeoff en el informe de la tarea).
+  async getRespuestaCorrecta(preguntaId: string) {
+    const pregunta = await this.preguntaRepo.findOne({ where: { id: preguntaId, activa: true } });
+    if (!pregunta) {
+      throw new BadRequestException('Pregunta no encontrada');
+    }
+    const correctaTexto = pregunta.opciones?.[pregunta.correcta] ?? null;
+    return { correctaTexto };
   }
 
   /* =========================================================
@@ -224,7 +304,12 @@ export class PsicotecnicoService {
     tipo: PsicotecnicoTipo;
     subtipo?: string;
     dificultad?: PsicotecnicoDificultad;
-    respuestas: { preguntaId: string; respuesta: number | null; tiempoMs?: number }[];
+    respuestas: {
+      preguntaId: string;
+      respuesta: number | null;
+      respuestaTexto?: string | null;
+      tiempoMs?: number;
+    }[];
     tiempoSegundos?: number;
   }) {
     const ids = datos.respuestas.map((r) => r.preguntaId);
@@ -234,7 +319,28 @@ export class PsicotecnicoService {
     let correctas = 0;
     const detallePreguntas = datos.respuestas.map((r) => {
       const pregunta = mapaPreguntas.get(r.preguntaId);
-      const esCorrecta = !!pregunta && r.respuesta !== null && r.respuesta === pregunta.correcta;
+
+      // Corrección PRIMARIA por texto: `pregunta.correcta` (índice leído fresco
+      // de la fila SIN tocar) referencia siempre el array `opciones` ORIGINAL
+      // de la BD, pero el cliente respondió sobre una copia recortada/reordenada
+      // (ver recortarOpcionesPsicotecnico en generarPreguntas). Comparar índices
+      // entre ambos arrays es incorrecto en cuanto hay recorte/reorden: el mismo
+      // índice puede significar una opción distinta en cada array. Comparamos en
+      // su lugar el TEXTO de la opción elegida contra el texto de la opción
+      // correcta en la fila original, que no cambia al recortar/reordenar (la
+      // opción correcta siempre se conserva en el recorte).
+      // Fallback LEGACY por índice: solo para clientes antiguos que no envíen
+      // `respuestaTexto` (no debería ocurrir tras este fix, pero evita romper
+      // compatibilidad si queda algún caller desactualizado).
+      let esCorrecta = false;
+      if (pregunta) {
+        const textoCorrecta = pregunta.opciones?.[pregunta.correcta];
+        if (r.respuestaTexto != null && typeof textoCorrecta === 'string') {
+          esCorrecta = r.respuestaTexto.trim() === textoCorrecta.trim();
+        } else if (r.respuestaTexto == null) {
+          esCorrecta = r.respuesta !== null && r.respuesta === pregunta.correcta;
+        }
+      }
       if (esCorrecta) correctas++;
 
       if (pregunta) {
