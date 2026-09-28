@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull } from 'typeorm';
 import { PsicotecnicoConfigOposicion } from './psicotecnico-config-oposicion.entity';
@@ -6,6 +6,11 @@ import { PreguntaPsicotecnica } from './pregunta-psicotecnica.entity';
 import { ResultadoPsicotecnico } from './resultado-psicotecnico.entity';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
+import { RetoPsicotecnico, EstadoRetoPsicotecnico } from './reto-psicotecnico.entity';
+import { ResultadoRetoPsicotecnico } from './resultado-reto-psicotecnico.entity';
+import { Usuario } from '../usuario/usuario.entity';
+import { NotificacionService } from '../notificacion/notificacion.service';
+import { TipoNotificacion, PrioridadNotificacion } from '../notificacion/notificacion.entity';
 import {
   PsicotecnicoTipo,
   PsicotecnicoDificultad,
@@ -62,6 +67,13 @@ export class PsicotecnicoService {
     private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
     @InjectRepository(Convocatoria)
     private readonly convocatoriaRepo: Repository<Convocatoria>,
+    @InjectRepository(RetoPsicotecnico)
+    private readonly retoPsicotecnicoRepo: Repository<RetoPsicotecnico>,
+    @InjectRepository(ResultadoRetoPsicotecnico)
+    private readonly resultadoRetoRepo: Repository<ResultadoRetoPsicotecnico>,
+    @InjectRepository(Usuario)
+    private readonly usuarioRepo: Repository<Usuario>,
+    private readonly notificacionService: NotificacionService,
   ) {}
 
   /* =========================================================
@@ -609,5 +621,278 @@ export class PsicotecnicoService {
     }
 
     return resultado;
+  }
+
+  /* =========================================================
+     DUELOS PSICOTÉCNICOS 1 vs 1 (espejo de flashcard.service.ts:
+     crearDueloFC / completarRetoFC / cerrarDuelo / getMisRetosFC)
+  ========================================================= */
+
+  async crearDueloPsicotecnico(
+    retadorId: string,
+    retadoNickOEmail: string,
+    oposicionId: string,
+    tipo: PsicotecnicoTipo,
+    numPreguntas = 10,
+    convocatoriaId?: string,
+  ): Promise<RetoPsicotecnico> {
+    const retador = await this.usuarioRepo.findOne({ where: { id: retadorId } });
+    if (!retador) throw new NotFoundException('Retador no encontrado');
+
+    const busqueda = retadoNickOEmail.toLowerCase().trim();
+    let retado = await this.usuarioRepo.findOne({ where: { nick: busqueda } });
+    if (!retado) retado = await this.usuarioRepo.findOne({ where: { email: busqueda } });
+    if (!retado) throw new NotFoundException('Usuario no encontrado con ese nick o email');
+    if (retado.id === retadorId) throw new BadRequestException('No puedes retarte a ti mismo');
+
+    // Mismo bloque de validación "vinculado a la oposición + misma convocatoria
+    // activa" que crearDueloFC (flashcard.service.ts).
+    const retadorOposicion = await this.usuarioOposicionRepo.findOne({
+      where: { usuario: { id: retadorId } as any, oposicion: { id: oposicionId } as any },
+      relations: ['convocatoriaActiva'],
+    });
+    if (!retadorOposicion) throw new BadRequestException('No estás vinculado a esta oposición');
+
+    const retadoOposicion = await this.usuarioOposicionRepo.findOne({
+      where: { usuario: { id: retado.id } as any, oposicion: { id: oposicionId } as any },
+      relations: ['convocatoriaActiva'],
+    });
+    if (!retadoOposicion) {
+      throw new BadRequestException(`${retado.nick ?? retado.nombre} no está preparando esta oposición`);
+    }
+
+    const convocatoriaRetador = (retadorOposicion as any).convocatoriaActiva?.id;
+    const convocatoriaRetado = (retadoOposicion as any).convocatoriaActiva?.id;
+    if (convocatoriaRetador !== convocatoriaRetado) {
+      throw new BadRequestException(`${retado.nick ?? retado.nombre} está en una convocatoria distinta a la tuya`);
+    }
+
+    const convocatoriaResuelta = convocatoriaId ?? convocatoriaRetador;
+
+    // Nº de opciones de la convocatoria (igual que generarPreguntas), para
+    // aplicar el mismo recorte a las preguntas congeladas del duelo.
+    let numOpcionesActiva: number | null | undefined;
+    if (convocatoriaResuelta) {
+      const convocatoria = await this.convocatoriaRepo.findOne({ where: { id: convocatoriaResuelta } });
+      numOpcionesActiva = convocatoria?.numOpcionesPsicotecnico;
+    }
+
+    // Selección del pool: mismo criterio de scope oposición/convocatoria que
+    // generarPreguntas (general o de esta oposición; sin convocatorias
+    // vinculadas o vinculada precisamente a la convocatoria del duelo).
+    const qb = this.preguntaRepo
+      .createQueryBuilder('p')
+      .where('p.activa = true')
+      .andWhere('p.tipo = :tipo', { tipo })
+      .andWhere('(p.oposicionId IS NULL OR p.oposicionId = :oposicionId)', { oposicionId })
+      .andWhere(
+        convocatoriaResuelta
+          ? `(
+              NOT EXISTS (SELECT 1 FROM preguntas_psicotecnicas_convocatorias ppc WHERE ppc."preguntaId" = p.id)
+              OR EXISTS (SELECT 1 FROM preguntas_psicotecnicas_convocatorias ppc2 WHERE ppc2."preguntaId" = p.id AND ppc2."convocatoriaId" = :convocatoriaId)
+            )`
+          : `NOT EXISTS (SELECT 1 FROM preguntas_psicotecnicas_convocatorias ppc WHERE ppc."preguntaId" = p.id)`,
+        convocatoriaResuelta ? { convocatoriaId: convocatoriaResuelta } : {},
+      );
+
+    const preguntasBD = await qb.orderBy('RANDOM()').take(numPreguntas).getMany();
+    if (preguntasBD.length === 0) {
+      throw new BadRequestException('No hay preguntas psicotécnicas disponibles para este duelo');
+    }
+
+    // ⭐ Congelar el recorte/reordenado de opciones AQUÍ, una sola vez, para
+    // que retador y retado vean exactamente el mismo tablero (ver el
+    // comentario extenso en reto-psicotecnico.entity.ts sobre por qué esto
+    // difiere del flujo individual de práctica, que recorta "al servir").
+    const preguntasCongeladas = preguntasBD.map((p) => {
+      const { opciones } = recortarOpcionesPsicotecnico(p.opciones, p.correcta, numOpcionesActiva);
+      return { id: p.id, enunciado: p.enunciado, imagenUrl: p.imagenUrl ?? null, opciones };
+    });
+
+    const fechaFin = new Date();
+    fechaFin.setDate(fechaFin.getDate() + 2);
+
+    const reto = await this.retoPsicotecnicoRepo.save(
+      this.retoPsicotecnicoRepo.create({
+        tipo,
+        preguntas: preguntasCongeladas,
+        fechaFin,
+        retador: { id: retadorId } as any,
+        retado: { id: retado.id } as any,
+        oposicion: { id: oposicionId } as any,
+      }),
+    );
+
+    await this.notificacionService.crear({
+      usuarioId: retado.id,
+      tipo: TipoNotificacion.RETO_RECIBIDO,
+      titulo: '🧠 ¡Nuevo duelo psicotécnico!',
+      mensaje: `${retador.nick ?? retador.nombre} te ha retado a un duelo psicotécnico`,
+      prioridad: PrioridadNotificacion.MEDIA,
+      urlAccion: `/app/psicotecnicos/duelo/${reto.id}`,
+    });
+
+    return reto;
+  }
+
+  async completarRetoPsicotecnico(
+    retoId: string,
+    usuarioId: string,
+    respuestas: { preguntaId: string; respuestaTexto: string; tiempoRespuesta: number }[],
+  ): Promise<ResultadoRetoPsicotecnico> {
+    const reto = await this.retoPsicotecnicoRepo.findOne({
+      where: { id: retoId },
+      relations: ['resultados', 'resultados.usuario', 'retador', 'retado'],
+    });
+    if (!reto) throw new NotFoundException('Reto psicotécnico no encontrado');
+
+    const retadorId = (reto.retador as any)?.id;
+    const retadoId = (reto.retado as any)?.id;
+    const esParticipante = usuarioId === retadorId || usuarioId === retadoId;
+    if (!esParticipante) {
+      throw new ForbiddenException('No eres participante de este reto');
+    }
+
+    const idsValidos = new Set((reto.preguntas ?? []).map((p) => p.id));
+    const idsInvalidos = respuestas
+      .map((r) => r.preguntaId)
+      .filter((id) => !idsValidos.has(id));
+    if (idsInvalidos.length > 0) {
+      throw new BadRequestException(
+        `Las siguientes preguntas no pertenecen a este reto: ${idsInvalidos.join(', ')}`,
+      );
+    }
+
+    const yaCompletado = reto.resultados?.some(
+      (r) => (r.usuario as any).id === usuarioId && r.completado,
+    );
+    if (yaCompletado) throw new BadRequestException('Ya completaste este reto');
+
+    // Corrección: se lee `correcta` de la fila ORIGINAL de PreguntaPsicotecnica
+    // (nunca del snapshot congelado, que solo tiene el array de opciones ya
+    // recortado/reordenado y NO guarda ningún índice/valor "correcta" —
+    // justo para evitar la tentación de comparar contra un índice que ya no
+    // significa lo mismo tras el recorte). Se compara por TEXTO, igual que
+    // guardarResultado() en el flujo individual: `pregunta.opciones[pregunta.correcta]`
+    // es estable frente a cualquier recorte/reordenado que haya visto el cliente.
+    const idsPreguntas = respuestas.map((r) => r.preguntaId);
+    const preguntasOriginales = await this.preguntaRepo.find({ where: { id: In(idsPreguntas) } });
+    const mapaOriginales = new Map(preguntasOriginales.map((p) => [p.id, p]));
+
+    const respuestasCorregidas: { preguntaId: string; correcta: boolean; tiempoRespuesta: number }[] = [];
+    for (const r of respuestas) {
+      const original = mapaOriginales.get(r.preguntaId);
+      const textoCorrecta = original?.opciones?.[original.correcta];
+      const correcta = !!(
+        original &&
+        typeof textoCorrecta === 'string' &&
+        r.respuestaTexto != null &&
+        r.respuestaTexto.trim() === textoCorrecta.trim()
+      );
+      respuestasCorregidas.push({ preguntaId: r.preguntaId, correcta, tiempoRespuesta: r.tiempoRespuesta });
+    }
+
+    const aciertos = respuestasCorregidas.filter((r) => r.correcta).length;
+    const tiempoTotal = respuestasCorregidas.reduce((acc, r) => acc + r.tiempoRespuesta, 0);
+
+    // Transacción: guarda el resultado y, de paso, las estadísticas de uso del
+    // banco (aciertos/fallos/vecesUsada), igual que completarRetoFC envuelve
+    // registrarRespuesta + guardado del resultado en una sola transacción.
+    const resultado = await this.resultadoRetoRepo.manager.transaction(async (manager) => {
+      for (const r of respuestasCorregidas) {
+        await manager.increment(PreguntaPsicotecnica, { id: r.preguntaId }, r.correcta ? 'aciertos' : 'fallos', 1);
+        await manager.increment(PreguntaPsicotecnica, { id: r.preguntaId }, 'vecesUsada', 1);
+      }
+
+      return manager.save(
+        manager.create(ResultadoRetoPsicotecnico, {
+          retoPsicotecnico: { id: retoId } as any,
+          usuario: { id: usuarioId } as any,
+          completado: true,
+          aciertos,
+          fallos: respuestasCorregidas.length - aciertos,
+          tiempoTotal,
+          respuestas: respuestasCorregidas,
+        }),
+      );
+    });
+
+    const todosCompletos = await this.resultadoRetoRepo.count({
+      where: { retoPsicotecnico: { id: retoId }, completado: true },
+    });
+    if (todosCompletos >= 2) {
+      await this.cerrarDueloPsicotecnico(reto);
+    }
+
+    return resultado;
+  }
+
+  private async cerrarDueloPsicotecnico(reto: RetoPsicotecnico): Promise<void> {
+    const resultados = await this.resultadoRetoRepo.find({
+      where: { retoPsicotecnico: { id: reto.id }, completado: true },
+      relations: ['usuario'],
+      order: { aciertos: 'DESC', tiempoTotal: 'ASC' },
+    });
+
+    for (let i = 0; i < resultados.length; i++) {
+      await this.resultadoRetoRepo.update(resultados[i].id, { posicion: i + 1 });
+    }
+
+    await this.retoPsicotecnicoRepo.update(reto.id, { estado: EstadoRetoPsicotecnico.COMPLETADO });
+
+    if (resultados.length >= 2) {
+      const ganador = resultados[0].usuario as any;
+      const perdedor = resultados[1].usuario as any;
+
+      await this.notificacionService.crear({
+        usuarioId: ganador.id,
+        tipo: TipoNotificacion.RETO_RESULTADO,
+        titulo: '¡Has ganado el duelo psicotécnico! 🧠',
+        mensaje: `Has ganado a ${perdedor.nick ?? perdedor.nombre} con ${resultados[0].aciertos} aciertos`,
+        prioridad: PrioridadNotificacion.MEDIA,
+      });
+
+      await this.notificacionService.crear({
+        usuarioId: perdedor.id,
+        tipo: TipoNotificacion.RETO_RESULTADO,
+        titulo: 'Duelo psicotécnico finalizado',
+        mensaje: `${ganador.nick ?? ganador.nombre} ha ganado el duelo con ${resultados[0].aciertos} aciertos`,
+        prioridad: PrioridadNotificacion.MEDIA,
+      });
+    }
+  }
+
+  async getMisRetosPsicotecnico(usuarioId: string): Promise<RetoPsicotecnico[]> {
+    return this.retoPsicotecnicoRepo
+      .createQueryBuilder('reto')
+      .leftJoinAndSelect('reto.retador', 'retador')
+      .leftJoinAndSelect('reto.retado', 'retado')
+      .leftJoinAndSelect('reto.oposicion', 'oposicion')
+      .leftJoinAndSelect('reto.resultados', 'resultados')
+      .leftJoinAndSelect('resultados.usuario', 'resultadoUsuario')
+      .where('retador.id = :usuarioId', { usuarioId })
+      .orWhere('retado.id = :usuarioId', { usuarioId })
+      .orderBy('reto.creadoEn', 'DESC')
+      .getMany();
+  }
+
+  // Espejo de test.service.ts#contarPreguntasDisponibles: cuenta cuántas
+  // preguntas hay disponibles para una combinación tipo/dificultad, sin
+  // generar nada, para poder avisar en la pantalla de selección.
+  async contarPreguntasDisponibles(
+    oposicionId: string,
+    tipo: PsicotecnicoTipo,
+    dificultad?: PsicotecnicoDificultad,
+  ): Promise<{ total: number }> {
+    const qb = this.preguntaRepo
+      .createQueryBuilder('p')
+      .where('p.activa = true')
+      .andWhere('(p.oposicionId IS NULL OR p.oposicionId = :oposicionId)', { oposicionId })
+      .andWhere('p.tipo = :tipo', { tipo });
+
+    if (dificultad) qb.andWhere('p.dificultad = :dificultad', { dificultad });
+
+    const total = await qb.getCount();
+    return { total };
   }
 }

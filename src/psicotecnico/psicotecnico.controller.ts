@@ -73,6 +73,56 @@ export class PsicotecnicoController {
   }
 
   /* =========================================================
+     DUELOS PSICOTÉCNICOS 1 vs 1
+  ========================================================= */
+
+  @Post('duelo')
+  @UseGuards(JwtAuthGuard)
+  crearDuelo(
+    @Body('retadoNickOEmail') retadoNickOEmail: string,
+    @Body('oposicionId') oposicionId: string,
+    @Body('tipo') tipo: PsicotecnicoTipo,
+    @Body('numPreguntas') numPreguntas: number,
+    @Body('convocatoriaId') convocatoriaId: string,
+    @Request() req: any,
+  ) {
+    return this.service.crearDueloPsicotecnico(
+      req.user.id,
+      retadoNickOEmail,
+      oposicionId,
+      tipo,
+      numPreguntas,
+      convocatoriaId,
+    );
+  }
+
+  @Post('reto/:id/completar')
+  @UseGuards(JwtAuthGuard)
+  completarReto(
+    @Param('id') id: string,
+    @Body('respuestas') respuestas: { preguntaId: string; respuestaTexto: string; tiempoRespuesta: number }[],
+    @Request() req: any,
+  ) {
+    return this.service.completarRetoPsicotecnico(id, req.user.id, respuestas);
+  }
+
+  @Get('mis-retos')
+  @UseGuards(JwtAuthGuard)
+  getMisRetos(@Request() req: any) {
+    return this.service.getMisRetosPsicotecnico(req.user.id);
+  }
+
+  @Get('disponibles/:oposicionId')
+  @UseGuards(JwtAuthGuard)
+  contarDisponibles(
+    @Param('oposicionId') oposicionId: string,
+    @Query('tipo') tipo: PsicotecnicoTipo,
+    @Query('dificultad') dificultad?: PsicotecnicoDificultad,
+  ) {
+    return this.service.contarPreguntasDisponibles(oposicionId, tipo, dificultad);
+  }
+
+  /* =========================================================
      ADMIN — configuración por oposición/convocatoria
   ========================================================= */
 

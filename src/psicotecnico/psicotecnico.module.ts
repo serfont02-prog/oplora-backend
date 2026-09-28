@@ -7,6 +7,9 @@ import { PreguntaPsicotecnica } from './pregunta-psicotecnica.entity';
 import { ResultadoPsicotecnico } from './resultado-psicotecnico.entity';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
+import { RetoPsicotecnico } from './reto-psicotecnico.entity';
+import { ResultadoRetoPsicotecnico } from './resultado-reto-psicotecnico.entity';
+import { NotificacionModule } from '../notificacion/notificacion.module';
 
 @Module({
   imports: [
@@ -16,7 +19,10 @@ import { Convocatoria } from '../convocatoria/convocatoria.entity';
       ResultadoPsicotecnico,
       UsuarioOposicion,
       Convocatoria,
+      RetoPsicotecnico,
+      ResultadoRetoPsicotecnico,
     ]),
+    NotificacionModule,
   ],
   controllers: [PsicotecnicoController],
   providers: [PsicotecnicoService],
