@@ -9,6 +9,7 @@ import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import { RetoPsicotecnico } from './reto-psicotecnico.entity';
 import { ResultadoRetoPsicotecnico } from './resultado-reto-psicotecnico.entity';
+import { Usuario } from '../usuario/usuario.entity';
 import { NotificacionModule } from '../notificacion/notificacion.module';
 
 @Module({
@@ -21,6 +22,7 @@ import { NotificacionModule } from '../notificacion/notificacion.module';
       Convocatoria,
       RetoPsicotecnico,
       ResultadoRetoPsicotecnico,
+      Usuario,
     ]),
     NotificacionModule,
   ],
