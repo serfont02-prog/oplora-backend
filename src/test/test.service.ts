@@ -230,7 +230,7 @@ export class TestService {
       // también use la misma ley, ej. la Constitución). Sin este join a
       // oposicionLeyFiltro, cuando no había convocatoria activa resuelta se
       // colaban preguntas de artículos vinculados a temas de otras oposiciones.
-      .leftJoin(TemaNormativa, 'tnLey', 'tnLey."articuloId" = articulo.id')
+      .leftJoin(TemaNormativa, 'tnLey', '"tnLey"."articuloId" = articulo.id')
       .leftJoin('tnLey.tema', 'temaLey')
       .leftJoin('temaLey.convocatoria', 'convocatoriaTemaLey')
       .leftJoin('convocatoriaTemaLey.oposicion', 'oposicionTemaLey')
