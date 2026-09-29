@@ -149,6 +149,64 @@ function normalizarEspacios(texto: string): string {
   return texto.replace(/\s+/g, ' ').trim();
 }
 
+// ⭐ BUG: la heurística "si la línea/ítem ya termina en '.', '!' o '?' es el fin de una
+// frase y lo que sigue es texto nuevo" (usada para no fusionar ítems de lista con la
+// frase que viene después, y para trocear el texto libre de las cajas [TR]/[ES] por
+// frase) da un falso positivo con abreviaturas jurídicas/académicas habituales en estos
+// PDFs, como "art." (de "artículo"), que también terminan en punto sin cerrar la frase.
+// Ejemplo real: el PDF parte la línea justo tras "art." por ancho de página:
+//   "La irresponsabilidad del Rey (art." / "56.3 CE) exige que sus actos vayan
+//   refrendados."
+// y antes se trataba como dos frases distintas, cuando en realidad es una sola. Esta
+// lista (no exhaustiva, cubre las abreviaturas más probables en contenido de oposición:
+// referencias a artículos, números, páginas y apartados) y la función de abajo se usan
+// en todos los puntos del fichero que deciden si un punto final cierra una frase.
+const ABREVIATURAS_NO_FIN_FRASE = new Set([
+  'art', 'arts', 'núm', 'núms', 'num', 'nums', 'n', 'pág', 'págs', 'pag', 'pags',
+  'apdo', 'apdos', 'párr', 'párrs', 'parr', 'parrs', 'inc', 'incs', 'ap', 'aps',
+  'cap', 'caps', 'disp', 'tit', 'tít', 'sec', 'secs', 'vol', 'ed', 'trad', 'coord',
+  'et al', 'vid', 'cfr', 'sr', 'sra', 'sres', 'd', 'dña', 'excmo', 'excma',
+]);
+
+// Extrae la última "palabra" (solo letras, ignorando paréntesis/comillas que la
+// precedan) justo antes de un punto final, para comprobar si es una abreviatura
+// conocida. p.ej. "(art." -> "art"; "56.3 CE) exige... refrendados." -> "refrendados".
+function ultimaPalabraAntesDePunto(texto: string): string | null {
+  const m = /([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)\.\s*$/.exec(texto.trim());
+  return m ? m[1].toLowerCase() : null;
+}
+
+// Un punto final NO cierra realmente la frase si la palabra que lo precede es una
+// abreviatura conocida (p.ej. "art."). Solo se aplica al caso ".": "!" y "?" siguen
+// cerrando siempre, ya que no se usan como abreviatura.
+function terminaEnAbreviatura(texto: string): boolean {
+  const palabra = ultimaPalabraAntesDePunto(texto);
+  return palabra !== null && ABREVIATURAS_NO_FIN_FRASE.has(palabra);
+}
+
+// Divide un texto ya unido (varias líneas fusionadas con espacios) en frases, cortando
+// tras cada [.!?] cuando le sigue mayúscula/dígito — salvo que el punto en cuestión
+// cierre en realidad una abreviatura conocida (ver terminaEnAbreviatura), en cuyo caso
+// se seguibuscando el siguiente corte válido en vez de partir ahí.
+function splitPorFrases(texto: string): string[] {
+  const resultado: string[] = [];
+  const regex = /([.!?])\s+(?=[A-ZÁÉÍÓÚÜÑ0-9¿¡])/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(texto))) {
+    const puntuacion = match[1];
+    const finFragmento = match.index + 1; // incluye el signo de puntuación
+    const fragmento = texto.slice(lastIndex, finFragmento);
+    if (puntuacion === '.' && terminaEnAbreviatura(fragmento)) {
+      continue; // no es un fin de frase real (p.ej. "...art."): seguir buscando
+    }
+    resultado.push(fragmento.trim());
+    lastIndex = match.index + match[0].length;
+  }
+  resultado.push(texto.slice(lastIndex).trim());
+  return resultado.filter(Boolean);
+}
+
 function normalizarComparacion(texto: string): string {
   return normalizarEspacios(texto).toUpperCase().replace(/:$/, '').trim();
 }
@@ -611,9 +669,30 @@ export function clasificarDocumento(
         // sea un ítem de lista (viñeta o numeración) como el inicio forzoso de un nuevo
         // párrafo dentro de la caja, igual que ya hacemos fuera de ellas, y solo aplicamos
         // el split por frase al texto que NO forma parte de una lista.
-        const esLineaListaDentroCaja = (l: string) => REGEX_BULLET.test(l) || esListaNumerada(l);
+        // ⭐ BUG: además de "•" (u otros glifos de REGEX_BULLET) y de listas numeradas
+        // "1.", "2.", algunas cajas usan un guion "-" para una sub-lista anidada bajo un
+        // mini-encabezado (p.ej. "No aparece:" seguido de "- Solidaridad." / "- Seguridad."
+        // / "- Democracia."). Como REGEX_BULLET no cubre "-", esas líneas no se reconocían
+        // como inicio de ítem y caían en la rama "continuación del ítem de lista en curso"
+        // de más abajo, fusionándose SIN salto de línea con el ítem anterior (incluso con
+        // el propio mini-encabezado "No aparece:", que tampoco lleva viñeta). El resultado
+        // era que "Pluralismo político." + "No aparece:" + las 3 líneas con guion + la
+        // frase de cierre quedaban todas pegadas en un único párrafo corrido.
+        const REGEX_GUION_ITEM = /^[-–—]\s+/;
+        const esLineaListaDentroCaja = (l: string) =>
+          REGEX_BULLET.test(l) || esListaNumerada(l) || REGEX_GUION_ITEM.test(l);
         const limpiarMarcaListaDentroCaja = (l: string) =>
-          REGEX_BULLET.test(l) ? limpiarBullet(l) : limpiarNumeroLista(l);
+          REGEX_BULLET.test(l)
+            ? limpiarBullet(l)
+            : REGEX_GUION_ITEM.test(l)
+            ? l.replace(REGEX_GUION_ITEM, '').trim()
+            : limpiarNumeroLista(l);
+        // ⭐ Un mini-encabezado sin viñeta que introduce esa sub-lista (termina en ":", p.ej.
+        // "No aparece:") tampoco debe fusionarse como continuación del ítem de lista anterior
+        // (aquí, "Pluralismo político."): es una línea nueva por derecho propio. Sin esto caía
+        // en la rama "continuación" solo por no llevar viñeta, igual que le pasaba a los ítems
+        // con guion.
+        const pareceIntroSubLista = (l: string) => /:$/.test(l.trim());
 
         const lineasFusionadas: string[] = [];
         let bufferTextoLibre: string[] = [];
@@ -622,12 +701,7 @@ export function clasificarDocumento(
         const cerrarBufferTextoLibre = () => {
           if (bufferTextoLibre.length === 0) return;
           const textoUnido = normalizarEspacios(bufferTextoLibre.join(' '));
-          lineasFusionadas.push(
-            ...textoUnido
-              .split(/(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÜÑ0-9¿¡])/)
-              .map((s) => s.trim())
-              .filter(Boolean),
-          );
+          lineasFusionadas.push(...splitPorFrases(textoUnido));
           bufferTextoLibre = [];
         };
 
@@ -642,9 +716,29 @@ export function clasificarDocumento(
             cerrarBufferTextoLibre();
             cerrarBufferItemLista();
             bufferItemLista = [limpiarMarcaListaDentroCaja(l)];
+          } else if (bufferItemLista && pareceIntroSubLista(l)) {
+            // mini-encabezado tipo "No aparece:": cierra el ítem anterior y arranca su
+            // propia línea, en vez de fusionarse con el ítem de lista previo.
+            cerrarBufferItemLista();
+            bufferTextoLibre.push(l);
           } else if (bufferItemLista) {
-            // continuación (ajuste de línea) del ítem de lista en curso
-            bufferItemLista.push(l);
+            // ⭐ Solo tratamos esto como continuación (ajuste de línea) del ítem de lista en
+            // curso si ese ítem TODAVÍA no ha cerrado su propia frase (no termina en
+            // ".", "!" o "?"). Si el ítem ya terminó en punto (p.ej. "Democracia." tras el
+            // último guion de la sub-lista), la línea que sigue es ya una frase NUEVA fuera
+            // de la lista (p.ej. "Estas suelen ponerse como trampas en los test."), no parte
+            // del ítem anterior — sin esto, esa frase de cierre se fusionaba sin salto de
+            // línea con el último ítem de la sub-lista.
+            const ultimaLineaItem = bufferItemLista[bufferItemLista.length - 1].trim();
+            const itemYaCerradoPorPunto =
+              /[.!?]$/.test(ultimaLineaItem) &&
+              !(ultimaLineaItem.endsWith('.') && terminaEnAbreviatura(ultimaLineaItem));
+            if (itemYaCerradoPorPunto) {
+              cerrarBufferItemLista();
+              bufferTextoLibre.push(l);
+            } else {
+              bufferItemLista.push(l);
+            }
           } else {
             bufferTextoLibre.push(l);
           }
@@ -891,7 +985,7 @@ export function clasificarDocumento(
       // salto de línea artificial en medio. Ahora solo tratamos el ":" como cierre cuando la
       // línea siguiente es de verdad el inicio de una lista (viñeta o numerada); un punto
       // final "." sigue cerrando siempre, sea lo que sea lo que venga después.
-      const terminaPunto = /\.\s*$/.test(texto);
+      const terminaPunto = /\.\s*$/.test(texto) && !terminaEnAbreviatura(texto);
       const terminaDosPuntos = /:\s*$/.test(texto);
       const siguienteEsInicioDeLista =
         !!siguiente && (esBullet(siguiente.texto.trim()) || esListaNumerada(siguiente.texto.trim()));
