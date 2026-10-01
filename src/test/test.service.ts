@@ -372,18 +372,41 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
 
     /* =========================================================
        RANDOM
+       ⭐ Antes: `query.orderBy('RANDOM()').limit(numPreguntas * 3).getMany()`
+       y luego deduplicar por p.id en JS. El problema es que `query` hace
+       leftJoinAndSelect sobre relaciones many-to-many (temas, articulos):
+       una pregunta vinculada a varios temas o artículos genera VARIAS filas
+       SQL (una por combinación), así que el LIMIT corta a nivel de fila,
+       no de pregunta única. Tras deduplicar, el número final de preguntas
+       distintas variaba según qué filas duplicadas caían dentro del margen
+       "x3" en cada tirada aleatoria — de ahí que a veces salieran 3 y otras
+       4 preguntas en vez de siempre el número pedido.
+       Ahora: primero se obtienen los IDs ÚNICOS que cumplen el filtro (sin
+       fan-out, sin ORDER BY RANDOM() en SQL porque Postgres no permite
+       combinarlo con DISTINCT), se baraja esa lista en JS y se recorta al
+       número pedido, y solo entonces se cargan las preguntas completas por
+       esos IDs — así el recuento final es siempre exacto.
     ========================================================= */
-    const preguntasSinDeduplicar = await query
-      .orderBy('RANDOM()')
-      .limit(numPreguntas * 3)
-      .getMany();
+    const filasId = await query
+      .clone()
+      .select('pregunta.id', 'id')
+      .distinct(true)
+      .getRawMany();
+    const idsDisponibles = filasId.map((f: any) => f.id);
 
-    const vistas = new Set<string>();
-    const preguntas = preguntasSinDeduplicar.filter(p => {
-      if (vistas.has(p.id)) return false;
-      vistas.add(p.id);
-      return true;
-    }).slice(0, numPreguntas);
+    // Fisher-Yates
+    for (let i = idsDisponibles.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [idsDisponibles[i], idsDisponibles[j]] = [idsDisponibles[j], idsDisponibles[i]];
+    }
+    const idsSeleccionados = idsDisponibles.slice(0, numPreguntas);
+
+    const preguntas = idsSeleccionados.length
+      ? await this.preguntaRepo.find({
+          where: { id: In(idsSeleccionados) },
+          relations: ['temas', 'articulos'],
+        })
+      : [];
 
     return preguntas.map((p) => {
       // El recorte de opciones (4→N) solo aplica a preguntas vinculadas a
