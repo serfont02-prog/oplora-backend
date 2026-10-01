@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Request, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { TemaService } from './tema.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('temas')
@@ -102,6 +104,8 @@ getProgresoCompletoConvocatoria(
 }
 
   @Post('examenes/convocatoria/:convocatoriaId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   @UseInterceptors(FileInterceptor('archivo'))
   async crearExamen(
     @Param('convocatoriaId') convocatoriaId: string,
@@ -134,6 +138,8 @@ getProgresoCompletoConvocatoria(
   }
 
   @Delete('examenes/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   eliminarExamen(@Param('id') id: string) {
     return this.service.eliminarExamen(id);
   }
@@ -145,35 +151,49 @@ getProgresoCompletoConvocatoria(
 
 
   @Post(':id/normativa')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   vincularNormativa(@Param('id') id: string, @Body() body: any) {
   return this.service.vincularNormativa(id, body);
   }
-  
+
    @Post(':id/articulos')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   vincularArticulo(@Param('id') id: string, @Body('articuloId') articuloId: string) {
     return this.service.vincularArticulo(id, articuloId);
   }
 
   @Post()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   create(@Body() body: any) {
     return this.service.create(body);
   }
 
   @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   update(@Param('id') id: string, @Body() body: any) {
     return this.service.update(id, body);
   }
 
     @Delete('normativa/:temaNormativaId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   desvincularNormativa(@Param('temaNormativaId') id: string) {
     return this.service.desvincularNormativa(id);
   }
   @Delete(':id/articulos/:articuloId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   desvincularArticulo(@Param('id') id: string, @Param('articuloId') articuloId: string) {
     return this.service.desvincularArticulo(id, articuloId);
   }
 
   @Delete(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   remove(@Param('id') id: string) {
     return this.service.remove(id);
   }

@@ -1,10 +1,19 @@
+import { IsNotEmpty, IsString } from 'class-validator';
+
 export class CreateTicketDto {
-  asunto!: string;
-  mensaje!: string;
+  @IsString()
+  @IsNotEmpty()
+  asunto: string;
+
+  @IsString()
+  @IsNotEmpty()
+  mensaje: string;
 }
 
 export class ResponderTicketDto {
-  respuesta!: string;
+  @IsString()
+  @IsNotEmpty()
+  respuesta: string;
 }
 
 export interface FiltrosTicketSoporte {

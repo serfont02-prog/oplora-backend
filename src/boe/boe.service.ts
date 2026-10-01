@@ -343,38 +343,51 @@ ${temasNuevos.map((t) => `${t.numero}. ${t.titulo}`).join('\n')}`;
 
 
 //PROCESAR CONVOCATORIA EXTRAIDA DEL BOE
+// ⭐ Transacción: crear la Convocatoria, activar la Oposicion y marcar el
+// BOE como PROCESADA son 3 escrituras relacionadas; si una fallara a mitad
+// (p. ej. se crea la convocatoria pero no se marca el BOE como procesada),
+// quedaría un estado inconsistente que además permitiría re-procesar el
+// mismo BOE y duplicar la convocatoria.
 async procesarConvocatoria(id: string, oposicionExistenteId?: string): Promise<{
   accion: string;
   oposicionId?: string;
   convocatoriaId?: string;
 }> {
-  const boe = await this.boeRepo.findOne({ where: { id } });
-  if (!boe) throw new HttpException('No encontrada', 404);
+  return this.boeRepo.manager.transaction(async (manager) => {
+    const boe = await manager.findOne(BoeConvocatoria, { where: { id } });
+    if (!boe) throw new HttpException('No encontrada', 404);
+    if (boe.estado === EstadoBOE.PROCESADA) {
+      throw new HttpException('Esta convocatoria del BOE ya ha sido procesada', 409);
+    }
 
-  const datos = boe.datosExtraidos ?? {};
-  let oposicion: Oposicion | null = null;
+    const datos = boe.datosExtraidos ?? {};
+    let oposicion: Oposicion | null = null;
 
-  if (oposicionExistenteId) {
-    oposicion = await this.oposicionRepo.findOne({ where: { id: oposicionExistenteId } });
-  }
+    if (oposicionExistenteId) {
+      oposicion = await manager.findOne(Oposicion, { where: { id: oposicionExistenteId } });
+    }
 
-  let convocatoria: Convocatoria | null = null;
-  if (oposicion) {
-    convocatoria = await this.convocatoriaRepo.save(this.convocatoriaRepo.create({
-      anyo: datos.anyo ? parseInt(datos.anyo.toString()) : new Date().getFullYear(),
-      plazas: datos.plazas,
-      estado: 'borrador' as any,
-      oposicion: { id: oposicion.id } as any,
-    }));
-    await this.oposicionRepo.update(oposicion.id, { activa: true });
-  }
+    let convocatoria: Convocatoria | null = null;
+    if (oposicion) {
+      convocatoria = await manager.save(
+        Convocatoria,
+        manager.create(Convocatoria, {
+          anyo: datos.anyo ? parseInt(datos.anyo.toString()) : new Date().getFullYear(),
+          plazas: datos.plazas,
+          estado: 'borrador' as any,
+          oposicion: { id: oposicion.id } as any,
+        }),
+      );
+      await manager.update(Oposicion, oposicion.id, { activa: true });
+    }
 
-  await this.boeRepo.update(id, { estado: EstadoBOE.PROCESADA });
+    await manager.update(BoeConvocatoria, id, { estado: EstadoBOE.PROCESADA });
 
-  return {
-    accion: oposicion ? 'convocatoria_creada' : 'solo_aprobada',
-    oposicionId: oposicion?.id,
-    convocatoriaId: convocatoria?.id,
-  };
+    return {
+      accion: oposicion ? 'convocatoria_creada' : 'solo_aprobada',
+      oposicionId: oposicion?.id,
+      convocatoriaId: convocatoria?.id,
+    };
+  });
 }
 }

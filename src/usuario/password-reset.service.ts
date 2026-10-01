@@ -16,7 +16,7 @@ export class PasswordResetService {
   ) {}
 
   async solicitarReset(email: string): Promise<void> {
-    const usuario = await this.repo.findOne({ where: { email } });
+    const usuario = await this.repo.findOne({ where: { email: email?.toLowerCase().trim() } });
 
     // Por seguridad, no revelamos si el email existe o no
     if (!usuario) return;
@@ -25,6 +25,8 @@ export class PasswordResetService {
     const expira = new Date();
     expira.setMinutes(expira.getMinutes() + 30);
 
+    // Invalidar cualquier token de reset anterior (no usado y no expirado) antes de crear el nuevo,
+    // así solo el último enlace enviado por email es válido.
     await this.repo.update(usuario.id, {
       resetPasswordToken: token,
       resetPasswordExpira: expira,

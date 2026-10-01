@@ -11,6 +11,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { PasswordResetService } from './password-reset.service';
 import { Public } from '../auth/public.decorator';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('usuarios')
 @UseGuards(JwtAuthGuard)
@@ -29,7 +30,6 @@ export class UsuarioController {
   }
 
   @Get('mis-oposiciones')
-@UseGuards(JwtAuthGuard)
 getMisOposiciones(@Request() req: any) {
   return this.service.getMisOposiciones(req.user.id);
 }
@@ -40,7 +40,6 @@ getMe(@Request() req: any) {
 }
 
 @Get('limites')
-@UseGuards(JwtAuthGuard)
 async getLimites(@Request() req: any) {
   const usuario = await this.service.findById(req.user.id);
   if (!usuario) throw new NotFoundException('Usuario no encontrado');
@@ -83,18 +82,17 @@ async marcarOnboardingEntrenamiento(@Request() req) {
 }
 
 @Post('activar-oposicion/:oposicionId')
-@UseGuards(JwtAuthGuard)
 activarOposicion(@Param('oposicionId') oposicionId: string, @Request() req: any) {
   return this.service.activarOposicion(req.user.id, oposicionId);
 }
 
 @Delete('desactivar-oposicion/:oposicionId')
-@UseGuards(JwtAuthGuard)
 desactivarOposicion(@Param('oposicionId') oposicionId: string, @Request() req: any) {
   return this.service.desactivarOposicion(req.user.id, oposicionId);
 }
 
 @Public()
+@Throttle({ default: { limit: 3, ttl: 60000 } })
 @Post('solicitar-reset-password')
 solicitarReset(@Body('email') email: string) {
   return this.passwordResetService.solicitarReset(email);
@@ -142,14 +140,12 @@ resetearProgreso(
 }
 
   @Post('avatar')
-  @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('archivo', { storage: memoryStorage() }))
   async subirAvatar(@UploadedFile() archivo: Express.Multer.File, @Request() req: any) {
     return this.service.subirAvatar(req.user.id, archivo.buffer, archivo.mimetype);
   }
 
   @Patch('avatar/tipo')
-  @UseGuards(JwtAuthGuard)
   async cambiarTipoAvatar(@Body('tipo') tipo: 'oplo' | 'foto', @Request() req: any) {
     return this.service.cambiarTipoAvatar(req.user.id, tipo);
   }

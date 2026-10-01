@@ -25,16 +25,26 @@ export class AuthService {
   }
 
   async login(emailONick: string, password: string): Promise<{ usuario: any; token: string }> {
-    // Buscar por email o nick
-    let usuario = await this.usuarioService.findByEmail(emailONick);
+    const credencialesInvalidas = 'Email/usuario o contraseña incorrectos';
+
+    // Buscar por email o nick (normalizado, igual que al crear el usuario)
+    const valorNormalizado = emailONick?.toLowerCase().trim();
+    let usuario = await this.usuarioService.findByEmail(valorNormalizado);
     if (!usuario) {
-      usuario = await this.usuarioService.findByNick(emailONick);
+      usuario = await this.usuarioService.findByNick(valorNormalizado);
     }
 
-    if (!usuario) throw new UnauthorizedException('Usuario no encontrado');
+    if (!usuario) {
+      // Log interno específico para debugging; al cliente nunca se le revela la causa exacta
+      console.warn(`Login fallido: no existe ninguna cuenta para "${emailONick}"`);
+      throw new UnauthorizedException(credencialesInvalidas);
+    }
 
     const valido = await bcrypt.compare(password, usuario.password);
-    if (!valido) throw new UnauthorizedException('Contraseña incorrecta');
+    if (!valido) {
+      console.warn(`Login fallido: contraseña incorrecta para la cuenta "${usuario.email}"`);
+      throw new UnauthorizedException(credencialesInvalidas);
+    }
 
     const token = this.generarToken(usuario);
 

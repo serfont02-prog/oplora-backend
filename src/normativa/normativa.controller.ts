@@ -1,14 +1,17 @@
 import { Controller, Get, Post, Delete, Param, Body, UseGuards, Request, Query, Patch } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Brackets } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Titulo } from './titulo.entity';
 import { Capitulo } from './capitulo.entity';
 import { Articulo } from './articulo.entity';
 import { NormativaService } from './normativa.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 import { Seccion } from './seccion.entity';
 import { Disposicion } from './disposicion.entity';
 import { In } from 'typeorm';
+import { EditarArticuloDto, EditarDisposicionDto } from './normativa.dto';
 
 @Controller('normativa')
 @UseGuards(JwtAuthGuard)
@@ -192,211 +195,69 @@ getDisposiciones(@Param('versionLeyId') versionLeyId: string) {
       });
     }
 
-// ⭐ Busca un artículo "vigente" cuyo capítulo sea capituloId, ya cuelgue
-// directamente del capítulo o de una sección dentro de ese capítulo (sin
-// este camino, los artículos de una sección quedaban invisibles a la
-// navegación anterior/siguiente y hacía saltar al siguiente capítulo entero).
-private async buscarArticuloDeCapitulo(
-  capituloId: string,
-  opts: { orden?: number; extremo?: 'ASC' | 'DESC' },
-): Promise<Articulo | null> {
-  let qb = this.articuloRepo
-    .createQueryBuilder('articulo')
-    .leftJoin('articulo.seccion', 'seccion')
-    .where(
-      new Brackets((qbb) => {
-        qbb.where('articulo.capitulo = :capituloId', { capituloId })
-          .orWhere('seccion.capitulo = :capituloId', { capituloId });
-      }),
-    )
-    .andWhere('articulo.vigente = true');
-
-  if (opts.orden !== undefined) {
-    qb = qb.andWhere('articulo.orden = :orden', { orden: opts.orden });
-  }
-  if (opts.extremo) {
-    qb = qb.orderBy('articulo.orden', opts.extremo).limit(1);
-  }
-  return qb.getOne();
-}
-
+// ⭐ Antes: hasta 6-8 queries secuenciales encadenadas (capítulo actual →
+// capítulo anterior/siguiente → título anterior/siguiente → ...).
+// Ahora: 1 sola consulta SQL con CTE calcula de un tirón el id de "anterior"
+// y "siguiente" en el orden real del documento (título → capítulo → artículo,
+// tratando los artículos directos de un título como anteriores a sus
+// capítulos, e incluyendo los artículos que cuelgan de una sección bajo el
+// orden de su capítulo), saltando los artículos no vigentes. Solo quedan 2
+// queries más (opcionales) para cargar las entidades completas de anterior/
+// siguiente si existen.
 @Get('articulo/:id/anterior-siguiente')
 async anteriorSiguiente(@Param('id') id: string) {
-  const articulo = await this.articuloRepo.findOne({
-    where: { id },
-    relations: [
-      'capitulo',
-      'capitulo.tituloRef',
-      'capitulo.tituloRef.versionLey',
-      'tituloRef',
-      'tituloRef.versionLey',
-      'seccion',
-      'seccion.capitulo',
-      'seccion.capitulo.tituloRef',
-      'seccion.capitulo.tituloRef.versionLey',
-    ],
-  });
-  if (!articulo) return { anterior: null, siguiente: null };
+  const rows = await this.articuloRepo.query(
+    `
+    WITH chain AS (
+      SELECT
+        a.id,
+        a.orden AS art_orden,
+        a.vigente,
+        COALESCE(tdirect."versionLeyId", tcap."versionLeyId", tsec."versionLeyId") AS version_ley_id,
+        COALESCE(tdirect.orden, tcap.orden, tsec.orden) AS titulo_orden,
+        CASE
+          WHEN cap.id IS NOT NULL THEN cap.orden
+          WHEN capsec.id IS NOT NULL THEN capsec.orden
+          ELSE -1
+        END AS capitulo_orden
+      FROM articulos a
+      LEFT JOIN capitulos cap ON a."capituloId" = cap.id
+      LEFT JOIN secciones sec ON a."seccionId" = sec.id
+      LEFT JOIN capitulos capsec ON sec."capituloId" = capsec.id
+      LEFT JOIN titulos tdirect ON a."tituloRefId" = tdirect.id
+      LEFT JOIN titulos tcap ON cap."tituloRefId" = tcap.id
+      LEFT JOIN titulos tsec ON capsec."tituloRefId" = tsec.id
+    ),
+    cur AS (
+      SELECT * FROM chain WHERE id = $1
+    )
+    SELECT
+      (
+        SELECT c.id FROM chain c, cur
+        WHERE c.vigente = true
+          AND c.version_ley_id IS NOT DISTINCT FROM cur.version_ley_id
+          AND (c.titulo_orden, c.capitulo_orden, c.art_orden) < (cur.titulo_orden, cur.capitulo_orden, cur.art_orden)
+        ORDER BY c.titulo_orden DESC, c.capitulo_orden DESC, c.art_orden DESC
+        LIMIT 1
+      ) AS anterior_id,
+      (
+        SELECT c.id FROM chain c, cur
+        WHERE c.vigente = true
+          AND c.version_ley_id IS NOT DISTINCT FROM cur.version_ley_id
+          AND (c.titulo_orden, c.capitulo_orden, c.art_orden) > (cur.titulo_orden, cur.capitulo_orden, cur.art_orden)
+        ORDER BY c.titulo_orden ASC, c.capitulo_orden ASC, c.art_orden ASC
+        LIMIT 1
+      ) AS siguiente_id
+    `,
+    [id],
+  );
 
-  const orden = articulo.orden;
-  // ⭐ Si el artículo cuelga de una Sección, su capítulo/título "efectivo"
-  // es el de esa sección, no un campo directo del propio artículo.
-  const capituloId = articulo.capitulo?.id ?? articulo.seccion?.capitulo?.id;
-  const capituloOrdenPropio = articulo.capitulo?.orden ?? articulo.seccion?.capitulo?.orden;
-  const tituloId = (articulo as any).tituloRef?.id
-    ?? articulo.capitulo?.tituloRef?.id
-    ?? articulo.seccion?.capitulo?.tituloRef?.id;
-  const versionLeyId = articulo.capitulo?.tituloRef?.versionLey?.id
-    ?? articulo.seccion?.capitulo?.tituloRef?.versionLey?.id
-    ?? (articulo as any).tituloRef?.versionLey?.id;
-  const tituloOrden = articulo.capitulo?.tituloRef?.orden
-    ?? articulo.seccion?.capitulo?.tituloRef?.orden
-    ?? (articulo as any).tituloRef?.orden;
+  const { anterior_id, siguiente_id } = rows[0] ?? {};
 
-  let anterior: Articulo | null = null;
-  let siguiente: Articulo | null = null;
-
-  if (capituloId) {
-    const capituloOrden = capituloOrdenPropio ?? 1;
-
-    // Buscar en el mismo capítulo (incluyendo artículos dentro de sus secciones)
-    anterior = await this.buscarArticuloDeCapitulo(capituloId, { orden: orden - 1 });
-    siguiente = await this.buscarArticuloDeCapitulo(capituloId, { orden: orden + 1 });
-
-    // Si no hay anterior → buscar en capítulo anterior del mismo título
-    if (!anterior && tituloId) {
-      const capituloAnterior = await this.capituloRepo.findOne({
-        where: { tituloRef: { id: tituloId }, orden: capituloOrden - 1 },
-      });
-      if (capituloAnterior) {
-        anterior = await this.buscarArticuloDeCapitulo(capituloAnterior.id, { extremo: 'DESC' });
-      }
-      // Si no hay capítulo anterior → buscar artículos directos del mismo título
-      if (!anterior) {
-        anterior = await this.articuloRepo.findOne({
-          where: { tituloRef: { id: tituloId }, vigente: true } as any,
-          order: { orden: 'DESC' },
-        });
-      }
-      // Si tampoco → último artículo del título anterior
-      if (!anterior && versionLeyId && tituloOrden) {
-        const tituloAnterior = await this.tituloRepo.findOne({
-          where: { versionLey: { id: versionLeyId }, orden: tituloOrden - 1 },
-        });
-        if (tituloAnterior) {
-          const ultimoCap = await this.capituloRepo.findOne({
-            where: { tituloRef: { id: tituloAnterior.id } },
-            order: { orden: 'DESC' },
-          });
-          if (ultimoCap) {
-            anterior = await this.buscarArticuloDeCapitulo(ultimoCap.id, { extremo: 'DESC' });
-          }
-          if (!anterior) {
-            anterior = await this.articuloRepo.findOne({
-              where: { tituloRef: { id: tituloAnterior.id }, vigente: true } as any,
-              order: { orden: 'DESC' },
-            });
-          }
-        }
-      }
-    }
-
-    // Si no hay siguiente → buscar en siguiente capítulo del mismo título
-    if (!siguiente && tituloId) {
-      const siguienteCapitulo = await this.capituloRepo.findOne({
-        where: { tituloRef: { id: tituloId }, orden: capituloOrden + 1 },
-      });
-      if (siguienteCapitulo) {
-        siguiente = await this.buscarArticuloDeCapitulo(siguienteCapitulo.id, { extremo: 'ASC' });
-      }
-    }
-
-    // Si no hay siguiente capítulo → buscar en siguiente título
-    if (!siguiente && versionLeyId && tituloOrden !== undefined) {
-      const siguienteTitulo = await this.tituloRepo.findOne({
-        where: { versionLey: { id: versionLeyId }, orden: tituloOrden + 1 },
-      });
-      if (siguienteTitulo) {
-        siguiente = await this.articuloRepo.findOne({
-          where: { tituloRef: { id: siguienteTitulo.id }, vigente: true } as any,
-          order: { orden: 'ASC' },
-        });
-        if (!siguiente) {
-          const primerCap = await this.capituloRepo.findOne({
-            where: { tituloRef: { id: siguienteTitulo.id } },
-            order: { orden: 'ASC' },
-          });
-          if (primerCap) {
-            siguiente = await this.buscarArticuloDeCapitulo(primerCap.id, { extremo: 'ASC' });
-          }
-        }
-      }
-    }
-
-  } else if (tituloId) {
-    // Artículo directo del título
-    anterior = await this.articuloRepo.findOne({
-      where: { tituloRef: { id: tituloId }, orden: orden - 1, vigente: true } as any,
-    });
-    siguiente = await this.articuloRepo.findOne({
-      where: { tituloRef: { id: tituloId }, orden: orden + 1, vigente: true } as any,
-    });
-
-    // Si no hay anterior → buscar en título anterior
-    if (!anterior && versionLeyId && tituloOrden) {
-      const tituloAnterior = await this.tituloRepo.findOne({
-        where: { versionLey: { id: versionLeyId }, orden: tituloOrden - 1 },
-      });
-      if (tituloAnterior) {
-        const ultimoCap = await this.capituloRepo.findOne({
-          where: { tituloRef: { id: tituloAnterior.id } },
-          order: { orden: 'DESC' },
-        });
-        if (ultimoCap) {
-          anterior = await this.buscarArticuloDeCapitulo(ultimoCap.id, { extremo: 'DESC' });
-        }
-        if (!anterior) {
-          anterior = await this.articuloRepo.findOne({
-            where: { tituloRef: { id: tituloAnterior.id }, vigente: true } as any,
-            order: { orden: 'DESC' },
-          });
-        }
-      }
-    }
-
-    // Si no hay siguiente → buscar primer capítulo del mismo título
-    if (!siguiente) {
-      const primerCapitulo = await this.capituloRepo.findOne({
-        where: { tituloRef: { id: tituloId } },
-        order: { orden: 'ASC' },
-      });
-      if (primerCapitulo) {
-        siguiente = await this.buscarArticuloDeCapitulo(primerCapitulo.id, { extremo: 'ASC' });
-      }
-    }
-
-    // Si no hay siguiente → buscar en siguiente título
-    if (!siguiente && versionLeyId && tituloOrden !== undefined) {
-      const siguienteTitulo = await this.tituloRepo.findOne({
-        where: { versionLey: { id: versionLeyId }, orden: tituloOrden + 1 },
-      });
-      if (siguienteTitulo) {
-        siguiente = await this.articuloRepo.findOne({
-          where: { tituloRef: { id: siguienteTitulo.id }, vigente: true } as any,
-          order: { orden: 'ASC' },
-        });
-        if (!siguiente) {
-          const primerCap = await this.capituloRepo.findOne({
-            where: { tituloRef: { id: siguienteTitulo.id } },
-            order: { orden: 'ASC' },
-          });
-          if (primerCap) {
-            siguiente = await this.buscarArticuloDeCapitulo(primerCap.id, { extremo: 'ASC' });
-          }
-        }
-      }
-    }
-  }
+  const [anterior, siguiente] = await Promise.all([
+    anterior_id ? this.articuloRepo.findOne({ where: { id: anterior_id } }) : Promise.resolve(null),
+    siguiente_id ? this.articuloRepo.findOne({ where: { id: siguiente_id } }) : Promise.resolve(null),
+  ]);
 
   return { anterior, siguiente };
 }
@@ -418,16 +279,22 @@ async anteriorSiguiente(@Param('id') id: string) {
   }
 
   @Post('importar-contenido-ia')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 importarContenidoIA(@Body() body: { contenido: any[] }) {
   return this.normativaService.importarContenidoIA(body.contenido);
 }
 
   @Post('importar-estructura')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   importarEstructura(@Body() datos: any) {
     return this.normativaService.importarEstructura(datos);
   }
 
   @Post('importar-articulos')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   importarArticulos(
     @Body('articulos') articulos: any[],
     @Body('capituloId') capituloId: string,
@@ -436,6 +303,8 @@ importarContenidoIA(@Body() body: { contenido: any[] }) {
   }
 
   @Post('importar-articulos-titulo')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 importarArticulosTitulo(
   @Body('articulos') articulos: any[],
   @Body('tituloId') tituloId: string,
@@ -445,20 +314,24 @@ importarArticulosTitulo(
 
 // En normativa.service.ts o directamente en el controller si sigues ese patrón
 @Patch('articulo/:id')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 async editarArticulo(
   @Param('id') id: string,
-  @Body() datos: { contenido?: string; titulo?: string; vigente?: boolean },
+  @Body() dto: EditarArticuloDto,
 ) {
-  await this.articuloRepo.update(id, datos);
+  await this.articuloRepo.update(id, dto);
   return this.articuloRepo.findOne({ where: { id } });
 }
 
   @Patch('disposicion/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   async editarDisposicion(
     @Param('id') id: string,
-    @Body() datos: { contenido?: string; etiqueta?: string },
+    @Body() dto: EditarDisposicionDto,
   ) {
-    await this.disposicionRepo.update(id, datos);
+    await this.disposicionRepo.update(id, dto);
     return this.disposicionRepo.findOne({ where: { id } });
   }
 }

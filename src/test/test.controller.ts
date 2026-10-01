@@ -13,6 +13,8 @@ import {
 
 import { TestService } from './test.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
 @Controller('test')
 export class TestController {
@@ -208,7 +210,8 @@ export class TestController {
   }
 
   @Post('importar/convocatoria/:convocatoriaId')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 importarPorConvocatoria(
   @Param('convocatoriaId') convocatoriaId: string,
   @Body('preguntas') preguntas: any[],
@@ -218,7 +221,8 @@ importarPorConvocatoria(
 }
 
 @Post('importar/version-ley/:versionLeyId')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 importarPorVersionLey(
   @Param('versionLeyId') versionLeyId: string,
   @Body('preguntas') preguntas: any[],
@@ -265,7 +269,8 @@ importarPorVersionLey(
   }
 
   @Patch('banco/:preguntaId')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   actualizarBanco(
     @Param('preguntaId') preguntaId: string,
     @Body() cambios: any,
@@ -274,7 +279,8 @@ importarPorVersionLey(
   }
 
   @Delete('banco/:preguntaId')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   eliminarBanco(@Param('preguntaId') preguntaId: string) {
     return this.testService.eliminarPreguntaBanco(preguntaId);
   }

@@ -1,7 +1,9 @@
   import { Module } from '@nestjs/common';
+  import { APP_GUARD } from '@nestjs/core';
   import { ConfigModule, ConfigService } from '@nestjs/config';
   import { TypeOrmModule } from '@nestjs/typeorm';
   import { ScheduleModule } from '@nestjs/schedule';
+  import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
   import { OposicionModule } from './oposicion/oposicion.module';
   import { ConvocatoriaModule } from './convocatoria/convocatoria.module';
   import { LeyModule } from './ley/ley.module';
@@ -35,6 +37,12 @@
       envFilePath: '.env',
     }),
     ScheduleModule.forRoot(),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000,
+        limit: 100,
+      },
+    ]),
     TypeOrmModule.forRootAsync({
   imports: [ConfigModule],
   inject: [ConfigService],
@@ -70,5 +78,11 @@ PsicotecnicoModule,
 NoticiaModule,
 SoporteModule,
   ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
-export class AppModule {} 
+export class AppModule {}

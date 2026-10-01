@@ -535,85 +535,99 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
     ? Math.round((correctasVerificadas / totalPreguntasVerificado) * 100)
     : 0;
 
-  const resultado = this.resultadoRepo.create({
-    totalPreguntas: totalPreguntasVerificado,
-    correctas: correctasVerificadas,
-    porcentaje,
-    tipoTest: datos.tipoTest,
-    tiempoSegundos: datos.tiempoSegundos,
-    detallePreguntas: detalleVerificado,
-    usuario: { id: datos.usuarioId } as any,
-    oposicion: { id: datos.oposicionId } as any,
-    tema: datos.temaId ? { id: datos.temaId } as any : undefined,
-  });
-
- await this.resultadoRepo.save(resultado);
-
-  // Incrementar preguntasTestHoy / histórico de forma atómica (evita condiciones de carrera)
-  await this.usuarioRepo.increment({ id: datos.usuarioId }, 'preguntasTestHoy', totalPreguntasVerificado);
-  await this.usuarioRepo.increment({ id: datos.usuarioId }, 'preguntasRespondidasTotales', totalPreguntasVerificado);
-  await this.usuarioRepo.update(datos.usuarioId, { ultimaActividad: new Date() });
-
   /* =========================================================
-     ⭐ PRIMER RETO → MARCAR USUARIO COMO ACTIVO
+     ⭐ TRANSACCIÓN: todas las escrituras de este resultado (guardado
+     del test, incrementos de usuario, incrementos por pregunta y
+     actualización de puntos/nivel) se hacen atómicas, igual que en
+     Flashcard/Psicotécnico, para evitar estado parcial si se interrumpe
+     a mitad (p. ej. se guarda el resultado pero no se suman los puntos).
   ========================================================= */
-  if (datos.tipoTest === 'primer_reto') {
-    await this.usuarioRepo.update(datos.usuarioId, {
-  estado: EstadoUsuario.ACTIVO,
-      // ⭐ si quieres registrar que ya lo hizo:
-      // primerRetoCompletado: true,
-    });
-  }
-
-  /* =========================================================
-     ACTUALIZAR ESTADISTICAS PREGUNTAS (incrementos atómicos)
-  ========================================================= */
-  for (const detalle of detalleVerificado) {
-    if (!detalle.preguntaId || !mapaPreguntas.has(detalle.preguntaId)) continue;
-
-    await this.preguntaRepo.increment({ id: detalle.preguntaId }, 'vecesUsada', 1);
-    if (detalle.correcta) {
-      await this.preguntaRepo.increment({ id: detalle.preguntaId }, 'aciertos', 1);
-    } else {
-      await this.preguntaRepo.increment({ id: detalle.preguntaId }, 'fallos', 1);
-    }
-  }
-
-  /* =========================================================
-     PUNTOS (si quieres excluir el primer reto, lo hacemos aquí)
-     ⭐ Devolvemos el detalle de puntos/nivel ganados junto con el resultado
-     para que el frontend pueda mostrar el feedback de gamificación
-     (antes se calculaban y guardaban en BD pero no llegaban a la UI).
-  ========================================================= */
-  let gamificacion: {
-    puntosGanados: number;
-    puntosTotales: number;
-    nivelAnterior: number;
-    nivelNuevo: number;
-    subioNivel: boolean;
-    nombreNivel: string;
-    badgeNivel: string;
-  } | null = null;
-
-  if (datos.tipoTest !== 'primer_reto') {
-    gamificacion = await this.actualizarPuntos(
-      datos.usuarioId,
-      datos.oposicionId, // ⭐ nuevo
-      totalPreguntasVerificado,
-      correctasVerificadas,
+  return this.resultadoRepo.manager.transaction(async (manager) => {
+    const resultado = manager.create(ResultadoTest, {
+      totalPreguntas: totalPreguntasVerificado,
+      correctas: correctasVerificadas,
       porcentaje,
+      tipoTest: datos.tipoTest,
+      tiempoSegundos: datos.tiempoSegundos,
+      detallePreguntas: detalleVerificado,
+      usuario: { id: datos.usuarioId } as any,
+      oposicion: { id: datos.oposicionId } as any,
+      tema: datos.temaId ? { id: datos.temaId } as any : undefined,
+    });
+
+    await manager.save(ResultadoTest, resultado);
+
+    // Incrementar preguntasTestHoy / histórico de forma atómica (evita condiciones de carrera)
+    await Promise.all([
+      manager.increment(Usuario, { id: datos.usuarioId }, 'preguntasTestHoy', totalPreguntasVerificado),
+      manager.increment(Usuario, { id: datos.usuarioId }, 'preguntasRespondidasTotales', totalPreguntasVerificado),
+      manager.update(Usuario, datos.usuarioId, { ultimaActividad: new Date() }),
+    ]);
+
+    /* =========================================================
+       ⭐ PRIMER RETO → MARCAR USUARIO COMO ACTIVO
+    ========================================================= */
+    if (datos.tipoTest === 'primer_reto') {
+      await manager.update(Usuario, datos.usuarioId, {
+        estado: EstadoUsuario.ACTIVO,
+        // ⭐ si quieres registrar que ya lo hizo:
+        // primerRetoCompletado: true,
+      });
+    }
+
+    /* =========================================================
+       ACTUALIZAR ESTADISTICAS PREGUNTAS (incrementos atómicos, en
+       paralelo en vez de secuenciales: hasta 50 preguntas en un
+       simulacro largo suponían hasta 150 round-trips uno detrás de otro)
+    ========================================================= */
+    await Promise.all(
+      detalleVerificado
+        .filter((detalle) => detalle.preguntaId && mapaPreguntas.has(detalle.preguntaId))
+        .flatMap((detalle) => [
+          manager.increment(PreguntaTest, { id: detalle.preguntaId }, 'vecesUsada', 1),
+          detalle.correcta
+            ? manager.increment(PreguntaTest, { id: detalle.preguntaId }, 'aciertos', 1)
+            : manager.increment(PreguntaTest, { id: detalle.preguntaId }, 'fallos', 1),
+        ]),
     );
-  }
 
-  // ⭐ Guardamos el snapshot en el propio resultado (no solo en la respuesta del POST)
-  // porque la pantalla de resultado navega con router.replace y relee el último
-  // resultado por GET, sin recibir nunca esta respuesta directamente.
-  if (gamificacion) {
-    resultado.gamificacion = gamificacion;
-    await this.resultadoRepo.update(resultado.id, { gamificacion });
-  }
+    /* =========================================================
+       PUNTOS (si quieres excluir el primer reto, lo hacemos aquí)
+       ⭐ Devolvemos el detalle de puntos/nivel ganados junto con el resultado
+       para que el frontend pueda mostrar el feedback de gamificación
+       (antes se calculaban y guardaban en BD pero no llegaban a la UI).
+    ========================================================= */
+    let gamificacion: {
+      puntosGanados: number;
+      puntosTotales: number;
+      nivelAnterior: number;
+      nivelNuevo: number;
+      subioNivel: boolean;
+      nombreNivel: string;
+      badgeNivel: string;
+    } | null = null;
 
-  return { ...resultado, gamificacion } as any;
+    if (datos.tipoTest !== 'primer_reto') {
+      gamificacion = await this.actualizarPuntos(
+        datos.usuarioId,
+        datos.oposicionId, // ⭐ nuevo
+        totalPreguntasVerificado,
+        correctasVerificadas,
+        porcentaje,
+        manager,
+      );
+    }
+
+    // ⭐ Guardamos el snapshot en el propio resultado (no solo en la respuesta del POST)
+    // porque la pantalla de resultado navega con router.replace y relee el último
+    // resultado por GET, sin recibir nunca esta respuesta directamente.
+    if (gamificacion) {
+      resultado.gamificacion = gamificacion;
+      await manager.update(ResultadoTest, resultado.id, { gamificacion });
+    }
+
+    return { ...resultado, gamificacion } as any;
+  });
 }
 
 
@@ -627,6 +641,7 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
   numPreguntas: number,
   correctas: number,
   porcentaje: number,
+  manager?: import('typeorm').EntityManager,
 ): Promise<{
   puntosGanados: number;
   puntosTotales: number;
@@ -636,9 +651,10 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
   nombreNivel: string;
   badgeNivel: string;
 } | null> {
+  const usuarioOposicionRepo = manager ? manager.getRepository(UsuarioOposicion) : this.usuarioOposicionRepo;
   const puntosAcciones = await this.configuracionService.getPuntosAcciones();
 
-  const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
+  const usuarioOposicion = await usuarioOposicionRepo.findOne({
     where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
   });
   if (!usuarioOposicion) return null;
@@ -659,7 +675,7 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
   const nuevosPuntos = usuarioOposicion.puntos + puntosGanados;
   const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(nuevosPuntos);
 
-  await this.usuarioOposicionRepo.update(usuarioOposicion.id, {
+  await usuarioOposicionRepo.update(usuarioOposicion.id, {
     puntos: nuevosPuntos,
     nivel: nuevoNivel,
   });

@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Body, Param, Query, UseGuards, Request, Delete } from '@nestjs/common';
 import { RetoService } from './reto.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
 
 @Controller('retos')
@@ -46,6 +48,8 @@ getRankingRetos(@Param('oposicionId') oposicionId: string) {
 }
 
 @Post('revisar-expirados')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 revisarExpirados() {
   return this.service.revisarRetosExpirados();
 }

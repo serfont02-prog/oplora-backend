@@ -233,11 +233,14 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
     dni?: string;
     notificacionesListas?: boolean;
   }): Promise<Usuario> {
-    const existente = await this.findByEmail(datos.email);
+    const emailNormalizado = datos.email?.toLowerCase().trim();
+    const nickNormalizado = datos.nick ? datos.nick.toLowerCase().trim() : datos.nick;
+
+    const existente = await this.findByEmail(emailNormalizado);
     if (existente) throw new ConflictException('Ya existe una cuenta con ese email');
 
-    if (datos.nick) {
-      const nickExistente = await this.findByNick(datos.nick);
+    if (nickNormalizado) {
+      const nickExistente = await this.findByNick(nickNormalizado);
       if (nickExistente) throw new ConflictException('Ese nick ya está en uso');
     }
 
@@ -245,9 +248,11 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
 
     const usuario = this.repo.create({
       ...datos,
+      email: emailNormalizado,
+      nick: nickNormalizado,
       password: hash,
 
-      
+
     });
 
     return this.repo.save(usuario);
@@ -258,7 +263,7 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
   // ---------------------------------------------------------
 
   async validarPassword(email: string, password: string): Promise<Usuario | null> {
-    const usuario = await this.findByEmail(email);
+    const usuario = await this.findByEmail(email?.toLowerCase().trim());
     if (!usuario) return null;
 
     const ok = await bcrypt.compare(password, usuario.password);
@@ -573,107 +578,113 @@ async getConvocatoriasDisponibles(usuarioId: string, oposicionId: string) {
 }
 
 private async migrarProgreso(usuarioId: string, oposicionId: string, origenId: string, destinoId: string): Promise<void> {
-  const temasOrigen = await this.temaRepo.find({ where: { convocatoria: { id: origenId } as any } });
-  const temasDestino = await this.temaRepo.find({ where: { convocatoria: { id: destinoId } as any } });
+  // ⭐ Todas las lecturas/escrituras se agrupan en una única transacción: si cualquier paso
+  // falla, no se confirma ninguno y el usuario no queda con la migración a medias.
+  return this.usuarioRepo.manager.transaction(async (manager) => {
+    const temasOrigen = await manager.find(Tema, { where: { convocatoria: { id: origenId } as any } });
+    const temasDestino = await manager.find(Tema, { where: { convocatoria: { id: destinoId } as any } });
 
-  // Mapa origen -> destino por número de tema (se reutiliza también para ResultadoTest)
-  const mapaTemaId: Record<string, string> = {};
-  for (const temaOrigen of temasOrigen) {
-    const temaDestino = temasDestino.find((t) => t.numero === temaOrigen.numero);
-    if (temaDestino) mapaTemaId[temaOrigen.id] = temaDestino.id;
-  }
-
-  for (const temaOrigen of temasOrigen) {
-    const temaDestino = temasDestino.find((t) => t.claveEstable === temaOrigen.claveEstable);
-    if (!temaDestino) continue; // el tema ya no existe en la nueva convocatoria
-
-    // --- Flashcards: emparejar por texto de pregunta ---
-    const fcOrigen = await this.flashcardRepo.find({ where: { tema: { id: temaOrigen.id } as any } });
-    const fcDestino = await this.flashcardRepo.find({ where: { tema: { id: temaDestino.id } as any } });
-
-    for (const fcO of fcOrigen) {
-      const fcD = fcDestino.find((f) => f.pregunta === fcO.pregunta);
-      if (!fcD) continue;
-
-      const repasoOrigen = await this.repasoFcRepo.findOne({
-        where: { usuario: { id: usuarioId } as any, flashcard: { id: fcO.id } as any },
-      });
-      if (!repasoOrigen) continue;
-
-      const yaExisteRepaso = await this.repasoFcRepo.findOne({
-        where: { usuario: { id: usuarioId } as any, flashcard: { id: fcD.id } as any },
-      });
-      if (yaExisteRepaso) continue;
-
-      await this.repasoFcRepo.save(this.repasoFcRepo.create({
-        usuario: { id: usuarioId } as any,
-        flashcard: { id: fcD.id } as any,
-        estado: repasoOrigen.estado,
-        aciertos: repasoOrigen.aciertos,
-        fallos: repasoOrigen.fallos,
-        proximoRepaso: repasoOrigen.proximoRepaso,
-        factorFacilidad: repasoOrigen.factorFacilidad,
-        intervalo: repasoOrigen.intervalo,
-        repeticiones: repasoOrigen.repeticiones,
-      } as any));
+    // Mapa origen -> destino por número de tema (se reutiliza también para ResultadoTest)
+    const mapaTemaId: Record<string, string> = {};
+    for (const temaOrigen of temasOrigen) {
+      const temaDestino = temasDestino.find((t) => t.numero === temaOrigen.numero);
+      if (temaDestino) mapaTemaId[temaOrigen.id] = temaDestino.id;
     }
 
-    // --- Progreso de lectura de apuntes ---
-    const apunteOrigen = await this.apunteOploraRepo.findOne({ where: { tema: { id: temaOrigen.id } as any } });
-    const apunteDestino = await this.apunteOploraRepo.findOne({ where: { tema: { id: temaDestino.id } as any } });
+    for (const temaOrigen of temasOrigen) {
+      const temaDestino = temasDestino.find((t) => t.claveEstable === temaOrigen.claveEstable);
+      if (!temaDestino) continue; // el tema ya no existe en la nueva convocatoria
 
-    if (apunteOrigen && apunteDestino) {
-      const progresoOrigen = await this.progresoLecturaRepo.findOne({
-        where: { usuario: { id: usuarioId } as any, apunte: { id: apunteOrigen.id } as any },
-      });
-      if (progresoOrigen) {
-        const yaExisteProgreso = await this.progresoLecturaRepo.findOne({
-          where: { usuario: { id: usuarioId } as any, apunte: { id: apunteDestino.id } as any },
+      // --- Flashcards: emparejar por texto de pregunta ---
+      const fcOrigen = await manager.find(Flashcard, { where: { tema: { id: temaOrigen.id } as any } });
+      const fcDestino = await manager.find(Flashcard, { where: { tema: { id: temaDestino.id } as any } });
+
+      for (const fcO of fcOrigen) {
+        const fcD = fcDestino.find((f) => f.pregunta === fcO.pregunta);
+        if (!fcD) continue;
+
+        const repasoOrigen = await manager.findOne(RepasoFC, {
+          where: { usuario: { id: usuarioId } as any, flashcard: { id: fcO.id } as any },
         });
-        if (!yaExisteProgreso) {
-          await this.progresoLecturaRepo.save(this.progresoLecturaRepo.create({
-            usuario: { id: usuarioId } as any,
-            apunte: { id: apunteDestino.id } as any,
-            porcentaje: progresoOrigen.porcentaje,
-          } as any));
+        if (!repasoOrigen) continue;
+
+        const yaExisteRepaso = await manager.findOne(RepasoFC, {
+          where: { usuario: { id: usuarioId } as any, flashcard: { id: fcD.id } as any },
+        });
+        if (yaExisteRepaso) continue;
+
+        await manager.save(RepasoFC, manager.create(RepasoFC, {
+          usuario: { id: usuarioId } as any,
+          flashcard: { id: fcD.id } as any,
+          estado: repasoOrigen.estado,
+          aciertos: repasoOrigen.aciertos,
+          fallos: repasoOrigen.fallos,
+          proximoRepaso: repasoOrigen.proximoRepaso,
+          factorFacilidad: repasoOrigen.factorFacilidad,
+          intervalo: repasoOrigen.intervalo,
+          repeticiones: repasoOrigen.repeticiones,
+        } as any));
+      }
+
+      // --- Progreso de lectura de apuntes ---
+      const apunteOrigen = await manager.findOne(ApunteOplora, { where: { tema: { id: temaOrigen.id } as any } });
+      const apunteDestino = await manager.findOne(ApunteOplora, { where: { tema: { id: temaDestino.id } as any } });
+
+      if (apunteOrigen && apunteDestino) {
+        const progresoOrigen = await manager.findOne(ProgresoLectura, {
+          where: { usuario: { id: usuarioId } as any, apunte: { id: apunteOrigen.id } as any },
+        });
+        if (progresoOrigen) {
+          const yaExisteProgreso = await manager.findOne(ProgresoLectura, {
+            where: { usuario: { id: usuarioId } as any, apunte: { id: apunteDestino.id } as any },
+          });
+          if (!yaExisteProgreso) {
+            await manager.save(ProgresoLectura, manager.create(ProgresoLectura, {
+              usuario: { id: usuarioId } as any,
+              apunte: { id: apunteDestino.id } as any,
+              porcentaje: progresoOrigen.porcentaje,
+            } as any));
+          }
         }
       }
+
+      // --- Notas personales del usuario: se reapuntan directamente al nuevo tema ---
+      await manager.update(
+        ApunteUsuario,
+        { usuario: { id: usuarioId } as any, tema: { id: temaOrigen.id } as any },
+        { tema: { id: temaDestino.id } as any },
+      );
     }
 
-    // --- Notas personales del usuario: se reapuntan directamente al nuevo tema ---
-    await this.apunteUsuarioRepo.update(
-      { usuario: { id: usuarioId } as any, tema: { id: temaOrigen.id } as any },
-      { tema: { id: temaDestino.id } as any },
-    );
-  }
+    // --- ResultadoTest ligados directamente a un tema: se reapuntan al tema equivalente ---
+    for (const [origenTemaId, destinoTemaId] of Object.entries(mapaTemaId)) {
+      await manager.update(
+        ResultadoTest,
+        { usuario: { id: usuarioId } as any, tema: { id: origenTemaId } as any },
+        { tema: { id: destinoTemaId } as any },
+      );
+    }
 
-  // --- ResultadoTest ligados directamente a un tema: se reapuntan al tema equivalente ---
-  for (const [origenTemaId, destinoTemaId] of Object.entries(mapaTemaId)) {
-    await this.resultadoTestRepo.update(
-      { usuario: { id: usuarioId } as any, tema: { id: origenTemaId } as any },
-      { tema: { id: destinoTemaId } as any },
-    );
-  }
-
-  // --- ResultadoTest de tests generales (sin tema propio): re-apuntar temaId dentro de detallePreguntas ---
-  const resultadosGenerales = await this.resultadoTestRepo.find({
-    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any, tema: null as any },
-  });
-
-  for (const resultado of resultadosGenerales) {
-    if (!resultado.detallePreguntas?.length) continue;
-    let cambiado = false;
-    const nuevoDetalle = resultado.detallePreguntas.map((p) => {
-      if (p.temaId && mapaTemaId[p.temaId]) {
-        cambiado = true;
-        return { ...p, temaId: mapaTemaId[p.temaId] };
-      }
-      return p;
+    // --- ResultadoTest de tests generales (sin tema propio): re-apuntar temaId dentro de detallePreguntas ---
+    const resultadosGenerales = await manager.find(ResultadoTest, {
+      where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any, tema: null as any },
     });
-    if (cambiado) {
-      await this.resultadoTestRepo.update(resultado.id, { detallePreguntas: nuevoDetalle });
+
+    for (const resultado of resultadosGenerales) {
+      if (!resultado.detallePreguntas?.length) continue;
+      let cambiado = false;
+      const nuevoDetalle = resultado.detallePreguntas.map((p) => {
+        if (p.temaId && mapaTemaId[p.temaId]) {
+          cambiado = true;
+          return { ...p, temaId: mapaTemaId[p.temaId] };
+        }
+        return p;
+      });
+      if (cambiado) {
+        await manager.update(ResultadoTest, resultado.id, { detallePreguntas: nuevoDetalle });
+      }
     }
-  }
+  });
 }
 
   async actualizarTiempoDisponible(id: string, tiempoDisponible: string) {
@@ -710,67 +721,72 @@ async resetearProgreso(
   const convocatoriaId = uo.convocatoriaActiva?.id;
   if (!convocatoriaId) throw new BadRequestException('No tienes convocatoria activa');
 
-  // --- Puntos y nivel (ahora correctamente acotados a esta oposición) ---
-  if (!conservar.puntosYNivel) {
-    await this.usuarioOposicionRepo.update(uo.id, { puntos: 0, nivel: 1 });
-  }
+  // ⭐ Todas las escrituras (puntos/nivel, racha, flashcards, lectura, tests, notas) se agrupan
+  // en una única transacción: si cualquier paso falla, no se confirma ninguno y el usuario no
+  // queda con el progreso parcialmente reseteado.
+  await this.usuarioRepo.manager.transaction(async (manager) => {
+    // --- Puntos y nivel (ahora correctamente acotados a esta oposición) ---
+    if (!conservar.puntosYNivel) {
+      await manager.update(UsuarioOposicion, uo.id, { puntos: 0, nivel: 1 });
+    }
 
-  // --- Racha (sigue siendo global de cuenta, se resetea igualmente si se pide) ---
-  if (!conservar.racha) {
-    await this.usuarioRepo.update(usuarioId, { rachaActual: 0 });
-    // rachaMaxima se mantiene como récord histórico, no se resetea nunca
-  }
+    // --- Racha (sigue siendo global de cuenta, se resetea igualmente si se pide) ---
+    if (!conservar.racha) {
+      await manager.update(Usuario, usuarioId, { rachaActual: 0 });
+      // rachaMaxima se mantiene como récord histórico, no se resetea nunca
+    }
 
-  const temas = await this.temaRepo.find({ where: { convocatoria: { id: convocatoriaId } as any } });
-  const temaIds = temas.map((t) => t.id);
+    const temas = await manager.find(Tema, { where: { convocatoria: { id: convocatoriaId } as any } });
+    const temaIds = temas.map((t) => t.id);
 
-  if (temaIds.length > 0) {
-    // --- Flashcards (RepasoFC) ---
-    if (!conservar.flashcards) {
-      const flashcardsDeLosTemas = await this.flashcardRepo.find({
-        where: { tema: { id: In(temaIds) } as any },
-        select: ['id'],
-      });
-      const flashcardIds = flashcardsDeLosTemas.map((f) => f.id);
-      if (flashcardIds.length > 0) {
-        await this.repasoFcRepo.delete({
+    if (temaIds.length > 0) {
+      // --- Flashcards (RepasoFC) ---
+      if (!conservar.flashcards) {
+        const flashcardsDeLosTemas = await manager.find(Flashcard, {
+          where: { tema: { id: In(temaIds) } as any },
+          select: ['id'],
+        });
+        const flashcardIds = flashcardsDeLosTemas.map((f) => f.id);
+        if (flashcardIds.length > 0) {
+          await manager.delete(RepasoFC, {
+            usuario: { id: usuarioId } as any,
+            flashcard: { id: In(flashcardIds) } as any,
+          });
+        }
+      }
+
+      // --- Progreso de lectura ---
+      if (!conservar.lectura) {
+        const apuntesDeLosTemas = await manager.find(ApunteOplora, {
+          where: { tema: { id: In(temaIds) } as any },
+          select: ['id'],
+        });
+        const apunteIds = apuntesDeLosTemas.map((a) => a.id);
+        if (apunteIds.length > 0) {
+          await manager.delete(ProgresoLectura, {
+            usuario: { id: usuarioId } as any,
+            apunte: { id: In(apunteIds) } as any,
+          });
+        }
+      }
+
+      // --- Historial de tests ---
+      if (!conservar.historialTests) {
+        await manager.delete(ResultadoTest, {
           usuario: { id: usuarioId } as any,
-          flashcard: { id: In(flashcardIds) } as any,
+          oposicion: { id: oposicionId } as any,
+        });
+      }
+
+      // --- Notas personales ---
+      if (!conservar.notas) {
+        await manager.delete(ApunteUsuario, {
+          usuario: { id: usuarioId } as any,
+          tema: { id: In(temaIds) } as any,
         });
       }
     }
-
-    // --- Progreso de lectura ---
-    if (!conservar.lectura) {
-      const apuntesDeLosTemas = await this.apunteOploraRepo.find({
-        where: { tema: { id: In(temaIds) } as any },
-        select: ['id'],
-      });
-      const apunteIds = apuntesDeLosTemas.map((a) => a.id);
-      if (apunteIds.length > 0) {
-        await this.progresoLecturaRepo.delete({
-          usuario: { id: usuarioId } as any,
-          apunte: { id: In(apunteIds) } as any,
-        });
-      }
-    }
-
-    // --- Historial de tests ---
-    if (!conservar.historialTests) {
-      await this.resultadoTestRepo.delete({
-        usuario: { id: usuarioId } as any,
-        oposicion: { id: oposicionId } as any,
-      });
-    }
-
-    // --- Notas personales ---
-    if (!conservar.notas) {
-      await this.apunteUsuarioRepo.delete({
-        usuario: { id: usuarioId } as any,
-        tema: { id: In(temaIds) } as any,
-      });
-    }
-  }
+  });
 }
 
 }

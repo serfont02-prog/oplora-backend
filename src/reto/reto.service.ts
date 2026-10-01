@@ -315,6 +315,22 @@ async completarReto(
     );
   }
 
+  // ⭐ Guarda de carrera: dos peticiones simultáneas podían pasar ambas el
+  // chequeo "completado" de arriba (leído antes de que ninguna escribiera)
+  // y acabar dando los puntos dos veces (darPuntosPorReto). Este UPDATE
+  // condicional es atómico a nivel de base de datos: solo una de las dos
+  // peticiones concurrentes logrará marcar completado=true (afecta 1 fila);
+  // la otra afecta 0 filas y se corta aquí, sin volver a abonar puntos.
+  const bloqueo = await this.participacionRepo
+    .createQueryBuilder()
+    .update(ParticipacionReto)
+    .set({ completado: true })
+    .where('id = :id AND completado = false', { id: participacion.id })
+    .execute();
+  if (!bloqueo.affected) {
+    throw new BadRequestException('Ya completaste este reto');
+  }
+
   // ⭐ La corrección se calcula en el servidor a partir de las preguntas
   // reales del reto, nunca a partir de lo que envíe el cliente.
   const respuestas = reto.preguntas.map((p: any, i: number) => ({
