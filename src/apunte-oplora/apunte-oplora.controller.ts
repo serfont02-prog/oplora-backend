@@ -6,6 +6,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApunteOploraService } from './apunte-oplora.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 import { memoryStorage } from 'multer';
 import { Request } from '@nestjs/common';
 
@@ -32,6 +34,8 @@ export class ApunteOploraController {
   }
 
  @Post('oposicion/:oposicionId')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 @UseInterceptors(FileInterceptor('archivo', { storage: memoryStorage() }))
 async subirGeneral(
   @Param('oposicionId') oposicionId: string,
@@ -91,6 +95,8 @@ getProgreso(@Param('id') apunteId: string, @Request() req: any) {
 }
 
 @Post('tema/:temaId')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
 @UseInterceptors(FileInterceptor('archivo'))
 async subir(
   @Param('temaId') temaId: string,
@@ -114,6 +120,8 @@ async subir(
 }
 
   @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   actualizar(
     @Param('id') id: string,
     @Body() datos: { titulo?: string; descripcion?: string; orden?: number },
@@ -122,6 +130,8 @@ async subir(
   }
 
   @Delete(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   eliminar(@Param('id') id: string) {
     return this.service.eliminar(id);
   }

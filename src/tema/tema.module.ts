@@ -6,7 +6,6 @@ import { PreguntaBanco } from './pregunta-banco.entity';
 import { ExamenAnterior } from './examen-anterior.entity';
 import { TemaService } from './tema.service';
 import { TemaController } from './tema.controller';
-import { IaModule } from '../ia/ia.module';
 import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
@@ -35,7 +34,6 @@ import { PsicotecnicoConfigOposicion } from '../psicotecnico/psicotecnico-config
       ExamenAnterior,
       Articulo, Capitulo, Titulo, Convocatoria, Usuario, PreguntaTest, ApunteOplora, Flashcard, RepasoFC, ApunteUsuario, ResultadoTest, UsuarioOposicion, PsicotecnicoConfigOposicion
     ]),
-    IaModule, 
     forwardRef(() => TestModule),
     forwardRef(() => FlashcardModule),
     forwardRef(() => ApunteOploraModule),

@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, forwardRef  } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, forwardRef  } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { ApunteOplora } from './apunte-oplora.entity';
 import { ProgresoLectura } from './progreso-lectura.entity';
 import { createClient } from '@supabase/supabase-js';
@@ -9,6 +9,7 @@ import { SubrayadoApunte } from './subrayado-apunte.entity';
 import { extraerLineasPDF } from './pdf-extractor';
 import { clasificarDocumento } from './pdf-classifier';
 import { NormativaService } from '../normativa/normativa.service';
+import { sanitizarNombreArchivo } from '../common/helpers/sanitizar-nombre-archivo.helper';
 
 
 @Injectable()
@@ -68,9 +69,7 @@ async subirArchivo(
   oposicionId?: string,
   versionLeyId?: string,
 ): Promise<ApunteOplora> {
-  const nombreSanitizado = nombreArchivo
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9.\-_]/g, '_');
+  const nombreSanitizado = sanitizarNombreArchivo(nombreArchivo);
 
   const carpeta = temaId ? `temas/${temaId}` : `oposiciones/${oposicionId}`;
   const path = `${carpeta}/${Date.now()}_${nombreSanitizado}`;
@@ -142,13 +141,37 @@ if (tipo === 'pdf') {
     });
   }
 
+  // ⭐ Versión "batch" de findByTema: trae de una sola vez los apuntes de varios temas
+  // (usado para evitar N+1 al calcular el progreso de todos los temas de una convocatoria).
+  async findByTemas(temaIds: string[]): Promise<ApunteOplora[]> {
+    if (temaIds.length === 0) return [];
+    return this.repo.find({
+      where: { tema: { id: In(temaIds) }, activo: true },
+      relations: ['tema'],
+      order: { orden: 'ASC', creadoEn: 'ASC' },
+    });
+  }
+
+  // ⭐ Versión "batch" de getProgreso: una sola query con IN en vez de una query por apunte.
+  async getProgresosBatch(usuarioId: string, apunteIds: string[]): Promise<Map<string, number>> {
+    const mapa = new Map<string, number>();
+    if (apunteIds.length === 0) return mapa;
+    const progresos = await this.progresoRepo.find({
+      where: { usuario: { id: usuarioId }, apunte: { id: In(apunteIds) } },
+      relations: ['apunte'],
+    });
+    for (const p of progresos) {
+      if (p.apunte?.id) mapa.set(p.apunte.id, p.porcentaje);
+    }
+    return mapa;
+  }
+
   async eliminar(id: string): Promise<void> {
     const apunte = await this.repo.findOne({ where: { id } });
     if (!apunte) return;
 
      await this.progresoRepo.delete({ apunte: { id } as any });
      await this.subrayadoRepo.delete({ apunte: { id } as any });
-     await this.repo.delete(id);
 
     // Extraer path del archivo de la URL
     const url = new URL(apunte.urlArchivo);
@@ -160,6 +183,8 @@ if (tipo === 'pdf') {
         .remove([path]);
     }
 
+    // Borrado de la fila en BD se hace al final, tras confirmar la limpieza en Supabase:
+    // si el borrado del storage fallase, la fila permanece y el borrado es reintentable.
     await this.repo.delete(id);
   }
 
@@ -189,6 +214,13 @@ if (tipo === 'pdf') {
 }
 
 async guardarProgreso(usuarioId: string, apunteId: string, porcentaje: number) {
+  if (typeof porcentaje !== 'number' || Number.isNaN(porcentaje) || porcentaje < 0 || porcentaje > 100) {
+    throw new BadRequestException('El porcentaje debe ser un número entre 0 y 100');
+  }
+
+  const apunte = await this.repo.findOne({ where: { id: apunteId } });
+  if (!apunte) throw new NotFoundException('Apunte no encontrado');
+
   let progreso = await this.progresoRepo.findOne({
     where: { usuario: { id: usuarioId }, apunte: { id: apunteId } },
   });

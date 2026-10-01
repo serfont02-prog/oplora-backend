@@ -1,9 +1,8 @@
 import { Module } from '@nestjs/common';
-import { IaService } from './ia.service';
 import { ClaudeService } from './claude.service';
 
 @Module({
-  providers: [IaService, ClaudeService],
-  exports: [IaService, ClaudeService],
+  providers: [ClaudeService],
+  exports: [ClaudeService],
 })
 export class IaModule {}

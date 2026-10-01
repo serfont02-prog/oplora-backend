@@ -20,6 +20,7 @@ import { ResultadoTest } from '../test/resultado-test.entity';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import { forwardRef, Inject } from '@nestjs/common';
+import { sanitizarNombreArchivo } from '../common/helpers/sanitizar-nombre-archivo.helper';
 
 
 
@@ -113,24 +114,39 @@ export class TemaService {
   }
 
 async remove(id: string) {
-  await this.temaNormativaRepo.delete({ tema: { id } as any });
-  await this.temaRepo.query(
-    `DELETE FROM preguntas_test_temas_temas WHERE "temasId" = $1`,
-    [id],
-  );
-
+  // ⭐ apunteOploraService.eliminar() borra el archivo en Supabase Storage además de la fila
+  // en BD. El borrado de storage es un efecto externo no transaccional: una transacción de BD
+  // no puede revertirlo si falla a mitad. Por eso se hace aquí, fuera/antes de la transacción,
+  // en "best effort" (igual que hacía el código original) — cada apunte se intenta borrar
+  // (storage + fila) de forma independiente.
   const apuntes = await this.apunteOploraRepo.find({ where: { tema: { id } as any } });
   for (const apunte of apuntes) {
-    await this.apunteOploraService.eliminar(apunte.id);
+    try {
+      await this.apunteOploraService.eliminar(apunte.id);
+    } catch (e) {
+      console.error(`Error eliminando apunte OPLORA ${apunte.id} del tema ${id}:`, e);
+    }
   }
-  const flashcardsDelTema = await this.flashcardRepo.find({ where: { tema: { id } as any }, select: ['id'] });
-  const flashcardIds = flashcardsDelTema.map((f) => f.id);
-  if (flashcardIds.length > 0) {
-    await this.repasoFcRepo.delete({ flashcard: { id: In(flashcardIds) } as any });
-  }
-  await this.flashcardRepo.delete({ tema: { id } as any });
-  await this.apunteUsuarioRepo.delete({ tema: { id } as any });
-  return this.temaRepo.delete(id);
+
+  // ⭐ Todo lo que sigue son escrituras puras de BD (sin efectos externos), así que se agrupan
+  // en una única transacción: si cualquier paso falla, no se confirma ninguno y el tema queda
+  // intacto para poder reintentar el borrado, en vez de quedar parcialmente borrado.
+  return this.temaRepo.manager.transaction(async (manager) => {
+    await manager.delete(TemaNormativa, { tema: { id } as any });
+    await manager.query(
+      `DELETE FROM preguntas_test_temas_temas WHERE "temasId" = $1`,
+      [id],
+    );
+
+    const flashcardsDelTema = await manager.find(Flashcard, { where: { tema: { id } as any }, select: ['id'] });
+    const flashcardIds = flashcardsDelTema.map((f) => f.id);
+    if (flashcardIds.length > 0) {
+      await manager.delete(RepasoFC, { flashcard: { id: In(flashcardIds) } as any });
+    }
+    await manager.delete(Flashcard, { tema: { id } as any });
+    await manager.delete(ApunteUsuario, { tema: { id } as any });
+    return manager.delete(Tema, id);
+  });
 }
 
   async getNormativa(temaId: string): Promise<TemaNormativa[]> {
@@ -286,19 +302,32 @@ async getExamenesByOposicionUsuario(usuarioId: string, oposicionId: string) {
     return this.temaNormativaRepo.save(tn);
   }
 
-  async getProgresoCompleto(usuarioId: string, temaId: string, oposicionId: string) {
+  async getProgresoCompleto(
+    usuarioId: string,
+    temaId: string,
+    oposicionId: string,
+    porcentajeLecturaPrecalculado?: number,
+  ) {
   // 1. LECTURA (50%) — promedio del % leído de apuntes OPLORA del tema
-  const apuntesOplora = await this.apunteOploraService.findByTema(temaId);
+  // Si ya viene precalculado (ver getProgresoOposicion / getProgresoCompletoConvocatoria,
+  // que lo calculan en batch para todos los temas a la vez), lo reutilizamos en vez de
+  // volver a hacer las queries por apunte de este tema.
+  let porcentajeLectura: number;
+  if (porcentajeLecturaPrecalculado !== undefined) {
+    porcentajeLectura = porcentajeLecturaPrecalculado;
+  } else {
+    const apuntesOplora = await this.apunteOploraService.findByTema(temaId);
 
-  let porcentajeLectura = 0;
-  if (apuntesOplora.length > 0) {
-    const progresos = await Promise.all(
-      apuntesOplora.map(async (ap) => {
-        const prog = await this.apunteOploraService.getProgreso(usuarioId, ap.id);
-        return prog?.porcentaje ?? 0;
-      })
-    );
-    porcentajeLectura = Math.round(progresos.reduce((a, b) => a + b, 0) / progresos.length);
+    porcentajeLectura = 0;
+    if (apuntesOplora.length > 0) {
+      const progresos = await Promise.all(
+        apuntesOplora.map(async (ap) => {
+          const prog = await this.apunteOploraService.getProgreso(usuarioId, ap.id);
+          return prog?.porcentaje ?? 0;
+        })
+      );
+      porcentajeLectura = Math.round(progresos.reduce((a, b) => a + b, 0) / progresos.length);
+    }
   }
   const puntosLectura = Math.round((porcentajeLectura / 100) * 50);
 
@@ -400,6 +429,39 @@ async getTotalPreguntasDelTema(temaId: string): Promise<number> {
     return examenes.map((e) => ({ ...e, totalPreguntas: mapaConteos[e.id] ?? 0 }));
   }
 
+  // ⭐ Calcula el % de lectura de una lista de temas en batch: una sola query para traer
+  // todos los apuntes de esos temas y una sola query (IN) para traer todo el progreso de
+  // lectura del usuario en esos apuntes, en vez de una query por apunte por tema (N+1).
+  private async calcularProgresoLecturaBatch(
+    usuarioId: string,
+    temas: Tema[],
+  ): Promise<Map<string, number>> {
+    const temaIds = temas.map((t) => t.id);
+    const apuntes = await this.apunteOploraService.findByTemas(temaIds);
+    const apunteIds = apuntes.map((a) => a.id);
+    const mapaProgresoPorApunte = await this.apunteOploraService.getProgresosBatch(usuarioId, apunteIds);
+
+    const apunteIdsPorTema = new Map<string, string[]>();
+    for (const apunte of apuntes) {
+      const temaId = (apunte as any).tema?.id;
+      if (!temaId) continue;
+      if (!apunteIdsPorTema.has(temaId)) apunteIdsPorTema.set(temaId, []);
+      apunteIdsPorTema.get(temaId)!.push(apunte.id);
+    }
+
+    const mapaPorcentajeLecturaPorTema = new Map<string, number>();
+    for (const tema of temas) {
+      const ids = apunteIdsPorTema.get(tema.id) ?? [];
+      if (ids.length === 0) {
+        mapaPorcentajeLecturaPorTema.set(tema.id, 0);
+        continue;
+      }
+      const suma = ids.reduce((acc, id) => acc + (mapaProgresoPorApunte.get(id) ?? 0), 0);
+      mapaPorcentajeLecturaPorTema.set(tema.id, Math.round(suma / ids.length));
+    }
+    return mapaPorcentajeLecturaPorTema;
+  }
+
   async getProgresoOposicion(usuarioId: string, oposicionId: string, convocatoriaId: string) {
   const temas = await this.temaRepo.find({
     where: { convocatoria: { id: convocatoriaId } },
@@ -409,8 +471,10 @@ async getTotalPreguntasDelTema(temaId: string): Promise<number> {
     return { porcentajeGlobal: 0, temasCompletados: 0, totalTemas: 0 };
   }
 
+  const mapaProgresoLectura = await this.calcularProgresoLecturaBatch(usuarioId, temas);
+
   const progresos = await Promise.all(
-    temas.map((t) => this.getProgresoCompleto(usuarioId, t.id, oposicionId))
+    temas.map((t) => this.getProgresoCompleto(usuarioId, t.id, oposicionId, mapaProgresoLectura.get(t.id) ?? 0))
   );
 
   const porcentajeGlobal = Math.round(
@@ -432,9 +496,11 @@ async getProgresoCompletoConvocatoria(usuarioId: string, convocatoriaId: string,
     order: { numero: 'ASC' },
   });
 
+  const mapaProgresoLectura = await this.calcularProgresoLecturaBatch(usuarioId, temas);
+
   const resultados = await Promise.all(
     temas.map(async (t) => {
-      const progreso = await this.getProgresoCompleto(usuarioId, t.id, oposicionId);
+      const progreso = await this.getProgresoCompleto(usuarioId, t.id, oposicionId, mapaProgresoLectura.get(t.id) ?? 0);
       return { temaId: t.id, numero: t.numero, titulo: t.titulo, ...progreso };
     })
   );
@@ -451,16 +517,17 @@ async crearExamen(datos: {
   parte: number;
   archivo: Express.Multer.File;
 }): Promise<ExamenAnterior> {
-  // Sube el PDF a Supabase Storage (mismo bucket/patrón que usas para apuntes)
+  // Sube el PDF a Supabase Storage, en su propio bucket dedicado a exámenes
+  // (antes reutilizaba el bucket 'apuntes-oplora' de los apuntes OPLORA).
   const nombreLimpio = sanitizarNombreArchivo(datos.archivo.originalname);
   const nombreArchivo = `examenes/${datos.convocatoriaId}/${Date.now()}-${nombreLimpio}`;
   const { error } = await this.supabase.storage
-    .from('apuntes-oplora') // o el bucket que uses para documentos oficiales
+    .from('examenes')
     .upload(nombreArchivo, datos.archivo.buffer, { contentType: 'application/pdf' });
 
   if (error) throw new Error(`Error subiendo PDF: ${error.message}`);
 
-  const { data: urlData } = this.supabase.storage.from('apuntes-oplora').getPublicUrl(nombreArchivo);
+  const { data: urlData } = this.supabase.storage.from('examenes').getPublicUrl(nombreArchivo);
 
   const examen = this.examenRepo.create({
     nombre: datos.nombre,
@@ -710,8 +777,3 @@ function parseFraccion(fraccion: string | null | undefined): number {
   return numerador / denominador;
 }
 
-function sanitizarNombreArchivo(nombre: string): string {
-  return nombre
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quita tildes
-    .replace(/[^a-zA-Z0-9.\-_]/g, '_'); // sustituye cualquier otro carácter raro por "_"
-}
