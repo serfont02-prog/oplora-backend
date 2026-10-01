@@ -298,12 +298,20 @@ async borrarSubrayado(id: string, usuarioId: string): Promise<void> {
 async buscarArticulos(versionLeyId: string, q: string): Promise<Articulo[]> {
   if (!q || q.trim().length < 1) return [];
 
+  // ⭐ Antes solo se unía a.capitulo→tituloRef y a.tituloRef directo. Un
+  // artículo que cuelga de una Sección no tiene ninguno de los dos rellenos
+  // (solo a.seccion), así que el filtro por versionLey nunca lo encontraba
+  // y la búsqueda del modal de vincular (admin) no daba resultados para
+  // esos artículos aunque existieran y se vieran en el visor de la ley.
   return this.articuloRepo
     .createQueryBuilder('a')
     .leftJoin('a.capitulo', 'c')
     .leftJoin('c.tituloRef', 't')
     .leftJoin('a.tituloRef', 'tr')
-    .where('(t.versionLey = :vId OR tr.versionLey = :vId)', { vId: versionLeyId })
+    .leftJoin('a.seccion', 's')
+    .leftJoin('s.capitulo', 'sc')
+    .leftJoin('sc.tituloRef', 'st')
+    .where('(t.versionLey = :vId OR tr.versionLey = :vId OR st.versionLey = :vId)', { vId: versionLeyId })
     .andWhere('a.vigente = true')
     .andWhere(
       '(a.numero ILIKE :q OR a.contenido ILIKE :qWild OR a.titulo ILIKE :qWild)',

@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Delete, Param, Body, UseGuards, Request, Query, Patch } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Brackets } from 'typeorm';
 import { Titulo } from './titulo.entity';
 import { Capitulo } from './capitulo.entity';
 import { Articulo } from './articulo.entity';
@@ -270,12 +270,27 @@ async anteriorSiguiente(@Param('id') id: string) {
   });
   }
 
+  // ⭐ Antes solo devolvía los artículos colgados DIRECTAMENTE del capítulo.
+  // Si el capítulo está dividido en Secciones (p. ej. Ley 40/2015), sus
+  // artículos cuelgan de la Sección, no del Capítulo, y quedaban invisibles
+  // aquí — el selector "Capítulo → Artículos" del modal de vincular (admin)
+  // no tenía forma de llegar a ellos. Mismo criterio que ya usa la
+  // navegación anterior/siguiente: un artículo de una Sección de este
+  // capítulo cuenta como artículo de este capítulo.
   @Get('articulos/:capituloId')
   getArticulos(@Param('capituloId') capituloId: string) {
-    return this.articuloRepo.find({
-      where: { capitulo: { id: capituloId }, vigente: true },
-      order: { orden: 'ASC' },
-    });
+    return this.articuloRepo
+      .createQueryBuilder('articulo')
+      .leftJoin('articulo.seccion', 'seccion')
+      .where(
+        new Brackets((qb) => {
+          qb.where('articulo.capitulo = :capituloId', { capituloId })
+            .orWhere('seccion.capitulo = :capituloId', { capituloId });
+        }),
+      )
+      .andWhere('articulo.vigente = true')
+      .orderBy('articulo.orden', 'ASC')
+      .getMany();
   }
 
   @Post('importar-contenido-ia')
