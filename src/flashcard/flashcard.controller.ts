@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, UseGuards, Request, Query } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, UseGuards, Request, Query } from '@nestjs/common';
 import { FlashcardService } from './flashcard.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -95,9 +95,16 @@ getPendientes(
     @Body('numFC') numFC: number,
     @Body('temaId') temaId: string,
     @Body('versionLeyId') versionLeyId: string,
+    @Body('mensaje') mensaje: string,
+    @Body('horasPlazo') horasPlazo: number,
     @Request() req: any,
   ) {
-    return this.service.crearDueloFC(req.user.id, retadoNickOEmail, oposicionId, numFC ?? 5, temaId, versionLeyId);
+    return this.service.crearDueloFC(req.user.id, retadoNickOEmail, oposicionId, numFC ?? 5, temaId, versionLeyId, mensaje, horasPlazo);
+  }
+
+  @Delete('duelo/:id')
+  eliminarDuelo(@Param('id') id: string, @Request() req: any) {
+    return this.service.eliminarDueloFC(id, req.user.id);
   }
 
   @Post('enviar')

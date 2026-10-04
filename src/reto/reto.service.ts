@@ -232,7 +232,7 @@ async crearRetoUsuario(
   nivelRequerido: 1,
   preguntas,
   fechaFin,
-  mensaje: mensaje || undefined,
+  mensaje: mensaje?.trim().slice(0, 140) || undefined,
   creador: { id: retadorId } as any,
   oposicion: { id: oposicionId } as any,
   tema: temaId ? { id: temaId } as any : undefined,
@@ -803,4 +803,4 @@ async validarDestinatarioReto(retadorId: string, nickOEmail: string, oposicionId
     mismaConvocatoria,
   };
 }
-}
+}

@@ -38,6 +38,10 @@ export class RetoFC {
   @Column({ nullable: true })
   fechaFin: Date;
 
+  // ⭐ Mensaje opcional del retador al retado (máx. 140), igual que en los retos de test.
+  @Column({ type: 'varchar', length: 140, nullable: true })
+  mensaje: string | null;
+
   @CreateDateColumn()
   creadoEn: Date;
 

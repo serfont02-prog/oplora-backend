@@ -84,6 +84,8 @@ export class PsicotecnicoController {
     @Body('tipo') tipo: PsicotecnicoTipo,
     @Body('numPreguntas') numPreguntas: number,
     @Body('convocatoriaId') convocatoriaId: string,
+    @Body('mensaje') mensaje: string,
+    @Body('horasPlazo') horasPlazo: number,
     @Request() req: any,
   ) {
     return this.service.crearDueloPsicotecnico(
@@ -93,7 +95,15 @@ export class PsicotecnicoController {
       tipo,
       numPreguntas,
       convocatoriaId,
+      mensaje,
+      horasPlazo,
     );
+  }
+
+  @Delete('duelo/:id')
+  @UseGuards(JwtAuthGuard)
+  eliminarDuelo(@Param('id') id: string, @Request() req: any) {
+    return this.service.eliminarDueloPsicotecnico(id, req.user.id);
   }
 
   @Post('reto/:id/completar')

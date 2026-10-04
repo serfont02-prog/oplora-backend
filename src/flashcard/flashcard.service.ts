@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Brackets } from 'typeorm';
+import { Repository, Brackets, In } from 'typeorm';
 import { Flashcard, TipoFlashcard, NivelFlashcard } from './flashcard.entity';
 import { RepasoFC, EstadoFC } from './repaso-fc.entity';
 import { RetoFC, TipoRetoFC, EstadoRetoFC } from './reto-fc.entity';
@@ -11,6 +11,10 @@ import { Usuario } from '../usuario/usuario.entity';
 import { ConfiguracionService } from '../config/configuracion.service';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 
+
+// ⭐ Tipos corregibles en servidor (respuesta true/false). Los de respuesta libre (hueco,
+// artículo) no pueden usarse en duelos porque exigirían autoevaluación.
+const TIPOS_DUELO = [TipoFlashcard.VF, TipoFlashcard.TRAMPA];
 
 @Injectable()
 export class FlashcardService {
@@ -177,7 +181,8 @@ export class FlashcardService {
         .leftJoin('fc.articulo', 'art')
         .leftJoin('fc.tema', 'tema')
         .where('fc.activa = true')
-        .andWhere('fc.esParaDuelo = true');
+        .andWhere('fc.esParaDuelo = true')
+        .andWhere('fc.tipo IN (:...tiposDuelo)', { tiposDuelo: TIPOS_DUELO });
 
       if (temaId) {
         query = query.andWhere(
@@ -210,7 +215,7 @@ export class FlashcardService {
       return query.orderBy('fc.creadoEn', 'ASC').take(limite).getMany();
     }
     return this.fcRepo.find({
-      where: { oposicion: { id: oposicionId }, activa: true, esParaDuelo: true },
+      where: { oposicion: { id: oposicionId }, activa: true, esParaDuelo: true, tipo: In(TIPOS_DUELO) },
       take: limite,
       order: { creadoEn: 'ASC' },
     });
@@ -556,6 +561,8 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
     numFC = 5,
     temaId?: string,
     versionLeyId?: string,
+    mensaje?: string,
+    horasPlazo?: number,
   ): Promise<RetoFC> {
     // ⭐ Reescrito por completo: la versión anterior recibía retadoNickOEmail pero nunca lo
     // usaba, así que el campo "retado" del RetoFC nunca se rellenaba (el duelo no tenía
@@ -591,16 +598,23 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
       throw new BadRequestException(`${retado.nick ?? retado.nombre} está en una convocatoria distinta a la tuya`);
     }
 
-    const flashcards = await this.findParaDuelo(oposicionId, numFC, temaId, versionLeyId);
+    // ⭐ Tope de nº de tarjetas (igual que el clamp 1-30 de los retos de test).
+    const numFCFinal = Math.min(Math.max(Math.trunc(numFC) || 5, 1), 30);
+    const flashcards = await this.findParaDuelo(oposicionId, numFCFinal, temaId, versionLeyId);
     if (flashcards.length === 0) throw new BadRequestException('No hay flashcards de duelo disponibles');
 
+    // ⭐ Plazo configurable (antes fijo a 48h): mismo criterio que crearRetoUsuario de test.
+    const horasPlazoFinal = horasPlazo && horasPlazo > 0 ? Math.min(horasPlazo, 24 * 14) : 48;
     const fechaFin = new Date();
-    fechaFin.setDate(fechaFin.getDate() + 2);
+    fechaFin.setHours(fechaFin.getHours() + horasPlazoFinal);
+    const mensajeLimpio = mensaje?.trim().slice(0, 140) || null;
 
     const reto = await this.retoFcRepo.save(this.retoFcRepo.create({
       tipo: TipoRetoFC.DUELO,
       flashcards,
       fechaFin,
+      mensaje: mensajeLimpio,
+      tema: temaId ? ({ id: temaId } as any) : undefined,
       retador: { id: retadorId } as any,
       retado: { id: retado.id } as any,
       oposicion: { id: oposicionId } as any,
@@ -610,12 +624,39 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
       usuarioId: retado.id,
       tipo: TipoNotificacion.RETO_RECIBIDO,
       titulo: '🃏 ¡Nuevo duelo de flashcards!',
-      mensaje: `${retador.nick ?? retador.nombre} te ha retado a un duelo de flashcards`,
+      mensaje: `${retador.nick ?? retador.nombre} te ha retado a un duelo de flashcards${mensajeLimpio ? `: "${mensajeLimpio}"` : ''}`,
       prioridad: PrioridadNotificacion.MEDIA,
-      urlAccion: `/app/flashcards/duelo/${reto.id}`,
+      urlAccion: `/app/retos/fc/${reto.id}`,
     });
 
     return reto;
+  }
+
+  // ⭐ Cancelar (retador) o rechazar (retado) un duelo de FC: mismas guardas que
+  // reto.service.ts#eliminarRetoUsuario de test.
+  async eliminarDueloFC(retoId: string, usuarioId: string): Promise<void> {
+    const reto = await this.retoFcRepo.findOne({
+      where: { id: retoId },
+      relations: ['retador', 'retado', 'resultados', 'resultados.usuario'],
+    });
+    if (!reto) throw new NotFoundException('Reto no encontrado');
+    if (reto.tipo !== TipoRetoFC.DUELO) {
+      throw new BadRequestException('Solo se pueden eliminar duelos entre usuarios');
+    }
+
+    const esParticipante = (reto.retador as any)?.id === usuarioId || (reto.retado as any)?.id === usuarioId;
+    if (!esParticipante) throw new ForbiddenException('No tienes acceso a este reto');
+
+    const miResultado = reto.resultados?.find((r) => (r.usuario as any)?.id === usuarioId);
+    if (miResultado?.completado) {
+      throw new BadRequestException('No puedes cancelar un reto que ya has completado');
+    }
+    if (reto.estado === EstadoRetoFC.COMPLETADO) {
+      throw new BadRequestException('Este reto ya se ha completado y no se puede cancelar');
+    }
+
+    await this.resultadoRepo.delete({ retoFc: { id: retoId } as any });
+    await this.retoFcRepo.delete(retoId);
   }
 
   async enviarFCPersonal(
@@ -720,7 +761,7 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
   async completarRetoFC(
     retoId: string,
     usuarioId: string,
-    respuestas: { flashcardId: string; correcta: boolean; tiempoRespuesta: number }[],
+    respuestas: { flashcardId: string; respuesta?: boolean; correcta?: boolean; tiempoRespuesta: number }[],
   ): Promise<ResultadoRetoFC> {
     const reto = await this.retoFcRepo.findOne({
       where: { id: retoId },
@@ -754,6 +795,46 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     );
     if (yaCompletado) throw new BadRequestException('Ya completaste este reto');
 
+    // ⭐ Igual que en test: se exige una respuesta por flashcard (sin repetidas ni parciales).
+    const totalEsperadas = (reto.flashcards ?? []).length;
+    if (
+      respuestas.length !== totalEsperadas ||
+      new Set(respuestas.map((r) => r.flashcardId)).size !== totalEsperadas
+    ) {
+      throw new BadRequestException(
+        'El número de respuestas no coincide con el número de flashcards del reto',
+      );
+    }
+
+    // ⭐ Antes se podía completar (y puntuar) un duelo ya vencido: se rechaza igual que en
+    // reto.service.ts#completarReto de test.
+    if (
+      reto.tipo === TipoRetoFC.DUELO &&
+      (reto.estado === EstadoRetoFC.EXPIRADO || (reto.fechaFin && new Date(reto.fechaFin) < new Date()))
+    ) {
+      if (reto.estado !== EstadoRetoFC.EXPIRADO) {
+        await this.retoFcRepo.update(reto.id, { estado: EstadoRetoFC.EXPIRADO });
+      }
+      throw new BadRequestException('Este reto ya ha expirado, no puedes completarlo');
+    }
+
+    // ⭐ Corrección en servidor (como en test): en los duelos el cliente solo envía lo que
+    // contestó (verdadero/falso) y aquí se calcula si es correcto; nunca se fía de `correcta`.
+    if (reto.tipo === TipoRetoFC.DUELO) {
+      const porId = new Map((reto.flashcards ?? []).map((fc) => [fc.id, fc]));
+      for (const r of respuestas) {
+        if (typeof r.respuesta !== 'boolean') {
+          throw new BadRequestException('Falta la respuesta de alguna flashcard');
+        }
+        const fc = porId.get(r.flashcardId)!;
+        r.correcta = r.respuesta === (String(fc.respuesta).trim().toLowerCase() === 'true');
+      }
+    }
+    for (const r of respuestas) {
+      r.tiempoRespuesta = Math.max(0, Number(r.tiempoRespuesta) || 0);
+      r.correcta = !!r.correcta;
+    }
+
     const aciertos = respuestas.filter((r) => r.correcta).length;
     const tiempoTotal = respuestas.reduce((acc, r) => acc + r.tiempoRespuesta, 0);
 
@@ -762,6 +843,14 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     // sin fila de resultado, y el usuario podía volver a responder y "doblar" los puntos.
     // Se envuelve todo en una transacción del manager de resultadoRepo.
     const resultado = await this.resultadoRepo.manager.transaction(async (manager) => {
+      // ⭐ Bloqueo por (reto, usuario): dos envíos simultáneos se serializan y el segundo ve
+      // el resultado ya guardado, así que no se duplica resultado ni se re-puntúa.
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`retofc:${retoId}:${usuarioId}`]);
+      const previo = await manager.findOne(ResultadoRetoFC, {
+        where: { retoFc: { id: retoId } as any, usuario: { id: usuarioId } as any, completado: true },
+      });
+      if (previo) throw new BadRequestException('Ya completaste este reto');
+
       for (const r of respuestas) {
         await this.registrarRespuesta(usuarioId, r.flashcardId, r.correcta ? 4 : 1, r.tiempoRespuesta);
       }
@@ -792,38 +881,111 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     return resultado;
   }
 
+  // ⭐ Cierre del duelo igualado al de test (reto.service.ts#cerrarRetoUsuario): empates reales
+  // comparten posición (antes se asignaba posicion = i + 1 por orden de BD, así que un empate
+  // daba un ganador arbitrario), notificación de empate y bonus de puntos solo por ganar.
   private async cerrarDuelo(reto: RetoFC): Promise<void> {
+    // Guarda atómica: si los dos rivales terminan a la vez, solo una petición llega a cerrar
+    // (la otra afecta 0 filas) y no se duplican posiciones, notificaciones ni bonus.
+    const cierre = await this.retoFcRepo
+      .createQueryBuilder()
+      .update(RetoFC)
+      .set({ estado: EstadoRetoFC.COMPLETADO })
+      .where('id = :id AND estado <> :completado', { id: reto.id, completado: EstadoRetoFC.COMPLETADO })
+      .execute();
+    if (!cierre.affected) return;
+
     const resultados = await this.resultadoRepo.find({
       where: { retoFc: { id: reto.id }, completado: true },
       relations: ['usuario'],
       order: { aciertos: 'DESC', tiempoTotal: 'ASC' },
     });
+    if (resultados.length < 2) return;
 
-    for (let i = 0; i < resultados.length; i++) {
-      await this.resultadoRepo.update(resultados[i].id, { posicion: i + 1 });
+    const mismoResultado = (a: ResultadoRetoFC, b: ResultadoRetoFC) =>
+      a.aciertos === b.aciertos && a.tiempoTotal === b.tiempoTotal;
+
+    const mejor = resultados[0];
+    const ganadores = resultados.filter((r) => mismoResultado(r, mejor));
+    const empateGeneral = ganadores.length === resultados.length;
+
+    // Posiciones: los empatados comparten puesto; el resto se numera a continuación.
+    let posicionActual = 1;
+    let i = 0;
+    while (i < resultados.length) {
+      const actual = resultados[i];
+      const empatados = resultados.filter((r) => mismoResultado(r, actual));
+      for (const r of empatados) {
+        await this.resultadoRepo.update(r.id, { posicion: posicionActual });
+      }
+      i += empatados.length;
+      posicionActual += empatados.length;
     }
 
-    await this.retoFcRepo.update(reto.id, { estado: EstadoRetoFC.COMPLETADO });
+    if (empateGeneral) {
+      for (const r of resultados) {
+        await this.notificacionService.crear({
+          usuarioId: (r.usuario as any).id,
+          tipo: TipoNotificacion.RETO_RESULTADO,
+          titulo: '¡Empate en el duelo de FC! 🤝',
+          mensaje: `Habéis empatado con ${mejor.aciertos} aciertos`,
+          prioridad: PrioridadNotificacion.MEDIA,
+        });
+      }
+      return;
+    }
 
-    if (resultados.length >= 2) {
-      const ganador = resultados[0].usuario as any;
-      const perdedor = resultados[1].usuario as any;
+    const retoConOposicion = await this.retoFcRepo.findOne({ where: { id: reto.id }, relations: ['oposicion'] });
+    const oposicionId = (retoConOposicion?.oposicion as any)?.id;
 
-      await this.notificacionService.crear({
-        usuarioId: ganador.id,
-        tipo: TipoNotificacion.RETO_RESULTADO,
-        titulo: '¡Has ganado el duelo de FC! 🃏',
-        mensaje: `Has ganado a ${perdedor.nick ?? perdedor.nombre} con ${resultados[0].aciertos} aciertos`,
-        prioridad: PrioridadNotificacion.MEDIA,
-      });
+    for (const r of resultados) {
+      const usuario = r.usuario as any;
+      const esGanador = ganadores.some((g) => g.id === r.id);
+      if (esGanador) {
+        const rival = resultados.find((x) => x.id !== r.id)?.usuario as any;
+        await this.notificacionService.crear({
+          usuarioId: usuario.id,
+          tipo: TipoNotificacion.RETO_RESULTADO,
+          titulo: '¡Has ganado el duelo de FC! 🃏',
+          mensaje: rival
+            ? `Has ganado a ${rival.nick ?? rival.nombre} con ${r.aciertos} aciertos`
+            : `Has terminado con ${r.aciertos} aciertos`,
+          prioridad: PrioridadNotificacion.MEDIA,
+        });
+        // ⭐ Puntos de FC solo por victoria (los aciertos ya puntúan al dominar cada tarjeta).
+        if (oposicionId) await this.darBonusVictoriaFC(usuario.id, oposicionId);
+      } else {
+        const ganador = ganadores[0]?.usuario as any;
+        await this.notificacionService.crear({
+          usuarioId: usuario.id,
+          tipo: TipoNotificacion.RETO_RESULTADO,
+          titulo: 'Duelo de FC finalizado',
+          mensaje: `${ganador.nick ?? ganador.nombre} ha ganado el duelo con ${mejor.aciertos} aciertos`,
+          prioridad: PrioridadNotificacion.MEDIA,
+        });
+      }
+    }
+  }
 
-      await this.notificacionService.crear({
-        usuarioId: perdedor.id,
-        tipo: TipoNotificacion.RETO_RESULTADO,
-        titulo: 'Duelo de FC finalizado',
-        mensaje: `${ganador.nick ?? ganador.nombre} ha ganado el duelo con ${resultados[0].aciertos} aciertos`,
-        prioridad: PrioridadNotificacion.MEDIA,
-      });
+  // ⭐ Bonus por ganar un duelo de FC: mismo valor configurable (`ganarReto`) que en test,
+  // con incremento atómico en BD y recálculo de nivel.
+  private async darBonusVictoriaFC(usuarioId: string, oposicionId: string): Promise<void> {
+    const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
+      where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    });
+    if (!usuarioOposicion) return;
+
+    const puntosAcciones = await this.configuracionService.getPuntosAcciones();
+    const bonus = puntosAcciones.ganarReto ?? 20;
+    if (!bonus) return;
+
+    await this.usuarioOposicionRepo.increment({ id: usuarioOposicion.id }, 'puntos', bonus);
+    const actualizado = await this.usuarioOposicionRepo.findOne({ where: { id: usuarioOposicion.id } });
+    if (!actualizado) return;
+
+    const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(actualizado.puntos);
+    if (nuevoNivel !== actualizado.nivel) {
+      await this.usuarioOposicionRepo.update(usuarioOposicion.id, { nivel: nuevoNivel });
     }
   }
 
@@ -860,6 +1022,15 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     if (vencidos.length > 0) {
       await this.retoFcRepo.update(vencidos.map((r) => r.id), { estado: EstadoRetoFC.EXPIRADO });
       for (const r of vencidos) r.estado = EstadoRetoFC.EXPIRADO;
+    }
+
+    // ⭐ No se envía la solución de las tarjetas de un duelo que el usuario aún no ha jugado:
+    // la corrección es en servidor y así no se puede mirar en la respuesta de red.
+    for (const r of retos) {
+      const completado = r.resultados?.some((x: any) => x.usuario?.id === usuarioId && x.completado);
+      if (r.tipo === TipoRetoFC.DUELO && !completado) {
+        r.flashcards = (r.flashcards ?? []).map((fc) => ({ ...fc, respuesta: undefined, explicacion: undefined }) as any);
+      }
     }
 
     return retos;
