@@ -863,7 +863,7 @@ export class PsicotecnicoService {
   }
 
   async getMisRetosPsicotecnico(usuarioId: string): Promise<RetoPsicotecnico[]> {
-    return this.retoPsicotecnicoRepo
+    const retos = await this.retoPsicotecnicoRepo
       .createQueryBuilder('reto')
       .leftJoinAndSelect('reto.retador', 'retador')
       .leftJoinAndSelect('reto.retado', 'retado')
@@ -874,6 +874,22 @@ export class PsicotecnicoService {
       .orWhere('retado.id = :usuarioId', { usuarioId })
       .orderBy('reto.creadoEn', 'DESC')
       .getMany();
+
+    // ⭐ Expiración "al vuelo": ningún cron marcaba como EXPIRADO los retos
+    // psicotécnicos cuyo plazo ya pasó, así que se quedaban en "en curso".
+    const ahora = new Date();
+    const vencidos = retos.filter(
+      (r) =>
+        (r.estado === EstadoRetoPsicotecnico.ACTIVO || r.estado === EstadoRetoPsicotecnico.PENDIENTE) &&
+        r.fechaFin &&
+        new Date(r.fechaFin) < ahora,
+    );
+    if (vencidos.length > 0) {
+      await this.retoPsicotecnicoRepo.update(vencidos.map((r) => r.id), { estado: EstadoRetoPsicotecnico.EXPIRADO });
+      for (const r of vencidos) r.estado = EstadoRetoPsicotecnico.EXPIRADO;
+    }
+
+    return retos;
   }
 
   // Espejo de test.service.ts#contarPreguntasDisponibles: cuenta cuántas

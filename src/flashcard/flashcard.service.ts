@@ -832,7 +832,7 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
   // reto.service.ts#getMisRetos (retos donde el usuario es retador o retado, con relaciones
   // cargadas y ordenados por fecha de creación descendente).
   async getMisRetosFC(usuarioId: string): Promise<RetoFC[]> {
-    return this.retoFcRepo
+    const retos = await this.retoFcRepo
       .createQueryBuilder('reto')
       .leftJoinAndSelect('reto.retador', 'retador')
       .leftJoinAndSelect('reto.retado', 'retado')
@@ -844,6 +844,25 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
       .orWhere('retado.id = :usuarioId', { usuarioId })
       .orderBy('reto.creadoEn', 'DESC')
       .getMany();
+
+    // ⭐ Expiración "al vuelo": ningún cron marcaba como EXPIRADO los duelos de FC
+    // cuyo plazo ya pasó, así que se quedaban eternamente en "en curso". Se marcan
+    // aquí antes de devolverlos (y se refleja en memoria) para que el frontend los
+    // mande a Historial.
+    const ahora = new Date();
+    const vencidos = retos.filter(
+      (r) =>
+        r.tipo === TipoRetoFC.DUELO &&
+        (r.estado === EstadoRetoFC.ACTIVO || r.estado === EstadoRetoFC.PENDIENTE) &&
+        r.fechaFin &&
+        new Date(r.fechaFin) < ahora,
+    );
+    if (vencidos.length > 0) {
+      await this.retoFcRepo.update(vencidos.map((r) => r.id), { estado: EstadoRetoFC.EXPIRADO });
+      for (const r of vencidos) r.estado = EstadoRetoFC.EXPIRADO;
+    }
+
+    return retos;
   }
 
   // ─── STATS ───────────────────────────────────────────────
