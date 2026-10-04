@@ -463,6 +463,40 @@ async completarReto(
     order: { creadoEn: 'DESC' },
   });
 
+  // ⭐ Chequeo de expiración "al vuelo": no confiamos solo en el @Cron de
+  // revisarRetosExpirados (que depende de que el proceso backend siga vivo
+  // en memoria para disparar el setInterval — en despliegues que reciclan o
+  // duermen el proceso, el cron puede no llegar a ejecutarse nunca). Antes
+  // de devolver los retos, marcamos aquí mismo como EXPIRADO cualquier reto
+  // de tipo usuario que ya haya superado su fechaFin, para que el frontend
+  // siempre vea el estado correcto y lo mande a Historial sin depender de
+  // que el cron haya corrido.
+  const ahora = new Date();
+  const idsAExpirar = new Set<string>();
+  for (const p of participaciones) {
+    const reto = p.reto;
+    if (
+      reto &&
+      reto.tipo === TipoReto.USUARIO &&
+      reto.estado === EstadoReto.ACTIVO &&
+      reto.fechaFin &&
+      new Date(reto.fechaFin) < ahora
+    ) {
+      idsAExpirar.add(reto.id);
+    }
+  }
+
+  if (idsAExpirar.size > 0) {
+    await this.retoRepo.update(Array.from(idsAExpirar), { estado: EstadoReto.EXPIRADO });
+    // Reflejar el nuevo estado en los objetos ya cargados en memoria, para no
+    // tener que volver a consultar la base de datos antes de responder.
+    for (const p of participaciones) {
+      if (p.reto && idsAExpirar.has(p.reto.id)) {
+        p.reto.estado = EstadoReto.EXPIRADO;
+      }
+    }
+  }
+
   for (const p of participaciones) {
     if (p.reto?.oposicion?.id) {
       await this.enriquecerNivelesParticipantes(p.reto, (p.reto.oposicion as any).id);
