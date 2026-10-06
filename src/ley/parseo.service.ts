@@ -11,6 +11,7 @@ import { Disposicion } from '../normativa/disposicion.entity';
 import { TipoCambio } from '../ley/version-ley.entity'; // ajusta la ruta si el enum está en otro archivo
 import { NoticiaService } from '../noticia/noticia.service';
 import { PreguntaTest } from '../test/pregunta-test.entity';
+import { normalizarContenido, normalizarSaltosLocal } from './texto-legal.util';
 
 interface NodoParseado {
   tipo: 'libro' | 'titulo' | 'capitulo' | 'seccion' | 'articulo';
@@ -138,7 +139,8 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
         tipo: 'articulo',
         numeroArticulo: articuloActual.numero,
         tituloArticulo: articuloActual.titulo,
-        contenido: articuloActual.lineas.join(' ').replace(/\s+/g, ' ').trim(),
+        // ⭐ Antes se unía todo en una sola línea y se perdían los apartados.
+        contenido: normalizarSaltosLocal(articuloActual.lineas.join('\n')),
       });
       articuloActual = null;
     };
@@ -334,7 +336,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
           orden: ai + 1,
           numero: aData.numero,
           titulo: aData.titulo || undefined,
-          contenido: aData.contenido,
+          contenido: normalizarContenido(aData.contenido),
           vigente: true,
           pesoExamen: 1,
           tituloRef: { id: titulo.id } as any,
@@ -358,7 +360,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
             orden: ai + 1,
             numero: aData.numero,
             titulo: aData.titulo || undefined,
-            contenido: aData.contenido,
+            contenido: normalizarContenido(aData.contenido),
             vigente: true,
             pesoExamen: 1,
             capitulo: { id: capitulo.id } as any,
@@ -382,7 +384,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
               orden: ai + 1,
               numero: aData.numero,
               titulo: aData.titulo || undefined,
-              contenido: aData.contenido,
+              contenido: normalizarContenido(aData.contenido),
               vigente: true,
               pesoExamen: 1,
               seccion: { id: seccion.id } as any,
@@ -402,7 +404,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
               orden: di + 1,
               categoria: dData.categoria,
               etiqueta: dData.etiqueta || undefined,
-              contenido: dData.contenido,
+              contenido: normalizarContenido(dData.contenido),
               versionLey: { id: versionId } as any,
             }));
             totalDisposiciones++;
@@ -578,4 +580,4 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
 
   return nuevaVersion;
 }
-}
+}

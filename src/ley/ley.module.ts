@@ -18,12 +18,14 @@ import { Libro } from '../normativa/libro.entity';
 import { Disposicion } from 'src/normativa/disposicion.entity';
 import { NoticiaModule } from '../noticia/noticia.module';
 import { PreguntaTest } from '../test/pregunta-test.entity';
+import { SubrayadoArticulo } from '../normativa/subrayado-articulo.entity';
+import { SincronizacionTextoService } from './sincronizacion-texto.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Ley, VersionLey, DiffVersion, OposicionLey,
-      Titulo, Capitulo, Articulo, Seccion, Libro, Disposicion, PreguntaTest
+      Titulo, Capitulo, Articulo, Seccion, Libro, Disposicion, PreguntaTest, SubrayadoArticulo,
     ]),
     NoticiaModule,
     MulterModule.register({
@@ -43,7 +45,7 @@ import { PreguntaTest } from '../test/pregunta-test.entity';
     }),
   ],
   controllers: [LeyController],
-  providers: [LeyService, ParseoService],
+  providers: [LeyService, ParseoService, SincronizacionTextoService],
   exports: [LeyService, ParseoService],
 })
-export class LeyModule {}
+export class LeyModule {}

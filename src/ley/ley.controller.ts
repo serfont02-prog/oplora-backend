@@ -8,6 +8,7 @@ import { extname } from 'path';
 import { LeyService } from './ley.service';
 import { TipoCambio } from './version-ley.entity';
 import { ParseoService } from './parseo.service';
+import { SincronizacionTextoService } from './sincronizacion-texto.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -17,6 +18,7 @@ export class LeyController {
   constructor(
   private readonly service: LeyService,
   private readonly parseoService: ParseoService,
+  private readonly sincronizacionTexto: SincronizacionTextoService,
 ) {}
   
 
@@ -245,5 +247,18 @@ copiarVersion(
   @Body() datos: { version: string; referenciaBoe?: string; tipoNorma?: string; fechaVigencia?: string; notas?: string },
 ) {
   return this.parseoService.copiarVersion(versionId, datos);
+}
+
+// ⭐ Corrige el texto de los artículos (saltos de línea del PDF) sin borrar
+// artículos: conserva preguntas, flashcards, notas y subrayados.
+// Por defecto es un simulacro; con { aplicar: true } guarda los cambios.
+@Post('versiones/:versionId/sincronizar-texto')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
+sincronizarTexto(
+  @Param('versionId') versionId: string,
+  @Body() body: { modo?: 'boe' | 'local'; referenciaBoe?: string; aplicar?: boolean },
+) {
+  return this.sincronizacionTexto.sincronizar(versionId, body ?? {});
 }
 }
