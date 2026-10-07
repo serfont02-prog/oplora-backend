@@ -74,6 +74,16 @@ export class TemaService {
       'normativas.articulo.capitulo.tituloRef',
       'normativas.articulo.capitulo.tituloRef.versionLey',
       'normativas.articulo.capitulo.tituloRef.versionLey.ley',
+      // ⭐ Artículos que cuelgan directamente de un Título (sin capítulo) o de
+      // una Sección: sin estas rutas el admin no sabía de qué ley eran ("—").
+      'normativas.articulo.tituloRef',
+      'normativas.articulo.tituloRef.versionLey',
+      'normativas.articulo.tituloRef.versionLey.ley',
+      'normativas.articulo.seccion',
+      'normativas.articulo.seccion.capitulo',
+      'normativas.articulo.seccion.capitulo.tituloRef',
+      'normativas.articulo.seccion.capitulo.tituloRef.versionLey',
+      'normativas.articulo.seccion.capitulo.tituloRef.versionLey.ley',
     ],
   });
   }
@@ -161,6 +171,11 @@ async remove(id: string) {
         'articulo.tituloRef',
         'articulo.tituloRef.versionLey',
         'articulo.tituloRef.versionLey.ley',
+        'articulo.seccion',
+        'articulo.seccion.capitulo',
+        'articulo.seccion.capitulo.tituloRef',
+        'articulo.seccion.capitulo.tituloRef.versionLey',
+        'articulo.seccion.capitulo.tituloRef.versionLey.ley',
       ],
     });
   }
