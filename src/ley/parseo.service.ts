@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { VersionLey } from './version-ley.entity';
@@ -286,7 +286,47 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos };
   }
 
+  /** Cuenta lo que cuelga de los artículos de una versión (preguntas, subrayados...). */
+  private async contarDependencias(versionId: string): Promise<Record<string, number>> {
+    const filas = await this.articuloRepo
+      .createQueryBuilder('a')
+      .select('a.id', 'id')
+      .leftJoin('a.capitulo', 'c')
+      .leftJoin('c.tituloRef', 't')
+      .leftJoin('a.tituloRef', 'tr')
+      .leftJoin('a.seccion', 's')
+      .leftJoin('s.capitulo', 'sc')
+      .leftJoin('sc.tituloRef', 'st')
+      .where('(t.versionLey = :vId OR tr.versionLey = :vId OR st.versionLey = :vId)', { vId: versionId })
+      .getRawMany();
+    const ids = filas.map((f) => f.id);
+    if (!ids.length) return {};
+    const contar = async (sql: string) => Number((await this.articuloRepo.query(sql, [ids]))[0]?.n ?? 0);
+    return {
+      'preguntas de test': await contar(`SELECT COUNT(*) AS n FROM preguntas_test_articulos_articulos WHERE "articulosId" = ANY($1)`),
+      flashcards: await contar(`SELECT COUNT(*) AS n FROM flashcards WHERE "articuloId" = ANY($1)`),
+      subrayados: await contar(`SELECT COUNT(*) AS n FROM subrayados_articulo WHERE "articuloId" = ANY($1)`),
+      notas: await contar(`SELECT COUNT(*) AS n FROM notas_articulo WHERE "articuloId" = ANY($1)`),
+      'preguntas cortas': await contar(`SELECT COUNT(*) AS n FROM preguntas_cortas WHERE "articuloId" = ANY($1)`),
+      'vínculos con temas': await contar(`SELECT COUNT(*) AS n FROM temas_normativa WHERE "articuloId" = ANY($1)`),
+    };
+  }
+
     async importarEstructuraJson(versionId: string, estructura: { libros?: any[]; titulos?: any[]; disposiciones?: any[] }): Promise<any> {
+    // ⭐ Importar JSON BORRA y recrea los artículos. Si ya hay cosas colgando de
+    // ellos, o la BD rechaza el borrado a mitad (subrayados, notas...) dejando la
+    // ley a medias, o se pierden vínculos en silencio (preguntas, flashcards).
+    // En ese caso se bloquea y se indica usar "Actualizar desde JSON".
+    const dependencias = await this.contarDependencias(versionId);
+    const total = Object.values(dependencias).reduce((a, b) => a + b, 0);
+    if (total > 0) {
+      const detalle = Object.entries(dependencias).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(', ');
+      throw new BadRequestException(
+        `Esta versión ya tiene contenido vinculado a sus artículos (${detalle}). ` +
+        `Reimportar lo borraría o lo dejaría huérfano: usa "Actualizar desde JSON", que corrige el texto sin borrar nada.`,
+      );
+    }
+
     await this.limpiarEstructuraAnterior(versionId);
 
     let totalLibros = 0, totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0, totalDisposiciones = 0;
@@ -580,4 +620,4 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
 
   return nuevaVersion;
 }
-}
+}

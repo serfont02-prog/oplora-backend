@@ -8,7 +8,6 @@
  * una línea en blanco ("\n\n"). Nada de saltos de línea "duros" heredados del
  * PDF a mitad de frase.
  */
-import * as cheerio from 'cheerio';
 
 export const SEPARADOR_PARRAFOS = '\n\n';
 
@@ -31,67 +30,7 @@ export function unirParrafos(parrafos: string[]): string {
     .join(SEPARADOR_PARRAFOS);
 }
 
-// ─── MODO BOE (exacto) ─────────────────────────────────────────────────────
-
-export interface ArticuloBoe {
-  numero: string;   // "1", "24 bis"
-  rubrica?: string; // "Objeto."
-  contenido: string; // párrafos separados por \n\n
-}
-
-/**
- * Parsea el XML de la API de legislación consolidada del BOE
- * (/datosabiertos/api/legislacion-consolidada/id/{BOE-A-...}/texto) y devuelve
- * los artículos con su texto vigente (última <version> de cada bloque),
- * respetando los párrafos tal y como los publica el BOE (<p>).
- */
-export function parsearXmlConsolidadoBoe(xml: string): { articulos: ArticuloBoe[]; otrosPreceptos: string[] } {
-  const $ = cheerio.load(xml, { xml: true });
-  const articulos: ArticuloBoe[] = [];
-  const otrosPreceptos: string[] = [];
-
-  $('bloque').each((_, el) => {
-    const bloque = $(el);
-    const tipo = (bloque.attr('tipo') ?? '').toLowerCase();
-    if (tipo && tipo !== 'precepto') return;
-
-    const tituloBloque = (bloque.attr('titulo') ?? '').trim();
-    const versiones = bloque.children('version');
-    const ultima = versiones.length ? versiones.last() : bloque;
-
-    let cabecera = '';
-    const parrafos: string[] = [];
-
-    ultima.find('p').each((__, p) => {
-      const nodo = $(p);
-      const clase = (nodo.attr('class') ?? '').toLowerCase();
-      const texto = nodo.text().replace(/\s+/g, ' ').trim();
-      if (!texto) return;
-      if (clase === 'articulo') { cabecera = texto; return; }
-      // Notas del BOE ("Se modifica por...", "Téngase en cuenta...") no son texto de la ley
-      if (clase.startsWith('nota')) return;
-      parrafos.push(texto);
-    });
-
-    const ref = tituloBloque || cabecera;
-    const m = ref.match(/^Art[íi]culo\s+(\d+(?:\s*(?:bis|ter|quater|quinquies|sexies|septies|octies|nonies|decies))?)/i);
-    if (!m) {
-      if (ref) otrosPreceptos.push(ref);
-      return;
-    }
-
-    const numero = m[1].replace(/\s+/g, ' ').trim();
-    let rubrica: string | undefined;
-    const mc = cabecera.match(/^Art[íi]culo\s+[^.]+\.\s*(.*)$/i);
-    if (mc && mc[1]) rubrica = mc[1].trim();
-
-    articulos.push({ numero, rubrica, contenido: unirParrafos(parrafos) });
-  });
-
-  return { articulos, otrosPreceptos };
-}
-
-// ─── MODO LOCAL (sin red, heurístico) ──────────────────────────────────────
+// ─── REPARAR SALTOS (heurístico) ──────────────────────────────────────
 
 // Una línea que empieza así abre un párrafo nuevo (apartados y letras)
 const INICIO_PARRAFO = [
@@ -108,8 +47,7 @@ const INICIO_PARRAFO = [
 /**
  * Reconstruye los párrafos de un texto con saltos de línea "duros" (los del
  * PDF). Une todas las líneas salvo cuando la siguiente empieza por un marcador
- * de apartado (1., a), 1.ª, –...). Pensado como respaldo cuando no se puede
- * descargar el texto del BOE.
+ * de apartado (1., a), 1.ª, –...). Se usa al importar texto pegado de un PDF.
  */
 export function normalizarSaltosLocal(texto: string): string {
   if (!texto) return '';

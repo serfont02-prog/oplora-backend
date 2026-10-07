@@ -9,6 +9,7 @@ import { LeyService } from './ley.service';
 import { TipoCambio } from './version-ley.entity';
 import { ParseoService } from './parseo.service';
 import { SincronizacionTextoService } from './sincronizacion-texto.service';
+import type { EstructuraJson } from './sincronizacion-texto.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -249,16 +250,16 @@ copiarVersion(
   return this.parseoService.copiarVersion(versionId, datos);
 }
 
-// ⭐ Corrige el texto de los artículos (saltos de línea del PDF) sin borrar
-// artículos: conserva preguntas, flashcards, notas y subrayados.
-// Por defecto es un simulacro; con { aplicar: true } guarda los cambios.
-@Post('versiones/:versionId/sincronizar-texto')
+// ⭐ "Actualizar desde JSON": aplica un JSON corregido a una versión ya subida
+// sin borrar artículos (conserva preguntas, flashcards, notas, subrayados y
+// vínculos con temas). Por defecto simula; con { aplicar: true } guarda.
+@Post('versiones/:versionId/actualizar-json')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin')
-sincronizarTexto(
+actualizarDesdeJson(
   @Param('versionId') versionId: string,
-  @Body() body: { modo?: 'boe' | 'local'; referenciaBoe?: string; aplicar?: boolean },
+  @Body() body: { estructura: EstructuraJson; aplicar?: boolean },
 ) {
-  return this.sincronizacionTexto.sincronizar(versionId, body ?? {});
+  return this.sincronizacionTexto.actualizarDesdeJson(versionId, body?.estructura, body?.aplicar === true);
 }
 }
