@@ -145,6 +145,34 @@ const REGEX_APERTURA_MARCADOR = /\[(EJ|ID|ES|TR|RE|PR)\b\s*(.*)$/i;
 // UTILIDADES
 // =====================================================
 
+// ⭐ Busca el "]" que cierra un marcador [EJ|ID|ES|TR|RE|PR ...] teniendo en cuenta los
+// corchetes anidados (citas como "[LECrim Artículo 105]" dentro de la caja). Antes se
+// cortaba en el PRIMER "]", así que una cita dentro de la caja la cerraba antes de tiempo
+// y el resto del contenido salía fuera como párrafo suelto con un "]" literal al final.
+// Devuelve el índice del cierre (o -1) y la profundidad que queda abierta al final del texto.
+function buscarCierreMarcador(texto: string, profundidad: number): { idx: number; profundidad: number } {
+  for (let k = 0; k < texto.length; k++) {
+    const ch = texto[k];
+    if (ch === '[') profundidad++;
+    else if (ch === ']') {
+      profundidad--;
+      if (profundidad === 0) return { idx: k, profundidad: 0 };
+    }
+  }
+  return { idx: -1, profundidad };
+}
+
+// ⭐ Dentro de las cajas (sobre todo [PR ...]) las opciones "a) ... b) ... c) ..." y la
+// solución "✅ ..." venían en el mismo párrafo, porque el corte por frases exige una
+// MAYÚSCULA tras el punto y "b)" empieza en minúscula. Partimos antes de cada opción
+// (si la precede ".", "?", ":" o "!") y antes de cada ✅ / ❌.
+function splitOpcionesCaja(texto: string): string[] {
+  return texto
+    .split(/(?<=[.?!:])\s+(?=[a-eA-E]\)\s)|\s+(?=[✅❌])/u)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
 function normalizarEspacios(texto: string): string {
   return texto.replace(/\s+/g, ' ').trim();
 }
@@ -575,9 +603,12 @@ export function clasificarDocumento(
         // (con su salto de línea) en vez de perderse o quedar pegado a otra cosa.
         let restanteTrasCierre: string | null = null;
 
-        let cerrado = primerSegmento.includes(']');
+        let profundidadMarcador = 1;
+        const cierrePrimero = buscarCierreMarcador(primerSegmento, profundidadMarcador);
+        profundidadMarcador = cierrePrimero.profundidad;
+        let cerrado = cierrePrimero.idx >= 0;
         if (cerrado) {
-          const idxCierre = primerSegmento.indexOf(']');
+          const idxCierre = cierrePrimero.idx;
           const trozo = primerSegmento.slice(0, idxCierre).trim();
           if (trozo) lineasContenido.push(trozo);
           const restante = primerSegmento.slice(idxCierre + 1).trim();
@@ -603,8 +634,10 @@ export function clasificarDocumento(
           j++;
           const siguienteTexto = normalizarEspacios(lineas[j].texto || '');
           if (siguienteTexto) {
-            if (siguienteTexto.includes(']')) {
-              const idxCierre = siguienteTexto.indexOf(']');
+            const cierreSiguiente = buscarCierreMarcador(siguienteTexto, profundidadMarcador);
+            profundidadMarcador = cierreSiguiente.profundidad;
+            if (cierreSiguiente.idx >= 0) {
+              const idxCierre = cierreSiguiente.idx;
               const trozo = siguienteTexto.slice(0, idxCierre).trim();
               if (trozo) lineasContenido.push(trozo);
               const restante = siguienteTexto.slice(idxCierre + 1).trim();
@@ -701,17 +734,28 @@ export function clasificarDocumento(
         const cerrarBufferTextoLibre = () => {
           if (bufferTextoLibre.length === 0) return;
           const textoUnido = normalizarEspacios(bufferTextoLibre.join(' '));
-          lineasFusionadas.push(...splitPorFrases(textoUnido));
+          for (const frase of splitPorFrases(textoUnido)) lineasFusionadas.push(...splitOpcionesCaja(frase));
           bufferTextoLibre = [];
         };
 
         const cerrarBufferItemLista = () => {
           if (!bufferItemLista) return;
-          lineasFusionadas.push(normalizarEspacios(bufferItemLista.join(' ')));
+          lineasFusionadas.push(...splitOpcionesCaja(normalizarEspacios(bufferItemLista.join(' '))));
           bufferItemLista = null;
         };
 
+        let lineaAnteriorCaja = '';
         for (const l of lineasSinViñetasSueltas) {
+          const anterior = lineaAnteriorCaja;
+          lineaAnteriorCaja = l;
+          // ⭐ "...del art." + "236. La opción b)...": el PDF partió la línea tras la abreviatura
+          // y la siguiente empieza por un número con punto, que NO es un ítem numerado sino la
+          // continuación de la cita. Antes se tomaba como lista y el "236." desaparecía.
+          if (esListaNumerada(l) && terminaEnAbreviatura(anterior)) {
+            if (bufferItemLista) bufferItemLista.push(l);
+            else bufferTextoLibre.push(l);
+            continue;
+          }
           if (esLineaListaDentroCaja(l)) {
             cerrarBufferTextoLibre();
             cerrarBufferItemLista();
@@ -763,8 +807,15 @@ export function clasificarDocumento(
         continue;
       }
 
-            // TITULO ORDINAL (1.º, 2.º, 3.º...)
-      if (esTituloOrdinal(linea)) {
+      // ⭐ Si la línea anterior acaba en una abreviatura ("...del art."), esta línea es la
+      // continuación de la cita partida por el ajuste de línea ("24.1 (Iberoamérica...)",
+      // "236. La opción..."), no un título "N.N." ni un ítem numerado.
+      const textoAnterior = i > 0 ? normalizarEspacios(lineas[i - 1].texto || '') : '';
+      const anteriorAcabaEnAbreviatura =
+        i > 0 && (terminaEnAbreviatura(textoAnterior) || /\b(art[íi]culos?|apartados?|arts?\.)$/i.test(textoAnterior));
+
+      // TITULO ORDINAL (1.º, 2.º, 3.º...)
+      if (esTituloOrdinal(linea) && !anteriorAcabaEnAbreviatura) {
         flushParrafo();
         flushLista();
         flushListaInvisible();
@@ -775,7 +826,7 @@ export function clasificarDocumento(
       }
 
       // TITULO NIVEL 1
-      if (esTituloNivel1(linea, fontSizeBase)) {
+      if (esTituloNivel1(linea, fontSizeBase) && !anteriorAcabaEnAbreviatura) {
         flushParrafo();
         flushLista();
         flushListaInvisible();
@@ -786,7 +837,7 @@ export function clasificarDocumento(
       }
 
       // TITULO NIVEL 2
-      if (esTituloNivel2(linea, fontSizeBase)) {
+      if (esTituloNivel2(linea, fontSizeBase) && !anteriorAcabaEnAbreviatura) {
         flushParrafo();
         flushLista();
         flushListaInvisible();
@@ -835,7 +886,9 @@ export function clasificarDocumento(
       }
 
       // LISTAS NUMERADAS
-      if (esListaNumerada(texto)) {
+      // (salvo que la línea anterior acabe en una abreviatura tipo "art.": entonces "236. ..."
+      // es la continuación de la cita partida por el ajuste de línea, no un ítem)
+      if (esListaNumerada(texto) && !anteriorAcabaEnAbreviatura) {
         if (bufferListaItems.length > 0 && !bufferListaOrdenada) flushLista();
         flushListaInvisible();
         flushParrafo();
@@ -848,7 +901,7 @@ export function clasificarDocumento(
       }
 
       // CONTINUACIÓN DE LISTA
-      if (bufferListaItems.length > 0 && ultimoTipo === 'lista' && esContinuacionLista(linea, siguiente, fontSizeBase, ultimaXBullet)) {
+      if (bufferListaItems.length > 0 && ultimoTipo === 'lista' && (esContinuacionLista(linea, siguiente, fontSizeBase, ultimaXBullet) || (anteriorAcabaEnAbreviatura && !esBullet(texto)))) {
         const ultimoIndice = bufferListaItems.length - 1;
         bufferListaItems[ultimoIndice] = normalizarEspacios(bufferListaItems[ultimoIndice] + ' ' + texto);
         if (DEBUG) console.debug('CONTINUACION LISTA', { texto });
@@ -881,7 +934,11 @@ export function clasificarDocumento(
         const parensAbiertos = tituloEnCurso ? (tituloEnCurso.texto.match(/\(/g) || []).length : 0;
         const parensCerrados = tituloEnCurso ? (tituloEnCurso.texto.match(/\)/g) || []).length : 0;
         const pareceContinuacionTitulo =
-          parensAbiertos > parensCerrados || esTodoMayusculas(texto);
+          parensAbiertos > parensCerrados ||
+          esTodoMayusculas(texto) ||
+          // una línea que empieza en minúscula justo después de un título es su ajuste de
+          // línea (p.ej. "3.º Se trate de ... de" + "suministro eléctrico, ..."), nunca contenido nuevo
+          /^[a-záéíóúüñ]/.test(texto);
         if (
           tituloEnCurso &&
           pareceContinuacionTitulo &&
@@ -999,8 +1056,17 @@ export function clasificarDocumento(
         typeof linea.x === 'number' &&
         typeof siguiente.x === 'number' &&
         siguiente.x > linea.x + UMBRAL_INDENT_LISTA_INVISIBLE;
+      // ⭐ Un ":" al final de línea seguido de una línea que empieza como frase NUEVA (mayúscula,
+      // número, "¿", "[" de cita o comillas) también cierra el párrafo: es una enumeración en
+      // párrafos sueltos (p.ej. "...es el MEDIO empleado:" + "Mera sustracción → hurto."). Antes
+      // la primera línea se quedaba pegada a la introducción y las demás salían aparte. Una
+      // frase corrida tras ":" ("...entre ellas: nacionalidad, ...") sigue en minúscula y no corta.
+      const siguienteEmpiezaFraseNueva =
+        !!siguiente && /^[A-ZÁÉÍÓÚÜÑ0-9¿¡\[«"“]/.test((siguiente.texto || '').trim());
       const termina =
-        terminaPunto || (terminaDosPuntos && (siguienteEsInicioDeLista || siguienteParaceInicioListaInvisible));
+        terminaPunto ||
+        (terminaDosPuntos &&
+          (siguienteEsInicioDeLista || siguienteParaceInicioListaInvisible || siguienteEmpiezaFraseNueva));
       if (termina) {
         flushParrafo();
         if (terminaDosPuntos && siguienteParaceInicioListaInvisible && typeof linea.x === 'number') {
