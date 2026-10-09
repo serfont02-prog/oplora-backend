@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, ObjectLiteral, Repository } from 'typeorm';
 import { VersionLey } from './version-ley.entity';
 import { Titulo } from '../normativa/titulo.entity';
 import { Capitulo } from '../normativa/capitulo.entity';
@@ -51,7 +51,22 @@ export class ParseoService {
     @InjectRepository(PreguntaTest)
     private readonly preguntaRepo: Repository<PreguntaTest>,
     private readonly noticiaService: NoticiaService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
+
+  /** Repositorios de la jerarquía, ligados a una transacción si se pasa un EntityManager. */
+  private repos(m?: EntityManager) {
+    const w = <T extends ObjectLiteral>(repo: Repository<T>) => (m ? m.withRepository(repo) : repo);
+    return {
+      titulo: w(this.tituloRepo),
+      capitulo: w(this.capituloRepo),
+      articulo: w(this.articuloRepo),
+      seccion: w(this.seccionRepo),
+      libro: w(this.libroRepo),
+      disposicion: w(this.disposicionRepo),
+    };
+  }
 
   /**
    * ⭐ Copia el vínculo pregunta↔artículo (tabla intermedia M2M) del artículo
@@ -98,29 +113,29 @@ export class ParseoService {
     return { ok: true, resumen };
   }
 
-private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
-  const titulos = await this.tituloRepo.find({ where: { versionLey: { id: versionId } as any } });
+private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Promise<void> {
+  const titulos = await r.titulo.find({ where: { versionLey: { id: versionId } as any } });
   for (const t of titulos) {
     // ⭐ borrar artículos que cuelgan directamente del título (sin capítulo)
-    await this.articuloRepo.delete({ tituloRef: { id: t.id } as any });
+    await r.articulo.delete({ tituloRef: { id: t.id } as any });
 
-    const capitulos = await this.capituloRepo.find({ where: { tituloRef: { id: t.id } as any } });
+    const capitulos = await r.capitulo.find({ where: { tituloRef: { id: t.id } as any } });
     for (const c of capitulos) {
-      await this.articuloRepo.delete({ capitulo: { id: c.id } as any });
+      await r.articulo.delete({ capitulo: { id: c.id } as any });
 
-      const secciones = await this.seccionRepo.find({ where: { capitulo: { id: c.id } as any } });
+      const secciones = await r.seccion.find({ where: { capitulo: { id: c.id } as any } });
       for (const s of secciones) {
-        await this.articuloRepo.delete({ seccion: { id: s.id } as any });
+        await r.articulo.delete({ seccion: { id: s.id } as any });
       }
 
-      await this.seccionRepo.delete({ capitulo: { id: c.id } as any });
+      await r.seccion.delete({ capitulo: { id: c.id } as any });
     }
-    await this.capituloRepo.delete({ tituloRef: { id: t.id } as any });
+    await r.capitulo.delete({ tituloRef: { id: t.id } as any });
   }
-  await this.tituloRepo.delete({ versionLey: { id: versionId } as any });
+  await r.titulo.delete({ versionLey: { id: versionId } as any });
   // ⭐ borrar también los libros de esta versión (antes quedaban huérfanos al re-parsear)
-  await this.libroRepo.delete({ versionLey: { id: versionId } as any });
-  await this.disposicionRepo.delete({ versionLey: { id: versionId } as any });
+  await r.libro.delete({ versionLey: { id: versionId } as any });
+  await r.disposicion.delete({ versionLey: { id: versionId } as any });
 }
 
   /**
@@ -286,8 +301,8 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos };
   }
 
-  /** Cuenta lo que cuelga de los artículos de una versión (preguntas, subrayados...). */
-  private async contarDependencias(versionId: string): Promise<Record<string, number>> {
+  /** IDs de todos los artículos de una versión (bajo título, capítulo o sección). */
+  private async idsArticulosDeVersion(versionId: string): Promise<string[]> {
     const filas = await this.articuloRepo
       .createQueryBuilder('a')
       .select('a.id', 'id')
@@ -299,10 +314,18 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
       .leftJoin('sc.tituloRef', 'st')
       .where('(t.versionLey = :vId OR tr.versionLey = :vId OR st.versionLey = :vId)', { vId: versionId })
       .getRawMany();
-    const ids = filas.map((f) => f.id);
-    if (!ids.length) return {};
+    return filas.map((f) => f.id);
+  }
+
+  /**
+   * Cuenta lo que cuelga de los artículos de una versión. Es lo que se pierde
+   * si se reimporta con "Importar JSON" (que borra y recrea los artículos).
+   */
+  async contarDependencias(versionId: string): Promise<{ total: number; detalle: Record<string, number> }> {
+    const ids = await this.idsArticulosDeVersion(versionId);
+    if (!ids.length) return { total: 0, detalle: {} };
     const contar = async (sql: string) => Number((await this.articuloRepo.query(sql, [ids]))[0]?.n ?? 0);
-    return {
+    const detalle: Record<string, number> = {
       'preguntas de test': await contar(`SELECT COUNT(*) AS n FROM preguntas_test_articulos_articulos WHERE "articulosId" = ANY($1)`),
       flashcards: await contar(`SELECT COUNT(*) AS n FROM flashcards WHERE "articuloId" = ANY($1)`),
       subrayados: await contar(`SELECT COUNT(*) AS n FROM subrayados_articulo WHERE "articuloId" = ANY($1)`),
@@ -310,24 +333,42 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
       'preguntas cortas': await contar(`SELECT COUNT(*) AS n FROM preguntas_cortas WHERE "articuloId" = ANY($1)`),
       'vínculos con temas': await contar(`SELECT COUNT(*) AS n FROM temas_normativa WHERE "articuloId" = ANY($1)`),
     };
+    return { total: Object.values(detalle).reduce((x, y) => x + y, 0), detalle };
   }
 
-    async importarEstructuraJson(versionId: string, estructura: { libros?: any[]; titulos?: any[]; disposiciones?: any[] }): Promise<any> {
-    // ⭐ Importar JSON BORRA y recrea los artículos. Si ya hay cosas colgando de
-    // ellos, o la BD rechaza el borrado a mitad (subrayados, notas...) dejando la
-    // ley a medias, o se pierden vínculos en silencio (preguntas, flashcards).
-    // En ese caso se bloquea y se indica usar "Actualizar desde JSON".
-    const dependencias = await this.contarDependencias(versionId);
-    const total = Object.values(dependencias).reduce((a, b) => a + b, 0);
-    if (total > 0) {
-      const detalle = Object.entries(dependencias).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(', ');
+    async importarEstructuraJson(
+    versionId: string,
+    estructura: { libros?: any[]; titulos?: any[]; disposiciones?: any[] },
+    forzar = false,
+  ): Promise<any> {
+    // ⭐ Importar JSON BORRA y recrea los artículos. Si ya hay cosas vinculadas,
+    // solo se continúa si el admin lo confirma (forzar=true) tras ver el aviso.
+    const { total, detalle } = await this.contarDependencias(versionId);
+    if (total > 0 && !forzar) {
+      const texto = Object.entries(detalle).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(', ');
       throw new BadRequestException(
-        `Esta versión ya tiene contenido vinculado a sus artículos (${detalle}). ` +
-        `Reimportar lo borraría o lo dejaría huérfano: usa "Actualizar desde JSON", que corrige el texto sin borrar nada.`,
+        `Esta versión tiene contenido vinculado a sus artículos (${texto}). Confirma la importación para continuar.`,
       );
     }
 
-    await this.limpiarEstructuraAnterior(versionId);
+    // Todo en una transacción: si algo falla, la ley se queda como estaba.
+    return this.dataSource.transaction(async (m) => {
+    const r = this.repos(m);
+
+    if (total > 0) {
+      // Primero se quita lo que impediría borrar los artículos. Las preguntas
+      // de test, flashcards y preguntas cortas NO se borran: solo pierden el
+      // vínculo con el artículo. Subrayados, notas y vínculos con temas sí.
+      const ids = await this.idsArticulosDeVersion(versionId);
+      await m.query(`DELETE FROM subrayados_articulo WHERE "articuloId" = ANY($1)`, [ids]);
+      await m.query(`DELETE FROM notas_articulo WHERE "articuloId" = ANY($1)`, [ids]);
+      await m.query(`DELETE FROM temas_normativa WHERE "articuloId" = ANY($1)`, [ids]);
+      await m.query(`DELETE FROM preguntas_test_articulos_articulos WHERE "articulosId" = ANY($1)`, [ids]);
+      await m.query(`UPDATE preguntas_cortas SET "articuloId" = NULL WHERE "articuloId" = ANY($1)`, [ids]);
+      await m.query(`UPDATE flashcards SET "articuloId" = NULL WHERE "articuloId" = ANY($1)`, [ids]);
+    }
+
+    await this.limpiarEstructuraAnterior(versionId, r);
 
     let totalLibros = 0, totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0, totalDisposiciones = 0;
 
@@ -342,7 +383,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
       // ⭐ El "as any" en el objeto de create() hace que TS no pueda inferir si save()
       // devuelve una entidad o un array (ambigüedad de sobrecarga), así que forzamos
       // el tipo del resultado explícitamente para poder acceder a `.id`.
-      const libro = (await this.libroRepo.save(this.libroRepo.create({
+      const libro = (await r.libro.save(r.libro.create({
         orden: li + 1,
         numero: lData.numero,
         nombre: lData.nombre,
@@ -360,7 +401,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
     for (const grupo of gruposDeTitulos) {
     for (let ti = 0; ti < grupo.titulos.length; ti++) {
       const tData = grupo.titulos[ti];
-      const titulo = await this.tituloRepo.save(this.tituloRepo.create({
+      const titulo = await r.titulo.save(r.titulo.create({
         orden: ++ordenTituloGlobal,
         numero: tData.numero,
         nombre: tData.nombre,
@@ -372,7 +413,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
       // Artículos directos del título (sin capítulo)
       for (let ai = 0; ai < (tData.articulos ?? []).length; ai++) {
         const aData = tData.articulos[ai];
-        await this.articuloRepo.save(this.articuloRepo.create({
+        await r.articulo.save(r.articulo.create({
           orden: ai + 1,
           numero: aData.numero,
           titulo: aData.titulo || undefined,
@@ -386,7 +427,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
 
       for (let ci = 0; ci < (tData.capitulos ?? []).length; ci++) {
         const cData = tData.capitulos[ci];
-        const capitulo = await this.capituloRepo.save(this.capituloRepo.create({
+        const capitulo = await r.capitulo.save(r.capitulo.create({
           orden: ci + 1,
           numero: cData.numero,
           nombre: cData.nombre,
@@ -396,7 +437,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
 
         for (let ai = 0; ai < (cData.articulos ?? []).length; ai++) {
           const aData = cData.articulos[ai];
-          await this.articuloRepo.save(this.articuloRepo.create({
+          await r.articulo.save(r.articulo.create({
             orden: ai + 1,
             numero: aData.numero,
             titulo: aData.titulo || undefined,
@@ -410,7 +451,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
 
         for (let si = 0; si < (cData.secciones ?? []).length; si++) {
           const sData = cData.secciones[si];
-          const seccion = await this.seccionRepo.save(this.seccionRepo.create({
+          const seccion = await r.seccion.save(r.seccion.create({
             orden: si + 1,
             numero: sData.numero,
             nombre: sData.nombre,
@@ -420,7 +461,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
 
           for (let ai = 0; ai < (sData.articulos ?? []).length; ai++) {
             const aData = sData.articulos[ai];
-            await this.articuloRepo.save(this.articuloRepo.create({
+            await r.articulo.save(r.articulo.create({
               orden: ai + 1,
               numero: aData.numero,
               titulo: aData.titulo || undefined,
@@ -440,7 +481,7 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
 
     for (let di = 0; di < (estructura.disposiciones ?? []).length; di++) {
             const dData = estructura.disposiciones?.[di];
-            await this.disposicionRepo.save(this.disposicionRepo.create({
+            await r.disposicion.save(r.disposicion.create({
               orden: di + 1,
               categoria: dData.categoria,
               etiqueta: dData.etiqueta || undefined,
@@ -449,7 +490,8 @@ private async limpiarEstructuraAnterior(versionId: string): Promise<void> {
             }));
             totalDisposiciones++;
           }
-    return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos, totalDisposiciones };
+    return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos, totalDisposiciones, vinculosPerdidos: total };
+    });
   }
 
   async copiarVersion(versionOrigenId: string, datosNuevaVersion: {

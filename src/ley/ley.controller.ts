@@ -236,8 +236,18 @@ async subirLeyNueva(
 importarJson(
   @Param('versionId') versionId: string,
   @Body('estructura') estructura: { libros?: any[]; titulos?: any[]; disposiciones?: any[] },
+  @Body('forzar') forzar?: boolean,
 ) {
-  return this.parseoService.importarEstructuraJson(versionId, estructura);
+  return this.parseoService.importarEstructuraJson(versionId, estructura, forzar === true);
+}
+
+// ⭐ Lo que está vinculado a los artículos de una versión (lo que se perdería
+// al reimportar con "Importar JSON"). El admin lo consulta antes de importar.
+@Get('versiones/:versionId/dependencias')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('admin')
+dependencias(@Param('versionId') versionId: string) {
+  return this.parseoService.contarDependencias(versionId);
 }
 
 @Post('versiones/:versionId/copiar')
