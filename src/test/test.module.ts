@@ -13,6 +13,7 @@ import { TemaModule } from '../tema/tema.module';
 import { TemaNormativa } from '../tema/tema-normativa.entity';
 import { ConfiguracionModule } from '../config/configuracion.module';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { SesionTest } from './sesion-test.entity';
 
 @Module({
   imports: [
@@ -28,7 +29,8 @@ import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
       TemaNormativa,
       Tema,
       Articulo,
-      UsuarioOposicion
+      UsuarioOposicion,
+      SesionTest,
     ]),
     forwardRef(() => TemaModule), 
   ],

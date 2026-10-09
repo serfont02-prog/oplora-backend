@@ -70,9 +70,10 @@ corregirSimulacroGenerado(
   @Param('oposicionId') oposicionId: string,
   @Body('preguntaIds') preguntaIds: string[],
   @Body('respuestas') respuestas: any[],
+  @Body('sesionId') sesionId: string,
   @Request() req: any,
 ) {
-  return this.service.corregirSimulacroGenerado(req.user.id, oposicionId, preguntaIds, respuestas);
+  return this.service.corregirSimulacroGenerado(req.user.id, oposicionId, preguntaIds, respuestas, sesionId);
 }
 
   @Get('examenes/:id/preguntas')

@@ -29,7 +29,7 @@ export class TestController {
 
   @Post('generar')
   @UseGuards(JwtAuthGuard)
-  generar(
+  async generar(
 
     @Body('oposicionId')
     oposicionId: string,
@@ -64,7 +64,8 @@ export class TestController {
 
   ) {
 
-    return this.testService.generarTest(
+    // ⭐ Cada test servido queda registrado como sesión (ver SesionTest).
+    const preguntas = await this.testService.generarTest(
       oposicionId,
       numPreguntas ?? 5,
       temaId,
@@ -77,6 +78,7 @@ export class TestController {
       req?.user?.id,
       temasIds,
     );
+    return this.testService.registrarSesion(req.user.id, oposicionId, modo ?? null, preguntas);
   }
 
   /* =========================================================
@@ -125,16 +127,18 @@ export class TestController {
 
   @Post('repaso-inteligente')
   @UseGuards(JwtAuthGuard)
-  repasoInteligente(
+  async repasoInteligente(
     @Body('oposicionId') oposicionId: string,
     @Body('numPreguntas') numPreguntas: number,
     @Request() req: any,
   ) {
-    return this.testService.generarRepasoInteligente(
+    const repaso = await this.testService.generarRepasoInteligente(
       req.user.id,
       oposicionId,
       numPreguntas ?? 10,
     );
+    await this.testService.registrarSesion(req.user.id, oposicionId, 'repaso', repaso.preguntas);
+    return { ...repaso, sesionId: repaso.preguntas?.[0]?.sesionId ?? null };
   }
 
   /* =========================================================
@@ -234,8 +238,11 @@ importarPorVersionLey(
      GESTIÓN DEL BANCO DE PREGUNTAS (listar / editar / eliminar)
   ========================================================= */
 
+  // ⭐ Solo admin: devuelve las preguntas CON la respuesta correcta y la explicación.
+  // Antes cualquier usuario (incluso gratuito) podía descargarse el banco entero.
   @Get('banco/:convocatoriaId')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   listarBanco(
     @Param('convocatoriaId') convocatoriaId: string,
     @Query('temaId') temaId?: string,
@@ -253,7 +260,8 @@ importarPorVersionLey(
   }
 
   @Get('banco-ley/:versionLeyId')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   listarBancoLey(
     @Param('versionLeyId') versionLeyId: string,
     @Query('articuloId') articuloId?: string,

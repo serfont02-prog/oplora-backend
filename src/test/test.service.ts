@@ -1,6 +1,7 @@
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Brackets } from 'typeorm';
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { SesionTest } from './sesion-test.entity';
 import { ResultadoTest } from './resultado-test.entity';
 import { Usuario } from '../usuario/usuario.entity';
 import { PreguntaTest } from './pregunta-test.entity';
@@ -49,8 +50,13 @@ function recortarOpcionesArticulo(
   return { opciones: seleccion, correcta: seleccion.indexOf(correctaTexto) };
 }
 
+// ⭐ Topes de seguridad (ver generarTest y listarPreguntasBanco).
+const MAX_PREGUNTAS_TEST = 100;
+const MAX_POR_PAGINA_BANCO = 200;
+
 export interface Pregunta {
   id?: string;
+  sesionId?: string; // ⭐ sesión de test en la que se sirvió (ver SesionTest)
 
   enunciado: string;
 
@@ -92,6 +98,9 @@ export class TestService {
 
   @InjectRepository(UsuarioOposicion)
   private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
+
+  @InjectRepository(SesionTest)
+  private readonly sesionRepo: Repository<SesionTest>,
 
   ) {}
 
@@ -335,6 +344,18 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
     temasIds?: string[],
   ): Promise<Pregunta[]> {
 
+    // ⭐ Normalizar numPreguntas ANTES de comprobar límites: con valores negativos
+    // (p. ej. -1) se pasaban los límites del plan y luego slice(0, -1) devolvía
+    // el banco entero menos una pregunta. Máximo 100 (simulacro oficial).
+    numPreguntas = Math.min(Math.max(Math.trunc(Number(numPreguntas)) || 10, 1), MAX_PREGUNTAS_TEST);
+
+    // ⭐ "primer_reto" (5 preguntas fáciles sin límite) solo vale para usuarios que
+    // aún no lo han hecho; antes se podía repetir sin fin para saltarse el plan.
+    if (modo === 'primer_reto' && usuarioId) {
+      const u = await this.usuarioRepo.findOne({ where: { id: usuarioId }, select: { id: true, estado: true } });
+      if (u?.estado === EstadoUsuario.ACTIVO) modo = undefined;
+    }
+
     // Verificar límites si hay usuarioId
     if (usuarioId && modo !== 'primer_reto') {
       const tipoTest = temaId ? 'tema' : modo ?? 'rapido';
@@ -500,6 +521,73 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
   }
 
   /* =========================================================
+     ⭐ SESIÓN DE TEST
+     Se registra al servir un test al usuario (generar / repaso). Cada
+     pregunta servida lleva `sesionId`, que el frontend devuelve al guardar.
+  ========================================================= */
+  async registrarSesion(
+    usuarioId: string,
+    oposicionId: string | null,
+    modo: string | null,
+    preguntas: any[],
+  ): Promise<any[]> {
+    if (!preguntas?.length) return preguntas;
+    const sesion = await this.sesionRepo.save(
+      this.sesionRepo.create({
+        usuario: { id: usuarioId } as any,
+        oposicionId: oposicionId ?? null,
+        modo: modo ?? null,
+        preguntas: preguntas
+          .filter((p) => p?.id)
+          .map((p) => ({ id: p.id, correcta: p.correcta })),
+      }),
+    );
+    for (const p of preguntas) p.sesionId = sesion.id;
+    return preguntas;
+  }
+
+  /* =========================================================
+     ⭐ Consumir (marcar como usada) una sesión para corregirla.
+     Si el cliente no envía sesionId (p. ej. el simulacro generado),
+     se busca la última sesión sin usar de ese modo que contenga
+     todas las preguntas enviadas.
+  ========================================================= */
+  async consumirSesion(
+    usuarioId: string,
+    modo: string,
+    sesionId?: string | null,
+    preguntaIds?: string[],
+  ): Promise<SesionTest> {
+    let sesion: SesionTest | null = null;
+    if (sesionId) {
+      sesion = await this.sesionRepo.findOne({ where: { id: sesionId, usuario: { id: usuarioId } as any } });
+    } else {
+      const recientes = await this.sesionRepo.find({
+        where: { usuario: { id: usuarioId } as any, modo, usada: false },
+        order: { creadoEn: 'DESC' },
+        take: 5,
+      });
+      const enviadas = new Set((preguntaIds ?? []).filter(Boolean));
+      sesion =
+        recientes.find((s) => enviadas.size > 0 && [...enviadas].every((id) => s.preguntas.some((p) => p.id === id))) ??
+        null;
+    }
+    if (!sesion) throw new BadRequestException('No se encontró este test. Vuelve a generarlo.');
+    if (sesion.usada) throw new BadRequestException('Este test ya se ha corregido');
+    if (Date.now() - new Date(sesion.creadoEn).getTime() > 12 * 60 * 60 * 1000) {
+      throw new BadRequestException('El test ha caducado. Genera uno nuevo.');
+    }
+    const marcado = await this.sesionRepo
+      .createQueryBuilder()
+      .update(SesionTest)
+      .set({ usada: true })
+      .where('id = :id AND usada = false', { id: sesion.id })
+      .execute();
+    if (!marcado.affected) throw new BadRequestException('Este test ya se ha corregido');
+    return sesion;
+  }
+
+  /* =========================================================
      GUARDAR RESULTADO
   ========================================================= */
 
@@ -511,6 +599,7 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
   tipoTest: string;
   tiempoSegundos: number;
   temaId?: string;
+  sesionId?: string;
   detallePreguntas: {
     preguntaId?: string;
     enunciado: string;
@@ -529,28 +618,55 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
      Se recalcula aquí contra la respuesta real guardada en BD,
      usando únicamente preguntaId + indiceSeleccionada del cliente.
   ========================================================= */
-  const preguntaIds = datos.detallePreguntas
-    .map((d) => d.preguntaId)
-    .filter((id): id is string => !!id);
+  /* ⭐ Solo cuentan las preguntas de la sesión servida a ESTE usuario, una vez
+     cada una, comparando con el índice correcto en el orden que vio. Antes se
+     aceptaba cualquier lista de preguntaId (repetidas, sin tope): una sola
+     petición podía dar miles de puntos. */
+  if (!datos.sesionId) {
+    throw new BadRequestException('Falta la sesión del test. Vuelve a empezar el test.');
+  }
+  const sesion = await this.sesionRepo.findOne({
+    where: { id: datos.sesionId, usuario: { id: datos.usuarioId } as any },
+  });
+  if (!sesion) throw new BadRequestException('Sesión de test no válida');
+  if (sesion.usada) throw new BadRequestException('Este test ya se ha guardado');
+  const CADUCIDAD_SESION_MS = 12 * 60 * 60 * 1000;
+  if (Date.now() - new Date(sesion.creadoEn).getTime() > CADUCIDAD_SESION_MS) {
+    throw new BadRequestException('El test ha caducado. Empieza uno nuevo.');
+  }
+  if (sesion.modo === 'primer_reto') datos.tipoTest = 'primer_reto';
+  else if (datos.tipoTest === 'primer_reto') datos.tipoTest = sesion.modo ?? 'rapido';
+  datos.tiempoSegundos = Math.max(0, Math.trunc(Number(datos.tiempoSegundos)) || 0);
 
-  const preguntasReales = preguntaIds.length
-    ? await this.preguntaRepo.find({ where: { id: In(preguntaIds) } })
-    : [];
+  // Primera respuesta enviada para cada pregunta de la sesión (las demás se ignoran)
+  const respuestaPorId = new Map<string, any>();
+  for (const d of Array.isArray(datos.detallePreguntas) ? datos.detallePreguntas : []) {
+    if (d?.preguntaId && !respuestaPorId.has(d.preguntaId)) respuestaPorId.set(d.preguntaId, d);
+  }
+
+  const preguntasReales = await this.preguntaRepo.find({
+    where: { id: In(sesion.preguntas.map((p) => p.id)) },
+  });
   const mapaPreguntas = new Map(preguntasReales.map((p) => [p.id, p]));
 
-  const detalleVerificado = datos.detallePreguntas.map((d) => {
-    if (d.enBlanco || !d.preguntaId) {
-      return { ...d, correcta: false };
-    }
-    const real = mapaPreguntas.get(d.preguntaId);
-    if (!real) {
-      // Pregunta inexistente/eliminada: no puede contar como acierto
-      return { ...d, correcta: false };
-    }
-    return { ...d, correcta: d.indiceSeleccionada === real.correcta };
+  // Una fila por pregunta servida, en el orden de la sesión; sin respuesta = en blanco.
+  const detalleVerificado = sesion.preguntas.map((sp) => {
+    const d: any = respuestaPorId.get(sp.id) ?? { preguntaId: sp.id, enBlanco: true, indiceSeleccionada: null };
+    const real = mapaPreguntas.get(sp.id);
+    const indice = typeof d.indiceSeleccionada === 'number' ? d.indiceSeleccionada : null;
+    const enBlanco = !!d.enBlanco || indice === null;
+    return {
+      ...d,
+      preguntaId: sp.id,
+      enunciado: real?.enunciado ?? d.enunciado ?? '',
+      indiceSeleccionada: enBlanco ? null : indice,
+      indiceCorrecta: sp.correcta,
+      enBlanco,
+      correcta: !enBlanco && !!real && indice === sp.correcta,
+    };
   });
 
-  const totalPreguntasVerificado = detalleVerificado.length || datos.totalPreguntas;
+  const totalPreguntasVerificado = detalleVerificado.length;
   const correctasVerificadas = detalleVerificado.filter(
     (d) => d.correcta && !d.enBlanco,
   ).length;
@@ -566,6 +682,16 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
      a mitad (p. ej. se guarda el resultado pero no se suman los puntos).
   ========================================================= */
   return this.resultadoRepo.manager.transaction(async (manager) => {
+    // ⭐ Marca la sesión como usada de forma atómica: si llegan dos envíos a la vez,
+    // solo uno guarda resultado y puntos.
+    const marcado = await manager
+      .createQueryBuilder()
+      .update(SesionTest)
+      .set({ usada: true })
+      .where('id = :id AND usada = false', { id: sesion.id })
+      .execute();
+    if (!marcado.affected) throw new BadRequestException('Este test ya se ha guardado');
+
     const resultado = manager.create(ResultadoTest, {
       totalPreguntas: totalPreguntasVerificado,
       correctas: correctasVerificadas,
@@ -1099,6 +1225,7 @@ async generarRepasoInteligente(
   oposicionId: string,
   numPreguntas = 10,
 ): Promise<{ preguntas: Pregunta[]; basadoEnHistorial: number }> {
+  numPreguntas = Math.min(Math.max(Math.trunc(Number(numPreguntas)) || 10, 1), MAX_PREGUNTAS_TEST);
 
   // ⭐ A diferencia de generarTest, este método no tenía NINGUNA comprobación de
   // límites de plan. El relleno con preguntas generales solo pasa por
@@ -1227,6 +1354,8 @@ async listarPreguntasBanco(
   porPagina = 30,
   examenAnteriorId?: string,
 ): Promise<{ preguntas: any[]; total: number; pagina: number; totalPaginas: number }> {
+  pagina = Math.max(Math.trunc(Number(pagina)) || 1, 1);
+  porPagina = Math.min(Math.max(Math.trunc(Number(porPagina)) || 30, 1), MAX_POR_PAGINA_BANCO);
 
   let query = this.preguntaRepo
     .createQueryBuilder('pregunta')
@@ -1273,6 +1402,8 @@ async listarPreguntasPorVersionLey(
   pagina = 1,
   porPagina = 30,
 ): Promise<{ preguntas: any[]; total: number; pagina: number; totalPaginas: number }> {
+  pagina = Math.max(Math.trunc(Number(pagina)) || 1, 1);
+  porPagina = Math.min(Math.max(Math.trunc(Number(porPagina)) || 30, 1), MAX_POR_PAGINA_BANCO);
 
   let query = this.preguntaRepo
     .createQueryBuilder('pregunta')

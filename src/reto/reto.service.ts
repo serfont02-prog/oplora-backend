@@ -572,66 +572,6 @@ async completarReto(
   });
 }
 
-async getRankingOposicion(oposicionId: string, nivel?: number): Promise<any[]> {
-  const qb = this.usuarioOposicionRepo
-    .createQueryBuilder('uo')
-    .leftJoinAndSelect('uo.usuario', 'u')
-    .where('uo.oposicion = :oposicionId', { oposicionId })
-    .andWhere('uo.puntos > 0')
-    .orderBy('uo.puntos', 'DESC')
-    .limit(50);
-
-  if (nivel) qb.andWhere('uo.nivel = :nivel', { nivel });
-
-  const filas = await qb.getMany();
-
-  return filas.map((uo) => ({
-    id: uo.usuario.id,
-    nick: uo.usuario.nick,
-    nombre: uo.usuario.nombre,
-    nivel: uo.nivel,
-    puntos: uo.puntos,
-  }));
-}
-
-async getRankingRetos(oposicionId: string): Promise<any[]> {
-  const participaciones = await this.participacionRepo
-    .createQueryBuilder('p')
-    .leftJoinAndSelect('p.usuario', 'u')
-    .leftJoin('p.reto', 'r')
-    .where('r.oposicionId = :oposicionId', { oposicionId })
-    .andWhere('p.completado = true')
-    .andWhere('p.posicion IS NOT NULL')
-    .getMany();
-
-  // Agrupar por usuario
-  const porUsuario: Record<string, {
-    usuario: any;
-    victorias: number;
-    derrotas: number;
-    total: number;
-  }> = {};
-
-  for (const p of participaciones) {
-    const uid = (p.usuario as any).id;
-    if (!porUsuario[uid]) {
-      porUsuario[uid] = {
-        usuario: p.usuario,
-        victorias: 0,
-        derrotas: 0,
-        total: 0,
-      };
-    }
-    porUsuario[uid].total++;
-    if (p.posicion === 1) porUsuario[uid].victorias++;
-    else porUsuario[uid].derrotas++;
-  }
-
-  return Object.values(porUsuario)
-    .sort((a, b) => b.victorias - a.victorias || a.derrotas - b.derrotas)
-    .slice(0, 50);
-}
-
 private async guardarContactoReciente(usuarioId: string, contactoId: string): Promise<void> {
   const existente = await this.contactoRepo.findOne({
     where: {

@@ -29,22 +29,9 @@ validarDestinatario(
   return this.service.validarDestinatarioReto(req.user.id, nickOEmail, oposicionId);
 }
 
-  @Get('ranking/oposicion/:oposicionId')
-getRankingOposicion(
-  @Param('oposicionId') oposicionId: string,
-  @Query('nivel') nivel: string,
-) {
-  return this.service.getRankingOposicion(oposicionId, nivel ? parseInt(nivel) : undefined);
-}
-
 @Get('estadisticas')
 getEstadisticas(@Request() req: any) {
   return this.service.getEstadisticasUsuario(req.user.id);
-}
-
-@Get('ranking/retos/:oposicionId')
-getRankingRetos(@Param('oposicionId') oposicionId: string) {
-  return this.service.getRankingRetos(oposicionId);
 }
 
 @Post('revisar-expirados')

@@ -605,16 +605,29 @@ async corregirSimulacroGenerado(
   oposicionId: string,
   preguntaIds: string[],
   respuestas: { preguntaId: string; opcionElegida: number | null }[],
+  sesionId?: string,
 ) {
+  // ⭐ Se corrige contra la sesión registrada al generar el simulacro: solo cuentan
+  // las preguntas servidas, y con el índice correcto en el orden de opciones que vio
+  // el usuario. Antes se comparaba con el orden original de la pregunta, así que con
+  // 3 opciones barajadas (Policía Nacional) los aciertos salían casi al azar.
+  const sesion = await this.testService.consumirSesion(usuarioId, 'simulacro_generado', sesionId, preguntaIds);
+  const correctaPorId = new Map(sesion.preguntas.map((p) => [p.id, p.correcta]));
+  const listaRespuestas = Array.isArray(respuestas) ? respuestas : [];
+
   const uo = await this.usuarioOposicionRepo.findOne({
     where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
     relations: ['convocatoriaActiva'],
   });
   const convocatoria = await this.convocatoriaRepo.findOne({ where: { id: uo?.convocatoriaActiva?.id } });
 
-  const preguntas = await this.preguntaTestRepo.find({
-    where: { id: In(preguntaIds) } as any,
+  const encontradas = await this.preguntaTestRepo.find({
+    where: { id: In(sesion.preguntas.map((p) => p.id)) } as any,
   });
+  // Mismo orden que se sirvió
+  const preguntas = sesion.preguntas
+    .map((sp) => encontradas.find((p) => p.id === sp.id))
+    .filter((p): p is PreguntaTest => !!p);
 
   const fraccion = parseFraccion(convocatoria?.fraccionPenalizacion);
   const fraccionBlanco = convocatoria?.permiteBlancos === false
@@ -625,22 +638,31 @@ async corregirSimulacroGenerado(
   const detalle: any[] = [];
 
   for (const pregunta of preguntas) {
-    const respuesta = respuestas.find((r) => r.preguntaId === pregunta.id);
+    const respuesta = listaRespuestas.find((r) => r?.preguntaId === pregunta.id);
+    const indiceCorrecta = correctaPorId.get(pregunta.id);
 
-    if (!respuesta || respuesta.opcionElegida === null) {
+    // ⭐ El detalle lleva también `correcta`/`enBlanco` (como los tests normales) para que
+    // el repaso inteligente y el progreso del tema no lo cuenten todo como fallos.
+    if (!respuesta || typeof respuesta.opcionElegida !== 'number') {
       blancos++;
-      detalle.push({ preguntaId: pregunta.id, estado: 'blanco' });
+      detalle.push({ preguntaId: pregunta.id, estado: 'blanco', enBlanco: true, correcta: false, indiceCorrecta });
       continue;
     }
 
-    const esCorrecta = respuesta.opcionElegida === pregunta.correcta;
+    const esCorrecta = respuesta.opcionElegida === indiceCorrecta;
     if (esCorrecta) {
       correctas++;
-      detalle.push({ preguntaId: pregunta.id, estado: 'correcta' });
     } else {
       incorrectas++;
-      detalle.push({ preguntaId: pregunta.id, estado: 'incorrecta' });
     }
+    detalle.push({
+      preguntaId: pregunta.id,
+      estado: esCorrecta ? 'correcta' : 'incorrecta',
+      enBlanco: false,
+      correcta: esCorrecta,
+      indiceSeleccionada: respuesta.opcionElegida,
+      indiceCorrecta,
+    });
   }
 
   const puntosBrutos = correctas - incorrectas * fraccion - blancos * fraccionBlanco;
@@ -698,12 +720,16 @@ async generarSimulacroOplora(usuarioId: string, oposicionId: string, ejercicioNu
     usuarioId,
   );
 
+  // ⭐ Registrar la sesión (preguntas + índice correcto en el orden servido) para corregir.
+  await this.testService.registrarSesion(usuarioId, oposicionId, 'simulacro_generado', preguntas);
+
   return {
     ejercicio,
     convocatoria: {
       fraccionPenalizacion: convocatoria?.fraccionPenalizacion,
       notaMinimaAprobado: convocatoria?.notaMinimaAprobado,
     },
+    sesionId: (preguntas[0] as any)?.sesionId ?? null,
     preguntas: preguntas.map((p: any) => ({
       id: p.id,
       enunciado: p.enunciado,
@@ -714,10 +740,13 @@ async generarSimulacroOplora(usuarioId: string, oposicionId: string, ejercicioNu
 }
 
 async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { preguntaId: string; opcionElegida: number | null }[]) {
+  // ⭐ Se carga también la oposición de la convocatoria: antes no venía y el resultado
+  // se guardaba con oposición vacía, así que el simulacro no aparecía en el progreso.
   const examen = await this.examenRepo.findOne({
     where: { id: examenId },
-    relations: ['convocatoria'],
+    relations: ['convocatoria', 'convocatoria.oposicion'],
   });
+  const listaRespuestas = Array.isArray(respuestas) ? respuestas : [];
   if (!examen) throw new NotFoundException('Examen no encontrado');
 
   const preguntas = await this.preguntaTestRepo.find({
@@ -735,22 +764,30 @@ async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { pregu
   const detalle: any[] = [];
 
   for (const pregunta of preguntas) {
-    const respuesta = respuestas.find((r) => r.preguntaId === pregunta.id);
+    const respuesta = listaRespuestas.find((r) => r?.preguntaId === pregunta.id);
 
-    if (!respuesta || respuesta.opcionElegida === null) {
+    // ⭐ Mismo formato de detalle que los tests normales (`correcta`/`enBlanco`): antes solo
+    // llevaba `estado` y el repaso inteligente y el progreso lo contaban todo como fallos.
+    if (!respuesta || typeof respuesta.opcionElegida !== 'number') {
       blancos++;
-      detalle.push({ preguntaId: pregunta.id, estado: 'blanco' });
+      detalle.push({ preguntaId: pregunta.id, estado: 'blanco', enBlanco: true, correcta: false, indiceCorrecta: pregunta.correcta });
       continue;
     }
 
     const esCorrecta = respuesta.opcionElegida === pregunta.correcta;
     if (esCorrecta) {
       correctas++;
-      detalle.push({ preguntaId: pregunta.id, estado: 'correcta' });
     } else {
       incorrectas++;
-      detalle.push({ preguntaId: pregunta.id, estado: 'incorrecta' });
     }
+    detalle.push({
+      preguntaId: pregunta.id,
+      estado: esCorrecta ? 'correcta' : 'incorrecta',
+      enBlanco: false,
+      correcta: esCorrecta,
+      indiceSeleccionada: respuesta.opcionElegida,
+      indiceCorrecta: pregunta.correcta,
+    });
   }
 
   const puntosBrutos = correctas - incorrectas * fraccion - blancos * fraccionBlanco;
