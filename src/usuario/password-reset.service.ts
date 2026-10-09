@@ -6,6 +6,10 @@ import { Resend } from 'resend';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 
+// ⭐ En BD solo se guarda el hash del token: si alguien llegara a leer la columna,
+// no podría usarla para cambiar la contraseña.
+const hashToken = (token: string) => crypto.createHash('sha256').update(token ?? '').digest('hex');
+
 @Injectable()
 export class PasswordResetService {
   private resend = new Resend(process.env.RESEND_API_KEY);
@@ -28,7 +32,7 @@ export class PasswordResetService {
     // Invalidar cualquier token de reset anterior (no usado y no expirado) antes de crear el nuevo,
     // así solo el último enlace enviado por email es válido.
     await this.repo.update(usuario.id, {
-      resetPasswordToken: token,
+      resetPasswordToken: hashToken(token),
       resetPasswordExpira: expira,
     });
 
@@ -56,13 +60,24 @@ export class PasswordResetService {
   }
 
   async validarToken(token: string): Promise<boolean> {
-    const usuario = await this.repo.findOne({ where: { resetPasswordToken: token } });
+    if (!token) return false;
+    const usuario = await this.repo.findOne({
+      where: { resetPasswordToken: hashToken(token) },
+      select: { id: true, resetPasswordExpira: true },
+    });
     if (!usuario || !usuario.resetPasswordExpira) return false;
     return new Date() < new Date(usuario.resetPasswordExpira);
   }
 
   async resetearPassword(token: string, nuevaPassword: string): Promise<void> {
-    const usuario = await this.repo.findOne({ where: { resetPasswordToken: token } });
+    if (!token) throw new BadRequestException('Token inválido');
+    if (typeof nuevaPassword !== 'string' || nuevaPassword.length < 6) {
+      throw new BadRequestException('La contraseña debe tener al menos 6 caracteres');
+    }
+    const usuario = await this.repo.findOne({
+      where: { resetPasswordToken: hashToken(token) },
+      select: { id: true, resetPasswordExpira: true },
+    });
     if (!usuario) throw new BadRequestException('Token inválido');
     if (!usuario.resetPasswordExpira || new Date() > new Date(usuario.resetPasswordExpira)) {
       throw new BadRequestException('El enlace ha caducado, solicita uno nuevo');

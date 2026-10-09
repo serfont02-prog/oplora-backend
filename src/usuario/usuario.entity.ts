@@ -43,7 +43,8 @@ export class Usuario {
   @Column({ select: false })
   password: string;
 
-  @Column({ nullable: true })
+  // ⭐ select:false: no se lee por defecto, así nunca viaja en relaciones de otros usuarios.
+  @Column({ nullable: true, select: false })
   dni: string;
 
   @Column({ nullable: true })
@@ -118,10 +119,12 @@ export class Usuario {
   @Column({ type: 'boolean', default: false })
   compromiso: boolean;
 
-  @Column({ type: 'varchar', nullable: true })
+  // ⭐ Guarda el HASH (sha256) del token, nunca el token en claro, y no se lee por
+  // defecto: antes salía en rankings/retos y permitía secuestrar cuentas.
+  @Column({ type: 'varchar', nullable: true, select: false })
   resetPasswordToken: string | null;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamp', nullable: true, select: false })
   resetPasswordExpira: Date | null;
 
  

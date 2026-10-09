@@ -139,6 +139,7 @@ borrarSubrayado(@Param('id') id: string, @Request() req: any) {
     return this.tituloRepo.find({
       where: { versionLey: { id: versionLeyId } },
       order: { orden: 'ASC' },
+      relations: ['libro'], // ⭐ leyes con libros (Código Penal, Código Civil)
     });
   }
 

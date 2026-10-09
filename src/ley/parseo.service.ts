@@ -393,8 +393,10 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
       gruposDeTitulos.push({ titulos: lData.titulos ?? [], libroId: libro.id });
     }
 
+    // ⭐ Los títulos sin libro van primero: en los códigos el Título Preliminar
+    // precede al Libro I (antes quedaba el último).
     if (estructura.titulos && estructura.titulos.length > 0) {
-      gruposDeTitulos.push({ titulos: estructura.titulos });
+      gruposDeTitulos.unshift({ titulos: estructura.titulos });
     }
 
     let ordenTituloGlobal = 0;
