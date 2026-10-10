@@ -168,7 +168,7 @@ function buscarCierreMarcador(texto: string, profundidad: number): { idx: number
 // (si la precede ".", "?", ":" o "!") y antes de cada ✅ / ❌.
 function splitOpcionesCaja(texto: string): string[] {
   return texto
-    .split(/(?<=[.?!:])\s+(?=[a-eA-E]\)\s)|\s+(?=[✅❌])/u)
+    .split(/(?<=[.?!:])\s+(?=[a-eA-E]\)\s)|\s+(?=[✅❌])|\s+(?=Respuesta correcta\b|Ojo:)/u)
     .map((t) => t.trim())
     .filter(Boolean);
 }
@@ -663,7 +663,8 @@ export function clasificarDocumento(
           ID: 'IDEA',
           ES: 'ESQUEMA',
           TR: 'TRAMPA DE EXAMEN',
-          RE: 'REGLA DE EXAMEN',
+          // ⭐ "Regla de examen" ya no es una categoría propia: se muestra y se cuenta como Idea clave
+          RE: 'IDEA',
           PR: 'PREGUNTA FRECUENTE',
         };
         const titulo = tituloMap[key] || key;
