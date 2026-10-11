@@ -51,8 +51,13 @@ getNoticiasLegislacion(
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
-  create(@Body('nombre') nombre: string, @Body('descripcion') descripcion?: string) {
-    return this.service.create(nombre, descripcion);
+  create(
+    @Body('nombre') nombre: string,
+    @Body('siglas') siglas?: string,
+    @Body('descripcion') descripcion?: string,
+  ) {
+    // ⭐ antes la descripción se pasaba como siglas
+    return this.service.create(nombre, siglas, descripcion);
   }
 
   @Patch(':id')
@@ -60,7 +65,7 @@ getNoticiasLegislacion(
   @Roles('admin')
   update(
     @Param('id') id: string,
-    @Body() datos: Partial<{ nombre: string; descripcion: string }>,
+    @Body() datos: Partial<{ nombre: string; siglas: string; descripcion: string }>,
   ) {
     return this.service.update(id, datos);
   }
@@ -157,6 +162,9 @@ async subirLeyNueva(
   @Body('fechaVigencia') fechaVigencia: string,
   @Body('oposicionIds') oposicionIdsRaw: string,
 ) {
+  // ⭐ Antes de procesar el archivo: si las siglas ya existen, se para aquí con un mensaje claro
+  await this.service.comprobarSiglas(siglas);
+
   const ext = extname(file.originalname).toLowerCase();
   const texto = await this.service.procesarArchivo(file.path, ext);
 

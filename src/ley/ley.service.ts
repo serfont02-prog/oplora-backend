@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Ley } from './ley.entity';
@@ -47,14 +47,30 @@ export class LeyService {
     return ley;
   }
 
+// ⭐ Las siglas son únicas: si ya las tiene otra ley, se avisa con un mensaje claro
+// (antes saltaba el error interno de Postgres "duplicate key value"). Vacías = sin siglas.
+async comprobarSiglas(siglas?: string | null, excluirLeyId?: string): Promise<string | null> {
+  const s = (siglas ?? '').trim().toUpperCase();
+  if (!s) return null;
+  const otra = await this.leyRepo.findOne({ where: { siglas: s } });
+  if (otra && otra.id !== excluirLeyId) {
+    throw new ConflictException(
+      `Ya existe una ley con las siglas "${s}" (${otra.nombre}). Pon otras siglas o déjalas en blanco.`,
+    );
+  }
+  return s;
+}
+
 async create(nombre: string, siglas?: string, descripcion?: string): Promise<Ley> {
-  const ley = this.leyRepo.create({ nombre, siglas, descripcion });
+  const siglasOk = await this.comprobarSiglas(siglas);
+  const ley = this.leyRepo.create({ nombre, siglas: siglasOk ?? undefined, descripcion });
   return this.leyRepo.save(ley);
 }
 
-  async update(id: string, datos: Partial<{ nombre: string; siglas: string; descripcion: string }>): Promise<Ley> {
+  async update(id: string, datos: Partial<{ nombre: string; siglas: string | null; descripcion: string }>): Promise<Ley> {
     await this.findOne(id);
-    await this.leyRepo.update(id, datos); 
+    if ('siglas' in datos) datos.siglas = await this.comprobarSiglas(datos.siglas, id);
+    await this.leyRepo.update(id, datos as any); // siglas puede ser null (sin siglas)
     return this.findOne(id);
   }
 
