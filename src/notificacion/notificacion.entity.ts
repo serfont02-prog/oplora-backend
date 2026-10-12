@@ -15,6 +15,7 @@ export enum TipoNotificacion {
   RACHA_PELIGRO = 'racha_peligro',
   NUEVA_NOTICIA = 'nueva_noticia',
   RESPUESTA_SOPORTE = 'respuesta_soporte',
+  LIGA = 'liga', // ⭐ Liga Oplora: avisos de jornada, ascensos y copas
 }
 
 export enum PrioridadNotificacion {

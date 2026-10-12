@@ -37,15 +37,16 @@ export class RetoService {
     private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
   ) {}
 
-  // ─── RETO DIARIO ─────────────────────────────────────────
+  // ─── EXPIRACIÓN ──────────────────────────────────────────
 
   @Cron(CronExpression.EVERY_HOUR)
   async revisarRetosExpirados() {
     const ahora = new Date();
 
+    // ⭐ Sin filtrar por tipo: así también se cierran los antiguos retos diarios y
+    // semanales (retirados hasta la Liga Oplora) que quedaron activos en la BD.
     const retosActivos = await this.retoRepo.find({
       where: {
-        tipo: TipoReto.USUARIO,
         estado: EstadoReto.ACTIVO,
       },
     });
@@ -56,124 +57,6 @@ export class RetoService {
       console.log(`Reto ${reto.id} marcado como expirado por caducidad`);
     }
   }
-  async getRetoDiario(usuarioId: string, oposicionId: string): Promise<Reto> {
-  const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
-    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
-  });
-  if (!usuarioOposicion) throw new NotFoundException('Usuario no vinculado a esta oposición');
-  const nivelUsuario = usuarioOposicion.nivel;
-
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  const manana = new Date(hoy);
-  manana.setDate(manana.getDate() + 1);
-
-  let reto = await this.retoRepo.findOne({
-    where: {
-      tipo: TipoReto.DIARIO,
-      estado: EstadoReto.ACTIVO,
-      oposicion: { id: oposicionId },
-      nivelRequerido: nivelUsuario,
-    },
-    relations: ['participaciones', 'participaciones.usuario'],
-  });
-
-  if (!reto || new Date(reto.creadoEn) < hoy) {
-    reto = await this.crearRetoDiario(oposicionId, nivelUsuario);
-  }
-
-  return this.enriquecerNivelesParticipantes(reto, oposicionId);
-}
-
-    private async crearRetoDiario(oposicionId: string, nivel: number): Promise<Reto> {
-      const numPreguntas = this.preguntasPorNivel(nivel);
-
-      const preguntas = await this.testService.generarTest(
-        oposicionId,
-        numPreguntas,
-      );
-
-      const fechaFin = new Date();
-      fechaFin.setHours(23, 59, 59, 999);
-
-      const reto = this.retoRepo.create({
-        tipo: TipoReto.DIARIO,
-        estado: EstadoReto.ACTIVO,
-        nivelRequerido: nivel,
-        preguntas,
-        fechaFin,
-        oposicion: { id: oposicionId } as any,
-      });
-
-      return this.retoRepo.save(reto);
-    }
-
-  // ─── RETO SEMANAL ────────────────────────────────────────
-
-  async getRetoSemanal(usuarioId: string, oposicionId: string): Promise<Reto> {
-    const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
-      where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
-    });
-    if (!usuarioOposicion) throw new NotFoundException('Usuario no vinculado a esta oposición');
-    const nivelUsuario = usuarioOposicion.nivel;
-
-    const inicioSemana = new Date();
-    inicioSemana.setHours(0, 0, 0, 0);
-    inicioSemana.setDate(inicioSemana.getDate() - inicioSemana.getDay() + 1);
-
-    let reto = await this.retoRepo.findOne({
-      where: {
-        tipo: TipoReto.SEMANAL,
-        estado: EstadoReto.ACTIVO,
-        oposicion: { id: oposicionId },
-        nivelRequerido: nivelUsuario,
-      },
-      relations: ['participaciones', 'participaciones.usuario', 'tema'],
-    });
-
-    if (!reto || new Date(reto.creadoEn) < inicioSemana) {
-      reto = await this.crearRetoSemanal(oposicionId, nivelUsuario);
-    }
-
-    return this.enriquecerNivelesParticipantes(reto, oposicionId);
-  }
-
-  private async crearRetoSemanal(oposicionId: string, nivel: number): Promise<Reto> {
-  const convocatoria = await this.convocatoriaRepo.findOne({
-    where: { oposicion: { id: oposicionId }, estado: 'activa' as any },
-    order: { anyo: 'DESC' },
-  });
-
-  const temas = convocatoria ? await this.temaRepo.find({
-    where: { convocatoria: { id: convocatoria.id }, activo: true },
-    order: { numero: 'ASC' },
-  }) : [];
-
-  const indiceMax = Math.min(nivel * 5, temas.length - 1);
-  const tema = temas.length > 0 ? temas[Math.floor(Math.random() * (indiceMax + 1))] : null;
-  const numPreguntas = this.preguntasPorNivel(nivel) * 2;
-  const preguntas = await this.testService.generarTest(
-    oposicionId,
-    numPreguntas,
-    tema?.id,
-  );
-
-  const fechaFin = new Date();
-  fechaFin.setDate(fechaFin.getDate() + (7 - fechaFin.getDay()));
-  fechaFin.setHours(23, 59, 59, 999);
-
-  const reto = this.retoRepo.create({
-    tipo: TipoReto.SEMANAL,
-    estado: EstadoReto.ACTIVO,
-    nivelRequerido: nivel,
-    preguntas,
-    fechaFin,
-    oposicion: { id: oposicionId } as any,
-    tema: tema ? { id: tema.id } as any : undefined,
-  });
-
-  return this.retoRepo.save(reto);
-}
 
   // ─── RETO ENTRE USUARIOS ─────────────────────────────────
 
@@ -558,10 +441,7 @@ async completarReto(
 
   // ─── HELPERS ─────────────────────────────────────────────
 
-  private preguntasPorNivel(nivel: number): number {
-    const mapa: Record<number, number> = { 1: 5, 2: 8, 3: 10, 4: 15, 5: 20 };
-    return mapa[nivel] ?? 10;
-  }
+
 
   async getContactosRecientes(usuarioId: string): Promise<ContactoReciente[]> {
   return this.contactoRepo.find({

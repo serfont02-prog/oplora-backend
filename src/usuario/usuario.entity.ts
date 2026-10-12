@@ -135,6 +135,11 @@ export class Usuario {
   })
   estado: EstadoUsuario;
 
+  // ⭐ Liga Oplora: copa que se muestra sobre el avatar (la mejor y cuántas veces).
+  // Se recalcula al repartir copas; es un dato público del perfil.
+  @Column({ type: 'jsonb', nullable: true })
+  copaLiga: { color: string; veces: number; total: number } | null;
+
   @OneToMany(() => UsuarioOposicion, uo => uo.usuario)
   usuarioOposiciones: UsuarioOposicion[];
 

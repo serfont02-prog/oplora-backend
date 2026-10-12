@@ -22,7 +22,7 @@ import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
  * "correcta" recalculado tras el recorte + reordenado aleatorio.
  * Si numOpciones es null/undefined o >= opciones.length, devuelve tal cual.
  */
-function recortarOpcionesArticulo(
+export function recortarOpcionesArticulo(
   opciones: string[],
   correcta: number,
   numOpciones?: number | null,

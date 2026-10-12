@@ -25,6 +25,7 @@
   import { PsicotecnicoModule } from './psicotecnico/psicotecnico.module';
   import { NoticiaModule } from './noticia/noticia.module';
   import { SoporteModule } from './soporte/soporte.module';
+  import { LigaModule } from './liga/liga.module';
 
 
 @Module({
@@ -77,6 +78,7 @@ SesionTemaModule,
 PsicotecnicoModule,
 NoticiaModule,
 SoporteModule,
+LigaModule,
   ],
   providers: [
     {

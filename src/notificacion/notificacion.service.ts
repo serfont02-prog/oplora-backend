@@ -31,6 +31,37 @@ export class NotificacionService {
     return this.repo.save(n);
   }
 
+  /** ⭐ Misma notificación para muchos usuarios, insertada por lotes (Liga Oplora). */
+  async crearVarios(
+    usuarioIds: string[],
+    datos: {
+      tipo: TipoNotificacion;
+      titulo: string;
+      mensaje: string;
+      prioridad?: PrioridadNotificacion;
+      urlAccion?: string;
+      metadata?: Record<string, any>;
+    },
+  ): Promise<number> {
+    const ids = [...new Set((usuarioIds ?? []).filter(Boolean))];
+    const LOTE = 500;
+    for (let i = 0; i < ids.length; i += LOTE) {
+      const filas = ids.slice(i, i + LOTE).map((usuarioId) =>
+        this.repo.create({
+          tipo: datos.tipo,
+          titulo: datos.titulo,
+          mensaje: datos.mensaje,
+          prioridad: datos.prioridad ?? PrioridadNotificacion.MEDIA,
+          urlAccion: datos.urlAccion,
+          metadata: datos.metadata,
+          usuario: { id: usuarioId } as any,
+        }),
+      );
+      await this.repo.insert(filas as any);
+    }
+    return ids.length;
+  }
+
   async findByUsuario(usuarioId: string, soloNoLeidas = false): Promise<Notificacion[]> {
     const qb = this.repo.createQueryBuilder('n')
       .where('n.usuario = :usuarioId', { usuarioId })

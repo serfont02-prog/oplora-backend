@@ -10,15 +10,7 @@ import { Roles } from '../auth/roles.decorator';
 export class RetoController {
   constructor(private readonly service: RetoService) {}
 
-  @Get('diario/:oposicionId')
-  getRetoDiario(@Param('oposicionId') oposicionId: string, @Request() req: any) {
-    return this.service.getRetoDiario(req.user.id, oposicionId);
-  }
-
-  @Get('semanal/:oposicionId')
-  getRetoSemanal(@Param('oposicionId') oposicionId: string, @Request() req: any) {
-    return this.service.getRetoSemanal(req.user.id, oposicionId);
-  }
+  // ⭐ Reto diario y semanal retirados: los sustituirán la Liga Oplora y el test del día.
 
   @Get('validar-destinatario')
 validarDestinatario(
