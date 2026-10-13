@@ -2,8 +2,8 @@ import { Injectable, HttpException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { BoeConvocatoria, EstadoBOE } from './boe.entity';
-import { Oposicion } from '../oposicion/oposicion.entity';
-import { Convocatoria } from '../convocatoria/convocatoria.entity';
+import { Oposicion, SubgrupoEnum, TipoAdministracionEnum } from '../oposicion/oposicion.entity';
+import { Convocatoria, EstadoConvocatoria, TurnoEnum } from '../convocatoria/convocatoria.entity';
 import axios from 'axios';
 import { ClaudeService } from '../ia/claude.service';
 import { Tema } from '../tema/tema.entity';
@@ -123,7 +123,9 @@ async consultarFecha(fecha: string): Promise<any[]> {
   }
 
   async aprobar(id: string): Promise<BoeConvocatoria> {
-  await this.boeRepo.update(id, { estado: EstadoBOE.APROBADA });
+  // ⭐ No "des-procesar": aprobar después de procesar devolvía el BOE a APROBADA y
+  // permitía volver a procesarlo (convocatorias duplicadas).
+  await this.boeRepo.update({ id, estado: In([EstadoBOE.PENDIENTE, EstadoBOE.RECHAZADA]) }, { estado: EstadoBOE.APROBADA });
   return this.boeRepo.findOne({ where: { id } }) as Promise<BoeConvocatoria>;
 }
 
@@ -133,7 +135,10 @@ async consultarFecha(fecha: string): Promise<any[]> {
 }
 
   async guardarDatosExtraidos(id: string, datos: any): Promise<BoeConvocatoria> {
-  await this.boeRepo.update(id, { datosExtraidos: datos });
+  // ⭐ Conserva la lista de cuerpos ya procesados (evita duplicar convocatorias al reintentar)
+  const actual = await this.boeRepo.findOne({ where: { id } });
+  const procesados = (actual?.datosExtraidos as any)?.procesados;
+  await this.boeRepo.update(id, { datosExtraidos: procesados ? { ...datos, procesados } : datos });
   return this.boeRepo.findOne({ where: { id } }) as Promise<BoeConvocatoria>;
 }
 
@@ -343,51 +348,95 @@ ${temasNuevos.map((t) => `${t.numero}. ${t.titulo}`).join('\n')}`;
 
 
 //PROCESAR CONVOCATORIA EXTRAIDA DEL BOE
-// ⭐ Transacción: crear la Convocatoria, activar la Oposicion y marcar el
-// BOE como PROCESADA son 3 escrituras relacionadas; si una fallara a mitad
-// (p. ej. se crea la convocatoria pero no se marca el BOE como procesada),
-// quedaría un estado inconsistente que además permitiría re-procesar el
-// mismo BOE y duplicar la convocatoria.
-async procesarConvocatoria(id: string, oposicionExistenteId?: string): Promise<{
+// ⭐ Reescrito (revisión 8 oct, punto 9):
+//  - Si no se vincula a una oposición existente, se CREA la oposición con los datos
+//    extraídos (antes no se creaba nada y el admin acababa en /admin/oposiciones/undefined).
+//  - Siempre se crea la convocatoria (borrador) y se devuelve oposicionId/convocatoriaId.
+//  - Una resolución puede traer varios cuerpos: el admin los procesa uno a uno con
+//    `continuar: true` y el BOE solo se marca PROCESADA en el último (antes la 2.ª
+//    llamada daba 409). Cada cuerpo procesado se apunta en datosExtraidos.procesados
+//    para no duplicarlo si se repite la llamada.
+// Todo en una transacción: o se crea todo o nada.
+async procesarConvocatoria(
+  id: string,
+  oposicionExistenteId?: string,
+  continuar = false,
+): Promise<{
   accion: string;
   oposicionId?: string;
   convocatoriaId?: string;
 }> {
   return this.boeRepo.manager.transaction(async (manager) => {
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`boe:${id}`]);
     const boe = await manager.findOne(BoeConvocatoria, { where: { id } });
     if (!boe) throw new HttpException('No encontrada', 404);
     if (boe.estado === EstadoBOE.PROCESADA) {
       throw new HttpException('Esta convocatoria del BOE ya ha sido procesada', 409);
     }
 
-    const datos = boe.datosExtraidos ?? {};
-    let oposicion: Oposicion | null = null;
+    const datos: Record<string, any> = boe.datosExtraidos ?? {};
+    const nombre = String(datos.nombreOposicion ?? datos.nombre ?? '').trim() || boe.titulo.slice(0, 200);
+    const turno = Object.values(TurnoEnum).includes(datos.turno) ? (datos.turno as TurnoEnum) : TurnoEnum.LIBRE;
+    const clave = `${nombre.toLowerCase()}|${turno}`;
+    const procesados: { clave: string; oposicionId: string; convocatoriaId: string }[] = Array.isArray(datos.procesados)
+      ? datos.procesados
+      : [];
 
+    const yaHecho = procesados.find((p) => p.clave === clave);
+    if (yaHecho) {
+      if (!continuar) await manager.update(BoeConvocatoria, id, { estado: EstadoBOE.PROCESADA });
+      return { accion: 'ya_procesado', oposicionId: yaHecho.oposicionId, convocatoriaId: yaHecho.convocatoriaId };
+    }
+
+    let oposicion: Oposicion | null = null;
     if (oposicionExistenteId) {
       oposicion = await manager.findOne(Oposicion, { where: { id: oposicionExistenteId } });
+      if (!oposicion) throw new HttpException('La oposición elegida no existe', 404);
     }
 
-    let convocatoria: Convocatoria | null = null;
-    if (oposicion) {
-      convocatoria = await manager.save(
-        Convocatoria,
-        manager.create(Convocatoria, {
-          anyo: datos.anyo ? parseInt(datos.anyo.toString()) : new Date().getFullYear(),
-          plazas: datos.plazas,
-          estado: 'borrador' as any,
-          oposicion: { id: oposicion.id } as any,
-        }),
+    let accion = 'convocatoria_creada';
+    if (!oposicion) {
+      const adm = String(datos.administracion ?? '').toLowerCase();
+      const tipoAdministracion = adm.includes('ccaa') || adm.includes('auton')
+        ? TipoAdministracionEnum.CCAA
+        : TipoAdministracionEnum.ESTADO;
+      const subgrupo = Object.values(SubgrupoEnum).includes(datos.subgrupo) ? (datos.subgrupo as SubgrupoEnum) : undefined;
+      oposicion = await manager.save(
+        Oposicion,
+        manager.create(Oposicion, {
+          nombre: nombre.slice(0, 200),
+          cuerpo: nombre.slice(0, 200),
+          ministerio: datos.ministerio || boe.departamento || undefined,
+          administracion: tipoAdministracion === TipoAdministracionEnum.CCAA ? datos.administracion : undefined,
+          tipoAdministracion,
+          subgrupo,
+          activa: false,
+        } as any),
       );
-      await manager.update(Oposicion, oposicion.id, { activa: true });
+      accion = 'oposicion_creada';
     }
 
-    await manager.update(BoeConvocatoria, id, { estado: EstadoBOE.PROCESADA });
+    const anyoNum = parseInt(String(datos.anyo ?? ''), 10);
+    const plazasNum = parseInt(String(datos.plazas ?? ''), 10);
+    const convocatoria = await manager.save(
+      Convocatoria,
+      manager.create(Convocatoria, {
+        anyo: Number.isFinite(anyoNum) ? anyoNum : new Date().getFullYear(),
+        plazas: Number.isFinite(plazasNum) ? plazasNum : undefined,
+        turno,
+        estado: EstadoConvocatoria.BORRADOR,
+        oposicion: { id: oposicion.id } as any,
+      } as any),
+    );
+    await manager.update(Oposicion, oposicion.id, { activa: true });
 
-    return {
-      accion: oposicion ? 'convocatoria_creada' : 'solo_aprobada',
-      oposicionId: oposicion?.id,
-      convocatoriaId: convocatoria?.id,
-    };
+    procesados.push({ clave, oposicionId: oposicion.id, convocatoriaId: (convocatoria as any).id });
+    await manager.update(BoeConvocatoria, id, {
+      datosExtraidos: { ...datos, procesados } as any,
+      ...(continuar ? {} : { estado: EstadoBOE.PROCESADA }),
+    });
+
+    return { accion, oposicionId: oposicion.id, convocatoriaId: (convocatoria as any).id };
   });
 }
 }

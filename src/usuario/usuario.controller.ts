@@ -4,9 +4,10 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { resetearConsumosSiEsNuevoDia } from '../common/helpers/consumo.helper';
 import { getSuscripcionLimits } from '../common/helpers/plan.helper';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { ConfiguracionService } from '../config/configuracion.service';
-import { Controller, Get, Post, Patch, Body, Param, UseGuards, Request, UseInterceptors, UploadedFile, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, UseGuards, Request, UseInterceptors, UploadedFile, Delete, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { PasswordResetService } from './password-reset.service';
@@ -26,7 +27,7 @@ export class UsuarioController {
   @UseGuards(RolesGuard)
   @Roles('admin')
   findAll() {
-    return this.service.findAll();
+    return this.service.listarParaAdmin();
   }
 
   @Get('mis-oposiciones')
@@ -84,6 +85,14 @@ async marcarOnboardingEntrenamiento(@Request() req) {
 @Post('activar-oposicion/:oposicionId')
 activarOposicion(@Param('oposicionId') oposicionId: string, @Request() req: any) {
   return this.service.activarOposicion(req.user.id, oposicionId);
+}
+
+@Get('exportar-progreso/:oposicionId')
+async exportarProgreso(@Param('oposicionId') oposicionId: string, @Request() req: any, @Res() res: Response) {
+  const csv = await this.service.exportarProgreso(req.user.id, oposicionId);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="progreso-oplora.csv"');
+  res.send(csv);
 }
 
 @Delete('desactivar-oposicion/:oposicionId')
@@ -154,6 +163,10 @@ resetearProgreso(
   @UseGuards(RolesGuard)
   @Roles('admin')
   cambiarSuscripcion(@Param('id') id: string, @Body('suscripcion') suscripcion: string) {
+    // ⭐ Antes aceptaba cualquier texto (el botón "Ninguno" mandaba '' y fallaba en la BD)
+    if (!['gratuito', 'esencial', 'profesional'].includes(suscripcion)) {
+      throw new BadRequestException('Suscripción no válida');
+    }
     return this.service.cambiarSuscripcion(id, suscripcion);
   }
 
@@ -162,6 +175,13 @@ resetearProgreso(
   @Roles('admin')
   desactivar(@Param('id') id: string) {
     return this.service.desactivar(id);
+  }
+
+  @Patch(':id/activar')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  reactivar(@Param('id') id: string) {
+    return this.service.reactivar(id);
   }
 
   @Patch('compromiso')
@@ -204,7 +224,10 @@ async actualizarNivelExperiencia(
   return this.service.actualizarNivelExperiencia(req.user.id, oposicionId, nivelExperiencia);
 }
 
+// ⭐ El nivel sale de los puntos; antes cualquiera podía ponerse el nivel que quisiera.
 @Patch('nivel')
+@UseGuards(RolesGuard)
+@Roles('admin')
 async actualizarNivel(
   @Request() req,
   @Body('nivel') nivel: number,

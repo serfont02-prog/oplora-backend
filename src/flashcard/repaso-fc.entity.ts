@@ -43,6 +43,11 @@ export class RepasoFC {
   @Column({ default: 0 })
   repeticiones!: number;
 
+  // ⭐ Los puntos por dominar la tarjeta se dan una sola vez (antes, dominar → olvidar →
+  // dominar otra vez daba puntos sin fin).
+  @Column({ default: false })
+  puntosDados!: boolean;
+
   @UpdateDateColumn()
   actualizadoEn!: Date;
 

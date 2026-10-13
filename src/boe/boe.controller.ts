@@ -10,11 +10,15 @@ export class BoeController {
   constructor(private readonly service: BoeService) {}
 
   @Get('consultar')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   consultar(@Query('fecha') fecha: string) {
     return this.service.consultarFecha(fecha);
   }
 
   @Get('tareas-pendientes')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   async tareasPendientes() {
   return this.service.getTareasPendientes();
 }
@@ -36,8 +40,12 @@ compararTemarios(@Body() body: { temasNuevos: any[]; temasAnteriores: any[] }) {
   @Post(':id/procesar')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin')
-procesar(@Param('id') id: string, @Body('oposicionExistenteId') oposicionExistenteId?: string) {
-  return this.service.procesarConvocatoria(id, oposicionExistenteId);
+procesar(
+  @Param('id') id: string,
+  @Body('oposicionExistenteId') oposicionExistenteId?: string,
+  @Body('continuar') continuar?: boolean,
+) {
+  return this.service.procesarConvocatoria(id, oposicionExistenteId || undefined, continuar === true);
 }
 
   @Post('guardar')
@@ -55,11 +63,15 @@ procesar(@Param('id') id: string, @Body('oposicionExistenteId') oposicionExisten
   }
 
   @Get('pendientes')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   getPendientes() {
     return this.service.getPendientes();
   }
 
   @Get()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
   getAll() {
     return this.service.getAll();
   }

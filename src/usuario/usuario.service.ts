@@ -1,3 +1,4 @@
+import { invalidarCacheUsuario } from '../auth/jwt.strategy';
 import { Injectable, ConflictException, NotFoundException, BadRequestException  } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull, In } from 'typeorm';
@@ -143,6 +144,70 @@ export class UsuarioService {
   return relacion;
 }
 
+/**
+ * ⭐ Exportar mi progreso (Ajustes de la oposición): CSV con el resumen y todos los tests
+ * hechos en esa oposición. Antes el botón llamaba a una ruta que no existía (404).
+ */
+async exportarProgreso(usuarioId: string, oposicionId: string): Promise<string> {
+  const relacion = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    relations: ['oposicion', 'convocatoriaActiva'],
+  });
+  if (!relacion) throw new NotFoundException('No estás inscrito en esta oposición');
+
+  const resultados = await this.resultadoTestRepo.find({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
+    relations: ['tema'],
+    order: { creadoEn: 'DESC' },
+  });
+  const repasos = await this.repasoFcRepo
+    .createQueryBuilder('r')
+    .select('r.estado', 'estado')
+    .addSelect('COUNT(*)', 'total')
+    .where('r."usuarioId" = :u', { u: usuarioId })
+    .groupBy('r.estado')
+    .getRawMany()
+    .catch(() => [] as any[]);
+
+  const celda = (v: any) => {
+    const t = v == null ? '' : String(v);
+    return /[;"\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const fila = (...v: any[]) => v.map(celda).join(';');
+  const fecha = (d: Date) => new Date(d).toLocaleString('es-ES', { timeZone: 'Europe/Madrid' });
+
+  const lineas: string[] = [];
+  lineas.push(fila('OPLORA · Exportación de progreso', fecha(new Date())));
+  lineas.push(fila('Oposición', (relacion.oposicion as any)?.nombre));
+  lineas.push(fila('Convocatoria', (relacion as any).convocatoriaActiva?.anyo ?? ''));
+  lineas.push(fila('Puntos', (relacion as any).puntos ?? 0));
+  lineas.push(fila('Nivel', (relacion as any).nivel ?? 1));
+  lineas.push(fila('Tests realizados', resultados.length));
+  const totalPreg = resultados.reduce((a, r) => a + (r.totalPreguntas ?? 0), 0);
+  const totalOk = resultados.reduce((a, r) => a + (r.correctas ?? 0), 0);
+  lineas.push(fila('Preguntas respondidas', totalPreg));
+  lineas.push(fila('Aciertos', totalOk));
+  lineas.push(fila('% de acierto', totalPreg ? Math.round((totalOk / totalPreg) * 1000) / 10 : 0));
+  for (const r of repasos) lineas.push(fila(`Flashcards (${r.estado})`, Number(r.total)));
+  lineas.push('');
+  lineas.push(fila('Fecha', 'Tipo', 'Tema', 'Preguntas', 'Aciertos', '% acierto', 'Tiempo (s)'));
+  for (const r of resultados) {
+    const tema = (r as any).tema;
+    lineas.push(
+      fila(
+        fecha(r.creadoEn),
+        r.tipoTest ?? '',
+        tema ? `Tema ${tema.numero ?? ''} ${tema.titulo ?? ''}`.trim() : '',
+        r.totalPreguntas,
+        r.correctas,
+        Math.round((r.porcentaje ?? 0) * 10) / 10,
+        r.tiempoSegundos ?? 0,
+      ),
+    );
+  }
+  return '\uFEFF' + lineas.join('\r\n');
+}
+
 async desactivarOposicion(usuarioId: string, oposicionId: string) {
   const relacion = await this.usuarioOposicionRepo.findOne({
     where: {
@@ -194,6 +259,7 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
           'rol',
           'estado',
           'onboardingGeneralCompletado',
+          'activo',
           'password',
         ],
       });
@@ -211,6 +277,7 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
           'rol',
           'estado',
           'onboardingGeneralCompletado',
+          'activo',
           'password',
         ],
       });
@@ -278,6 +345,42 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
     return this.repo.find({ order: { creadoEn: 'DESC' } });
   }
 
+  /**
+   * ⭐ Listado del panel de admin. Antes devolvía el usuario a pelo: puntos y nivel viven en
+   * la inscripción a la oposición (usuarios_oposiciones), así que salían vacíos, y no se
+   * veía si la cuenta estaba activa ni la última actividad.
+   */
+  async listarParaAdmin(): Promise<any[]> {
+    const usuarios = await this.repo.find({
+      relations: ['usuarioOposiciones', 'usuarioOposiciones.oposicion', 'usuarioOposiciones.convocatoriaActiva'],
+      order: { creadoEn: 'DESC' },
+    });
+    return usuarios.map((u) => {
+      const activa = u.usuarioOposiciones?.find((o) => o.activa) ?? null;
+      return {
+        id: u.id,
+        email: u.email,
+        nombre: u.nombre,
+        apellidos: u.apellidos,
+        nick: u.nick,
+        rol: u.rol,
+        activo: u.activo !== false,
+        estado: u.estado,
+        suscripcion: u.suscripcion,
+        creadoEn: u.creadoEn,
+        ultimaActividad: u.ultimaActividad,
+        rachaActual: u.rachaActual,
+        preguntasRespondidasTotales: u.preguntasRespondidasTotales,
+        preguntasCorrectasTotales: u.preguntasCorrectasTotales,
+        oposicion: activa?.oposicion ? { id: activa.oposicion.id, nombre: activa.oposicion.nombre } : null,
+        convocatoria: activa?.convocatoriaActiva ? { id: activa.convocatoriaActiva.id, anyo: (activa.convocatoriaActiva as any).anyo } : null,
+        puntos: activa?.puntos ?? 0,
+        nivel: activa?.nivel ?? 1,
+        totalOposiciones: u.usuarioOposiciones?.length ?? 0,
+      };
+    });
+  }
+
   async count(): Promise<number> {
     return this.repo.count();
   }
@@ -288,7 +391,16 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
   });};
 
   async desactivar(id: string): Promise<void> {
+    const u = await this.repo.findOne({ where: { id }, select: { id: true, rol: true } });
+    if (!u) throw new NotFoundException('Usuario no encontrado');
+    if (u.rol === 'admin') throw new BadRequestException('No se puede desactivar una cuenta de administrador');
     await this.repo.update(id, { activo: false });
+    invalidarCacheUsuario(id);
+  }
+
+  async reactivar(id: string): Promise<void> {
+    await this.repo.update(id, { activo: true });
+    invalidarCacheUsuario(id);
   }
 
 async actualizarNivel(usuarioId: string, oposicionId: string, nivel: number) {
@@ -424,7 +536,12 @@ async verificarLimiteFlashcards(
 
   async getEstadisticas(): Promise<any> {
     const total = await this.repo.count();
-    const conSuscripcion = await this.repo.count({ where: { suscripcion: Not(IsNull()) } });
+    // ⭐ Todos tienen plan (por defecto "gratuito"): "con suscripción" = de pago. Antes contaba
+    // a todos y la conversión salía siempre al 100 %.
+    const conSuscripcion = await this.repo.count({
+      where: { suscripcion: In([SuscripcionUsuario.ESENCIAL, SuscripcionUsuario.PROFESIONAL]) },
+    });
+    const desactivados = await this.repo.count({ where: { activo: false } });
 
     const porSuscripcion = await this.repo
       .createQueryBuilder('u')
@@ -468,10 +585,22 @@ async verificarLimiteFlashcards(
 
       
 
+    const activos7dias = await this.repo
+      .createQueryBuilder('u')
+      .where('u.ultimaActividad >= :fecha', { fecha: hace7dias })
+      .getCount();
+    const activos30dias = await this.repo
+      .createQueryBuilder('u')
+      .where('u.ultimaActividad >= :fecha', { fecha: hace30dias })
+      .getCount();
+
     return {
       total,
       conSuscripcion,
       sinSuscripcion: total - conSuscripcion,
+      desactivados,
+      activos7dias,
+      activos30dias,
       porSuscripcion,
       porNivel,
       nuevosHoy,

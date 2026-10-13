@@ -297,13 +297,93 @@ export class PsicotecnicoService {
   // Guardia mínima: solo preguntas activas, para no exponer preguntas
   // retiradas/deshabilitadas del banco. No se comprueba pertenencia a
   // oposición/convocatoria concreta (ver tradeoff en el informe de la tarea).
-  async getRespuestaCorrecta(preguntaId: string) {
+  async getRespuestaCorrecta(preguntaId: string, usuarioId?: string) {
     const pregunta = await this.preguntaRepo.findOne({ where: { id: preguntaId, activa: true } });
     if (!pregunta) {
       throw new BadRequestException('Pregunta no encontrada');
     }
+    // ⭐ Si la pregunta está en un duelo que el usuario aún no ha terminado, la solución
+    // solo se da al responderla dentro del duelo (POST reto/:id/responder).
+    if (usuarioId && (await this.estaEnDueloPendiente(preguntaId, usuarioId))) {
+      throw new ForbiddenException('Esta pregunta está en un duelo pendiente');
+    }
     const correctaTexto = pregunta.opciones?.[pregunta.correcta] ?? null;
     return { correctaTexto };
+  }
+
+  private async estaEnDueloPendiente(preguntaId: string, usuarioId: string): Promise<boolean> {
+    const filas = await this.retoPsicotecnicoRepo.query(
+      `SELECT r.id FROM retos_psicotecnicos r
+        WHERE r.estado IN ('activo', 'pendiente')
+          AND (r."fechaFin" IS NULL OR r."fechaFin" > NOW())
+          AND (r."retadorId" = $1 OR r."retadoId" = $1)
+          AND r.preguntas @> $2::jsonb
+          AND NOT EXISTS (
+            SELECT 1 FROM resultados_reto_psicotecnico x
+             WHERE x."retoPsicotecnicoId" = r.id AND x."usuarioId" = $1 AND x.completado = true
+          )
+        LIMIT 1`,
+      [usuarioId, JSON.stringify([{ id: preguntaId }])],
+    );
+    return filas.length > 0;
+  }
+
+  /**
+   * ⭐ Duelo psicotécnico: fija la respuesta a una pregunta y devuelve la solución.
+   * Una vez respondida no se puede cambiar (si se vuelve a enviar, se devuelve la fijada).
+   */
+  async responderPreguntaDuelo(
+    retoId: string,
+    usuarioId: string,
+    preguntaId: string,
+    respuestaTexto: string | null,
+    tiempoRespuesta: number,
+  ): Promise<{ correctaTexto: string | null; respuestaTexto: string | null; yaRespondida: boolean }> {
+    const reto = await this.retoPsicotecnicoRepo.findOne({
+      where: { id: retoId },
+      relations: ['retador', 'retado'],
+    });
+    if (!reto) throw new NotFoundException('Reto psicotécnico no encontrado');
+    const esParticipante = usuarioId === (reto.retador as any)?.id || usuarioId === (reto.retado as any)?.id;
+    if (!esParticipante) throw new ForbiddenException('No eres participante de este reto');
+    if (
+      reto.estado === EstadoRetoPsicotecnico.EXPIRADO ||
+      reto.estado === EstadoRetoPsicotecnico.COMPLETADO ||
+      (reto.fechaFin && new Date(reto.fechaFin) < new Date())
+    ) {
+      throw new BadRequestException('Este reto ya no se puede jugar');
+    }
+    const preguntaReto = (reto.preguntas ?? []).find((p) => p.id === preguntaId);
+    if (!preguntaReto) throw new BadRequestException('La pregunta no pertenece a este reto');
+    const texto = typeof respuestaTexto === 'string' && preguntaReto.opciones.includes(respuestaTexto) ? respuestaTexto : null;
+    const tiempo = Math.min(Math.max(0, Math.trunc(Number(tiempoRespuesta)) || 0), 30 * 60 * 1000);
+
+    const fijada = await this.resultadoRetoRepo.manager.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`retopsico:${retoId}:${usuarioId}`]);
+      let resultado = await manager.findOne(ResultadoRetoPsicotecnico, {
+        where: { retoPsicotecnico: { id: retoId } as any, usuario: { id: usuarioId } as any },
+      });
+      if (resultado?.completado) throw new BadRequestException('Ya completaste este reto');
+      if (!resultado) {
+        resultado = manager.create(ResultadoRetoPsicotecnico, {
+          retoPsicotecnico: { id: retoId } as any,
+          usuario: { id: usuarioId } as any,
+          completado: false,
+          parciales: {},
+        });
+      }
+      const parciales = { ...(resultado.parciales ?? {}) };
+      const previa = parciales[preguntaId];
+      if (previa) return { respuestaTexto: previa.respuestaTexto, yaRespondida: true };
+      parciales[preguntaId] = { respuestaTexto: texto, tiempoRespuesta: tiempo };
+      resultado.parciales = parciales;
+      await manager.save(resultado);
+      return { respuestaTexto: texto, yaRespondida: false };
+    });
+
+    const original = await this.preguntaRepo.findOne({ where: { id: preguntaId } });
+    const correctaTexto = original?.opciones?.[original.correcta] ?? null;
+    return { correctaTexto, ...fijada };
   }
 
   /* =========================================================
@@ -805,6 +885,18 @@ export class PsicotecnicoService {
     // significa lo mismo tras el recorte). Se compara por TEXTO, igual que
     // guardarResultado() en el flujo individual: `pregunta.opciones[pregunta.correcta]`
     // es estable frente a cualquier recorte/reordenado que haya visto el cliente.
+    // ⭐ Las preguntas ya respondidas durante el duelo cuentan con la respuesta fijada
+    // (se vio la solución al responderlas): no se aceptan cambios posteriores.
+    const enCurso = await this.resultadoRetoRepo.findOne({
+      where: { retoPsicotecnico: { id: retoId } as any, usuario: { id: usuarioId } as any, completado: false },
+    });
+    const fijadas = enCurso?.parciales ?? {};
+    respuestas = respuestas.map((r) =>
+      fijadas[r.preguntaId]
+        ? { ...r, respuestaTexto: fijadas[r.preguntaId].respuestaTexto as any, tiempoRespuesta: fijadas[r.preguntaId].tiempoRespuesta }
+        : r,
+    );
+
     const idsPreguntas = respuestas.map((r) => r.preguntaId);
     const preguntasOriginales = await this.preguntaRepo.find({ where: { id: In(idsPreguntas) } });
     const mapaOriginales = new Map(preguntasOriginales.map((p) => [p.id, p]));
@@ -842,15 +934,25 @@ export class PsicotecnicoService {
         await manager.increment(PreguntaPsicotecnica, { id: r.preguntaId }, 'vecesUsada', 1);
       }
 
+      const datos = {
+        completado: true,
+        aciertos,
+        fallos: respuestasCorregidas.length - aciertos,
+        tiempoTotal,
+        respuestas: respuestasCorregidas,
+      };
+      const pendiente = await manager.findOne(ResultadoRetoPsicotecnico, {
+        where: { retoPsicotecnico: { id: retoId } as any, usuario: { id: usuarioId } as any, completado: false },
+      });
+      if (pendiente) {
+        Object.assign(pendiente, datos);
+        return manager.save(pendiente);
+      }
       return manager.save(
         manager.create(ResultadoRetoPsicotecnico, {
           retoPsicotecnico: { id: retoId } as any,
           usuario: { id: usuarioId } as any,
-          completado: true,
-          aciertos,
-          fallos: respuestasCorregidas.length - aciertos,
-          tiempoTotal,
-          respuestas: respuestasCorregidas,
+          ...datos,
         }),
       );
     });
@@ -994,6 +1096,17 @@ export class PsicotecnicoService {
     if (vencidos.length > 0) {
       await this.retoPsicotecnicoRepo.update(vencidos.map((r) => r.id), { estado: EstadoRetoPsicotecnico.EXPIRADO });
       for (const r of vencidos) r.estado = EstadoRetoPsicotecnico.EXPIRADO;
+    }
+
+    // ⭐ Las respuestas corregidas del rival revelan las soluciones: fuera si aún no has terminado.
+    for (const r of retos) {
+      const yoTerminado = r.resultados?.some((x: any) => x.usuario?.id === usuarioId && x.completado);
+      for (const x of r.resultados ?? []) {
+        if ((x.usuario as any)?.id !== usuarioId) {
+          (x as any).parciales = undefined;
+          if (!yoTerminado) (x as any).respuestas = null;
+        }
+      }
     }
 
     return retos;

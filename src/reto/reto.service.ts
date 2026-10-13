@@ -150,7 +150,29 @@ async crearRetoUsuario(
       urlAccion: `/app/retos/${retoGuardado.id}`,
     });
 
+    // ⭐ El creador todavía no ha jugado: no se le devuelven las soluciones.
+    this.ocultarSoluciones(retoGuardado, retadorId, false);
     return retoGuardado;
+  }
+
+  /**
+   * ⭐ Quita lo que permitiría conocer las soluciones antes de jugar:
+   * `correcta` y `explicacion` de cada pregunta y las respuestas corregidas de los
+   * demás participantes (sus `respuestas` llevan si acertaron cada pregunta).
+   */
+  private ocultarSoluciones(reto: Reto | null | undefined, usuarioId: string, yaCompletado?: boolean): void {
+    if (!reto) return;
+    const completado =
+      yaCompletado ??
+      !!reto.participaciones?.find((p) => (p.usuario as any)?.id === usuarioId)?.completado;
+    if (completado) return;
+    reto.preguntas = (reto.preguntas ?? []).map((p: any) => {
+      const { correcta, explicacion, ...resto } = p ?? {};
+      return resto;
+    });
+    for (const p of reto.participaciones ?? []) {
+      if ((p.usuario as any)?.id !== usuarioId) (p as any).respuestas = null;
+    }
   }
 
   // ─── COMPLETAR RETO ──────────────────────────────────────
@@ -384,6 +406,8 @@ async completarReto(
     if (p.reto?.oposicion?.id) {
       await this.enriquecerNivelesParticipantes(p.reto, (p.reto.oposicion as any).id);
     }
+    // ⭐ Sin soluciones mientras no haya jugado
+    this.ocultarSoluciones(p.reto, usuarioId, p.completado);
   }
 
   return participaciones;
@@ -407,13 +431,8 @@ async completarReto(
       throw new ForbiddenException('No tienes acceso a este reto');
     }
 
-    // No exponer la respuesta correcta hasta que el usuario haya completado su participación.
-    if (!miParticipacion?.completado) {
-      reto.preguntas = (reto.preguntas ?? []).map((p: any) => {
-        const { correcta, ...resto } = p;
-        return resto;
-      });
-    }
+    // No exponer las soluciones hasta que el usuario haya completado su participación.
+    this.ocultarSoluciones(reto, usuarioId, !!miParticipacion?.completado);
 
     return this.enriquecerNivelesParticipantes(reto, (reto.oposicion as any).id);
   }
@@ -432,11 +451,17 @@ async completarReto(
       if (!esParticipante) throw new ForbiddenException('No tienes acceso a este reto');
     }
 
-    return this.participacionRepo.find({
+    const ranking = await this.participacionRepo.find({
       where: { reto: { id: retoId }, completado: true },
       relations: ['usuario'],
       order: { porcentaje: 'DESC', tiempoSegundos: 'ASC' },
     });
+    // ⭐ Las respuestas corregidas de otros revelan las soluciones si aún no has jugado
+    const yoCompletado = ranking.some((p) => (p.usuario as any)?.id === usuarioId);
+    if (!yoCompletado) {
+      for (const p of ranking) (p as any).respuestas = null;
+    }
+    return ranking;
   }
 
   // ─── HELPERS ─────────────────────────────────────────────

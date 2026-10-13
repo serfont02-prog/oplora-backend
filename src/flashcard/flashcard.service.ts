@@ -10,6 +10,7 @@ import { TipoNotificacion, PrioridadNotificacion } from '../notificacion/notific
 import { Usuario } from '../usuario/usuario.entity';
 import { ConfiguracionService } from '../config/configuracion.service';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { resetearConsumosSiEsNuevoDia } from '../common/helpers/consumo.helper';
 
 
 // ⭐ Tipos corregibles en servidor (respuesta true/false). Los de respuesta libre (hueco,
@@ -325,6 +326,9 @@ async registrarRespuesta(
     throw new BadRequestException('"calificacion" debe ser un número entre 0 y 5');
   }
 
+  // ⭐ Límite diario de flashcards del plan (antes solo se mostraba, no se aplicaba).
+  await this.comprobarLimiteFlashcards(usuarioId);
+
   let repaso = await this.repasoRepo.findOne({
     where: { usuario: { id: usuarioId }, flashcard: { id: flashcardId } },
   });
@@ -389,15 +393,51 @@ async registrarRespuesta(
   repaso.proximoRepaso = proximoRepaso;
 
   const repasoGuardado = await this.repasoRepo.save(repaso);
+  await this.usuarioRepo.increment({ id: usuarioId }, 'flashcardsHoy', 1);
 
- if (
+  if (
     repasoGuardado.estado === EstadoFC.DOMINADA &&
     estadoAnterior !== EstadoFC.DOMINADA
   ) {
-    await this.darPuntosPorDominar(usuarioId, flashcardId);
+    // Marca atómica: solo la primera vez que se domina esta tarjeta da puntos
+    const marcado = await this.repasoRepo
+      .createQueryBuilder()
+      .update(RepasoFC)
+      .set({ puntosDados: true })
+      .where('id = :id AND "puntosDados" = false', { id: repasoGuardado.id })
+      .execute();
+    if (marcado.affected) {
+      repasoGuardado.puntosDados = true;
+      await this.darPuntosPorDominar(usuarioId, flashcardId);
+    }
   }
 
   return repasoGuardado;
+}
+
+private async comprobarLimiteFlashcards(usuarioId: string): Promise<void> {
+  const usuario = await this.usuarioRepo.findOne({ where: { id: usuarioId } });
+  if (!usuario) throw new NotFoundException('Usuario no encontrado');
+  const fechaAntes = usuario.fechaResetConsumo;
+  resetearConsumosSiEsNuevoDia(usuario);
+  if (usuario.fechaResetConsumo !== fechaAntes) {
+    await this.usuarioRepo.update(usuarioId, {
+      preguntasTestHoy: usuario.preguntasTestHoy,
+      flashcardsHoy: usuario.flashcardsHoy,
+      temasRevisadosHoy: usuario.temasRevisadosHoy,
+      fechaResetConsumo: usuario.fechaResetConsumo,
+      rachaActual: usuario.rachaActual,
+      rachaMaxima: usuario.rachaMaxima,
+      ultimaActividad: usuario.ultimaActividad,
+    });
+  }
+  const limites = await this.configuracionService.getLimitesPlanes();
+  const limite = limites?.[usuario.suscripcion ?? 'gratuito']?.flashcardsDia;
+  if (typeof limite === 'number' && Number.isFinite(limite) && (usuario.flashcardsHoy ?? 0) >= limite) {
+    throw new ForbiddenException(
+      `Has llegado al límite de ${limite} flashcards al día de tu plan. Vuelve mañana o mejora tu plan para seguir repasando.`,
+    );
+  }
 }
 
 private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promise<void> {
@@ -629,6 +669,8 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
       urlAccion: `/app/retos/fc/${reto.id}`,
     });
 
+    // ⭐ El retador aún no ha jugado: sin soluciones en la respuesta.
+    reto.flashcards = (reto.flashcards ?? []).map((fc) => ({ ...fc, respuesta: undefined, explicacion: undefined }) as any);
     return reto;
   }
 
@@ -674,7 +716,7 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
       titulo: '📬 Te han enviado una flashcard',
       mensaje: mensaje ?? `Alguien te ha enviado una flashcard para repasar: "${fc.pregunta.slice(0, 60)}..."`,
       prioridad: PrioridadNotificacion.BAJA,
-      urlAccion: `/app/flashcards/${flashcardId}`,
+      urlAccion: '/app/flashcards', // ⭐ no existe página por tarjeta
       metadata: { flashcardId, remiteteId },
     });
   }
@@ -1030,6 +1072,10 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
       const completado = r.resultados?.some((x: any) => x.usuario?.id === usuarioId && x.completado);
       if (r.tipo === TipoRetoFC.DUELO && !completado) {
         r.flashcards = (r.flashcards ?? []).map((fc) => ({ ...fc, respuesta: undefined, explicacion: undefined }) as any);
+        // Las respuestas corregidas del rival también revelan las soluciones
+        for (const x of r.resultados ?? []) {
+          if ((x as any).usuario?.id !== usuarioId) (x as any).respuestas = null;
+        }
       }
     }
 

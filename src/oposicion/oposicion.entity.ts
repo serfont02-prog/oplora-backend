@@ -16,6 +16,7 @@ export enum SubgrupoEnum {
   A2 = 'A2',
   C1 = 'C1',
   C2 = 'C2',
+  E = 'E', // agrupaciones profesionales
 }
 
 export enum TurnoEnum {

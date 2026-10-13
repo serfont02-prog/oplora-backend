@@ -1168,7 +1168,10 @@ async importarPorVersionLey(
       continue;
     }
 
-    const articulo = articulos.find(a => a.numero === p.articuloNumero);
+    // ⭐ El panel manda el número como número si son solo cifras ("1" → 1) y en la BD es texto:
+    // se compara normalizado ("1", 1, "1 bis", "1 BIS") para no dar "artículo no encontrado".
+    const normNum = (v: any) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const articulo = articulos.find(a => normNum(a.numero) === normNum(p.articuloNumero));
 
     if (!articulo) {
       errores.push(`${etiqueta}: artículo no encontrado en esta versión de ley`);
@@ -1554,8 +1557,10 @@ async verificarLimiteTest(
   const limitesPlanes = await this.configuracionService.getLimitesPlanes();
   const limits = limitesPlanes[usuario.suscripcion ?? 'gratuito'];
 
-  if (tipoTest === 'simulacro' && !limits.simulacros) {
-    return { permitido: false, motivo: 'simulacro_bloqueado', limite: 0 };
+  if (tipoTest === 'simulacro') {
+    // ⭐ El simulacro lo controla el interruptor del plan, no el tope por test ni el diario
+    // (antes un simulacro de 100 preguntas quedaba bloqueado incluso en el plan Esencial).
+    return limits.simulacros ? { permitido: true } : { permitido: false, motivo: 'simulacro_bloqueado', limite: 0 };
   }
 
   const limitePorTest = tipoTest === 'tema'

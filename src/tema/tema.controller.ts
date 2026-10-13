@@ -77,8 +77,8 @@ corregirSimulacroGenerado(
 }
 
   @Get('examenes/:id/preguntas')
-  getPreguntasDeExamen(@Param('id') id: string) {
-    return this.service.getPreguntasDeExamen(id);
+  getPreguntasDeExamen(@Param('id') id: string, @Request() req: any) {
+    return this.service.getPreguntasDeExamen(id, req.user?.id, req.user?.rol);
   }
 
   @Get('convocatoria/:convocatoriaId/progreso-completo')

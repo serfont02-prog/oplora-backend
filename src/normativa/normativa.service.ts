@@ -364,13 +364,19 @@ async programarRepasoTema(usuarioId: string, temaId: string, fecha: Date): Promi
   await this.notaRepo.update(nota.id, { fechaRepaso: fecha });
 
   // Crear notificación programada
+  // ⭐ Enlace al tema concreto (antes /app/tema, que no existe)
+  const tema: any = await this.notaRepo.manager
+    .getRepository('Tema')
+    .findOne({ where: { id: temaId }, relations: ['convocatoria', 'convocatoria.oposicion'] })
+    .catch(() => null);
+  const oposicionId = tema?.convocatoria?.oposicion?.id;
   await this.notificacionService.crear({
     usuarioId,
     tipo: TipoNotificacion.RETO_DIARIO,
     titulo: '📅 Repaso programado',
-    mensaje: `Tienes programado repasar un tema hoy`,
+    mensaje: tema ? `Tienes programado repasar el tema ${tema.numero}: ${tema.titulo}` : `Tienes programado repasar un tema hoy`,
     prioridad: PrioridadNotificacion.MEDIA,
-    urlAccion: `/app/tema`,
+    urlAccion: oposicionId && tema?.numero != null ? `/app/tema/${oposicionId}/${tema.numero}` : '/app/dashboard',
   });
 }
 

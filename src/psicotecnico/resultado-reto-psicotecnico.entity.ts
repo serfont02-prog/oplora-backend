@@ -29,6 +29,12 @@ export class ResultadoRetoPsicotecnico {
   @Column({ type: 'jsonb', nullable: true })
   respuestas: { preguntaId: string; correcta: boolean; tiempoRespuesta: number }[];
 
+  // ⭐ Respuestas que ya se han dado durante el duelo (pregunta → respuesta). Al contestar
+  // cada pregunta se fija aquí y solo entonces se revela la solución; al terminar, cuenta
+  // lo fijado aquí, no lo que reenvíe el cliente.
+  @Column({ type: 'jsonb', nullable: true })
+  parciales: Record<string, { respuestaTexto: string | null; tiempoRespuesta: number }> | null;
+
   @CreateDateColumn()
   creadoEn: Date;
 

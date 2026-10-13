@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Tema } from './tema.entity';
@@ -577,7 +577,17 @@ async getExamenConPreguntas(id: string) {
   return { ...examen, totalPreguntas: preguntas.length };
 }
 
-async getPreguntasDeExamen(examenId: string) {
+/** ⭐ Simulacros (oficial y generado) solo en los planes que los incluyen; admin siempre. */
+private async exigirSimulacros(usuarioId: string, rol?: string) {
+  if (rol === 'admin') return;
+  const v = await this.testService.verificarLimiteTest(usuarioId, 1, 'simulacro');
+  if (!v.permitido) {
+    throw new ForbiddenException(JSON.stringify({ motivo: v.motivo ?? 'simulacro_bloqueado', limite: 0 }));
+  }
+}
+
+async getPreguntasDeExamen(examenId: string, usuarioId?: string, rol?: string) {
+  if (usuarioId) await this.exigirSimulacros(usuarioId, rol);
   const examen = await this.examenRepo.findOne({
     where: { id: examenId },
     relations: ['convocatoria'],

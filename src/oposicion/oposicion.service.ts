@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Oposicion } from './oposicion.entity';
@@ -45,6 +46,14 @@ export class OposicionService {
     }
 
   async eliminar(id: string): Promise<void> {
+  // ⭐ Borrar una oposición con alumnos inscritos borraba en cascada sus inscripciones
+  // (puntos, nivel, convocatoria elegida). Se impide: mejor desactivarla.
+  const inscritos = await this.repo.manager.count(UsuarioOposicion, { where: { oposicion: { id } as any } });
+  if (inscritos > 0) {
+    throw new BadRequestException(
+      `No se puede borrar: tiene ${inscritos} usuario(s) inscrito(s). Desactívala para ocultarla sin perder sus datos.`,
+    );
+  }
   const convocatorias = await this.convocatoriaRepo.find({
     where: { oposicion: { id } },
   });

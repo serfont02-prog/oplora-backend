@@ -62,8 +62,8 @@ export class PsicotecnicoController {
 
   @Get('preguntas/:id/correcta')
   @UseGuards(JwtAuthGuard)
-  getRespuestaCorrecta(@Param('id') id: string) {
-    return this.service.getRespuestaCorrecta(id);
+  getRespuestaCorrecta(@Param('id') id: string, @Request() req: any) {
+    return this.service.getRespuestaCorrecta(id, req.user.id);
   }
 
   @Get('progreso-periodo/:oposicionId')
@@ -104,6 +104,19 @@ export class PsicotecnicoController {
   @UseGuards(JwtAuthGuard)
   eliminarDuelo(@Param('id') id: string, @Request() req: any) {
     return this.service.eliminarDueloPsicotecnico(id, req.user.id);
+  }
+
+  // ⭐ Duelo: fija la respuesta de una pregunta y devuelve su solución
+  @Post('reto/:id/responder')
+  @UseGuards(JwtAuthGuard)
+  responderPreguntaDuelo(
+    @Param('id') id: string,
+    @Body('preguntaId') preguntaId: string,
+    @Body('respuestaTexto') respuestaTexto: string | null,
+    @Body('tiempoRespuesta') tiempoRespuesta: number,
+    @Request() req: any,
+  ) {
+    return this.service.responderPreguntaDuelo(id, req.user.id, preguntaId, respuestaTexto, tiempoRespuesta);
   }
 
   @Post('reto/:id/completar')

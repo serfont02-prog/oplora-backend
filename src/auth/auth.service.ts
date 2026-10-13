@@ -46,6 +46,11 @@ export class AuthService {
       throw new UnauthorizedException(credencialesInvalidas);
     }
 
+    // ⭐ Antes un usuario desactivado podía seguir iniciando sesión
+    if (usuario.activo === false) {
+      throw new UnauthorizedException('Tu cuenta está desactivada. Escríbenos a soporte si crees que es un error.');
+    }
+
     const token = this.generarToken(usuario);
 
     return {
