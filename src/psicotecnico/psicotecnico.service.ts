@@ -446,6 +446,19 @@ export class PsicotecnicoService {
     const totalPreguntas = datos.respuestas.length;
     const porcentaje = totalPreguntas > 0 ? Math.round((correctas / totalPreguntas) * 100) : 0;
 
+    // ⭐ La mejor marca anterior se busca ANTES de guardar (antes se buscaba después e incluía el
+    // propio intento, así que casi siempre salía "Nueva mejor marca"), y solo en esta oposición.
+    const mejorAnterior = await this.resultadoRepo.findOne({
+      where: {
+        usuario: { id: datos.usuarioId } as any,
+        tipo: datos.tipo,
+        ...(datos.oposicionId ? { oposicion: { id: datos.oposicionId } as any } : {}),
+      },
+      order: { porcentaje: 'DESC' },
+    });
+    // El primer intento no cuenta como "mejor marca"; después, solo si supera la anterior.
+    const esMejorMarca = !!mejorAnterior && porcentaje > mejorAnterior.porcentaje;
+
     const resultado = await this.resultadoRepo.save(
       this.resultadoRepo.create({
         tipo: datos.tipo,
@@ -460,12 +473,6 @@ export class PsicotecnicoService {
         oposicion: datos.oposicionId ? ({ id: datos.oposicionId } as any) : null,
       }),
     );
-
-    const mejorAnterior = await this.resultadoRepo.findOne({
-      where: { usuario: { id: datos.usuarioId } as any, tipo: datos.tipo },
-      order: { porcentaje: 'DESC' },
-    });
-    const esMejorMarca = !mejorAnterior || porcentaje >= mejorAnterior.porcentaje;
 
     return { resultado, correctas, totalPreguntas, porcentaje, esMejorMarca };
   }

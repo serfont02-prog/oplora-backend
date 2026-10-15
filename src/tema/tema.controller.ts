@@ -61,7 +61,7 @@ generarSimulacroOplora(
   @Param('ejercicioNumero') ejercicioNumero: string,
   @Request() req: any,
 ) {
-  return this.service.generarSimulacroOplora(req.user.id, oposicionId, Number(ejercicioNumero));
+  return this.service.generarSimulacroOplora(req.user.id, oposicionId, Number(ejercicioNumero), req.user?.rol);
 }
 
 @Post('simulacro-oplora/:oposicionId/corregir')
@@ -135,7 +135,7 @@ getProgresoCompletoConvocatoria(
     @Body('respuestas') respuestas: any[],
     @Request() req: any,
   ) {
-    return this.service.corregirSimulacro(req.user.id, id, respuestas);
+    return this.service.corregirSimulacro(req.user.id, id, respuestas, req.user?.rol);
   }
 
   @Delete('examenes/:id')

@@ -594,8 +594,10 @@ async getPreguntasDeExamen(examenId: string, usuarioId?: string, rol?: string) {
   });
   if (!examen) throw new NotFoundException('Examen no encontrado');
 
+  // ⭐ Mismo orden en que se importaron (antes salían en un orden distinto cada vez).
   const preguntas = await this.preguntaTestRepo.find({
     where: { examenAnterior: { id: examenId } as any },
+    order: { creadoEn: 'ASC' } as any,
   });
 
   return {
@@ -698,10 +700,14 @@ async corregirSimulacroGenerado(
     nota: Math.round(notaSobreDiez * 100) / 100,
     notaMinima,
     aprobarias,
+    // ⭐ Para revisar el examen al terminar (índices en el orden en que se sirvieron).
+    revision: detalle.map((d) => ({ ...d, explicacion: preguntas.find((p) => p.id === d.preguntaId)?.explicacion ?? null })),
   };
 }
 
-async generarSimulacroOplora(usuarioId: string, oposicionId: string, ejercicioNumero: number) {
+async generarSimulacroOplora(usuarioId: string, oposicionId: string, ejercicioNumero: number, rol?: string) {
+  // ⭐ Antes el simulacro OPLORA no comprobaba el plan: se podía hacer desde el plan gratuito.
+  await this.exigirSimulacros(usuarioId, rol);
   const uo = await this.usuarioOposicionRepo.findOne({
     where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
     relations: ['convocatoriaActiva'],
@@ -749,7 +755,9 @@ async generarSimulacroOplora(usuarioId: string, oposicionId: string, ejercicioNu
   };
 }
 
-async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { preguntaId: string; opcionElegida: number | null }[]) {
+async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { preguntaId: string; opcionElegida: number | null }[], rol?: string) {
+  // ⭐ Misma comprobación de plan que al pedir las preguntas.
+  await this.exigirSimulacros(usuarioId, rol);
   // ⭐ Se carga también la oposición de la convocatoria: antes no venía y el resultado
   // se guardaba con oposición vacía, así que el simulacro no aparecía en el progreso.
   const examen = await this.examenRepo.findOne({
@@ -761,6 +769,7 @@ async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { pregu
 
   const preguntas = await this.preguntaTestRepo.find({
     where: { examenAnterior: { id: examenId } as any },
+    order: { creadoEn: 'ASC' } as any,
   });
 
   const fraccion = parseFraccion(examen.convocatoria.fraccionPenalizacion);
@@ -824,6 +833,7 @@ async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { pregu
     nota: Math.round(notaSobreDiez * 100) / 100,
     notaMinima,
     aprobarias,
+    revision: detalle.map((d) => ({ ...d, explicacion: preguntas.find((p) => p.id === d.preguntaId)?.explicacion ?? null })),
   };
 }
 

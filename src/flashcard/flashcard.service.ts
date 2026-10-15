@@ -769,15 +769,14 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
   const inicioMes = new Date(ahora); inicioMes.setDate(ahora.getDate() - 30);
 
   // Todos los repasos del usuario para flashcards de esa oposición
+  const subPeriodo = this.flashcardsDeOposicionQB(oposicionId, 'pfc').select('pfc.id');
   const repasos = await this.repasoRepo
     .createQueryBuilder('r')
-    .leftJoin('r.flashcard', 'fc')
-    .leftJoin('fc.tema', 'tema')
-    .leftJoin('tema.convocatoria', 'conv')
-    .leftJoin('conv.oposicion', 'op')
-    .leftJoin('fc.oposicion', 'fcOp')
-    .where('r.usuario = :usuarioId', { usuarioId })
-    .andWhere('(op.id = :oposicionId OR fcOp.id = :oposicionId)', { oposicionId })
+    .where('r."usuarioId" = :usuarioId', { usuarioId })
+    // ⭐ Mismo conjunto de flashcards que las estadísticas generales (antes quedaban fuera las
+    // de artículos de ley).
+    .andWhere(`r."flashcardId" IN (${subPeriodo.getQuery()})`)
+    .setParameters(subPeriodo.getParameters())
     .getMany();
 
   const calcular = (desde: Date | null) => {
@@ -1084,42 +1083,55 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
 
   // ─── STATS ───────────────────────────────────────────────
 
+  /**
+   * Flashcards activas de una oposición (por oposición directa, por tema de una de sus
+   * convocatorias o por artículo de una de sus leyes, también vía Sección). Se usa para el
+   * total y como subconsulta para contar solo los repasos de ESA oposición.
+   */
+  private flashcardsDeOposicionQB(oposicionId: string, alias = 'fc') {
+    const a = alias;
+    return this.fcRepo
+      .createQueryBuilder(a)
+      .leftJoin(`${a}.articulo`, `${a}_art`)
+      .leftJoin(`${a}_art.capitulo`, `${a}_cap`)
+      .leftJoin(`${a}_cap.tituloRef`, `${a}_tit`)
+      .leftJoin(`${a}_tit.versionLey`, `${a}_vl`)
+      .leftJoin(`${a}_vl.oposicionLeyes`, `${a}_ol`)
+      .leftJoin(`${a}_art.seccion`, `${a}_secc`)
+      .leftJoin(`${a}_secc.capitulo`, `${a}_capS`)
+      .leftJoin(`${a}_capS.tituloRef`, `${a}_titS`)
+      .leftJoin(`${a}_titS.versionLey`, `${a}_vlS`)
+      .leftJoin(`${a}_vlS.oposicionLeyes`, `${a}_olS`)
+      .leftJoin(`${a}.tema`, `${a}_tema`)
+      .leftJoin(`${a}.oposicion`, `${a}_opo`)
+      .where(`${a}.activa = true`)
+      .andWhere(
+        `(${a}_opo.id = :fcOpoId OR EXISTS (SELECT 1 FROM convocatorias conv JOIN oposiciones op ON op.id = conv."oposicionId" WHERE conv.id = ${a}_tema."convocatoriaId" AND op.id = :fcOpoId) OR ${a}_ol.oposicion = :fcOpoId OR ${a}_olS.oposicion = :fcOpoId)`,
+        { fcOpoId: oposicionId },
+      );
+  }
+
   async getEstadisticasFC(usuarioId: string, oposicionId: string): Promise<any> {
-  // ⭐ Igual que en getPendientesRepaso, se añade el camino "vía sección"
-  // (art.seccion→capitulo→tituloRef→versionLey) para no dejar fuera del total las flashcards
-  // de artículos colgados de una Sección.
-  const total = await this.fcRepo
-    .createQueryBuilder('fc')
-    .leftJoin('fc.articulo', 'art')
-    .leftJoin('art.capitulo', 'cap')
-    .leftJoin('cap.tituloRef', 'tit')
-    .leftJoin('tit.versionLey', 'vl')
-    .leftJoin('vl.oposicionLeyes', 'ol')
-    .leftJoin('art.seccion', 'secc')
-    .leftJoin('secc.capitulo', 'capViaSecc')
-    .leftJoin('capViaSecc.tituloRef', 'titViaSecc')
-    .leftJoin('titViaSecc.versionLey', 'vlViaSecc')
-    .leftJoin('vlViaSecc.oposicionLeyes', 'olViaSecc')
-    .leftJoin('fc.tema', 'tema')
-    .leftJoin('fc.oposicion', 'opo')
-    .where('fc.activa = true')
-    .andWhere(
-      '(opo.id = :oposicionId OR EXISTS (SELECT 1 FROM convocatorias conv JOIN oposiciones op ON op.id = conv."oposicionId" WHERE conv.id = tema."convocatoriaId" AND op.id = :oposicionId) OR ol.oposicion = :oposicionId OR olViaSecc.oposicion = :oposicionId)',
-      { oposicionId }
-    )
-    .getCount();
+  const total = await this.flashcardsDeOposicionQB(oposicionId).getCount();
 
-  const dominadas = await this.repasoRepo.count({
-    where: { usuario: { id: usuarioId }, estado: EstadoFC.DOMINADA },
-  });
+  // ⭐ Antes se contaban las dominadas/dudosas de TODAS las oposiciones del usuario y el total
+  // solo de la activa (salían porcentajes de más del 100%). Ahora solo cuentan los repasos de
+  // flashcards de esta oposición.
+  const sub = this.flashcardsDeOposicionQB(oposicionId, 'sfc').select('sfc.id');
+  const filas: { estado: EstadoFC; n: string }[] = await this.repasoRepo
+    .createQueryBuilder('r')
+    .select('r.estado', 'estado')
+    .addSelect('COUNT(*)', 'n')
+    .where('r."usuarioId" = :usuarioId', { usuarioId })
+    .andWhere(`r."flashcardId" IN (${sub.getQuery()})`)
+    .setParameters(sub.getParameters())
+    .groupBy('r.estado')
+    .getRawMany();
 
-  const dudosas = await this.repasoRepo.count({
-    where: { usuario: { id: usuarioId }, estado: EstadoFC.DUDOSA },
-  });
-
-  const noDominadas = await this.repasoRepo.count({
-    where: { usuario: { id: usuarioId }, estado: EstadoFC.NO_DOMINADA },
-  });
+  const contar = (e: EstadoFC) => Number(filas.find((f) => f.estado === e)?.n ?? 0);
+  const dominadas = contar(EstadoFC.DOMINADA);
+  const dudosas = contar(EstadoFC.DUDOSA);
+  const noDominadas = contar(EstadoFC.NO_DOMINADA);
 
   return {
     total,
