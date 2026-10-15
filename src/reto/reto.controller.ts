@@ -60,6 +60,12 @@ crearRetoUsuario(
     return this.service.completarReto(id, req.user.id, respuestas, tiempoSegundos);
   }
 
+  // ⭐ Contador de retos por jugar (Inicio)
+  @Get('pendientes')
+  getPendientes(@Request() req: any) {
+    return this.service.contarPendientes(req.user.id);
+  }
+
   @Get('mis-retos')
   getMisRetos(@Request() req: any) {
     return this.service.getMisRetos(req.user.id);

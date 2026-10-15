@@ -361,6 +361,43 @@ async completarReto(
 
   // ─── CONSULTAS ───────────────────────────────────────────
 
+  /**
+   * ⭐ Retos que el usuario tiene por jugar (test, flashcards y psicotécnicos), para el
+   * contador del Inicio. Cuenta los activos, no caducados y que aún no ha completado.
+   */
+  async contarPendientes(usuarioId: string): Promise<{ total: number; test: number; fc: number; psico: number }> {
+    const [[t], [f], [p]] = await Promise.all([
+      this.retoRepo.query(
+        `SELECT COUNT(*)::int AS n FROM participaciones_reto pr
+           JOIN retos r ON r.id = pr."retoId"
+          WHERE pr."usuarioId" = $1 AND pr.completado = false
+            AND r.estado IN ('activo', 'pendiente')
+            AND (r."fechaFin" IS NULL OR r."fechaFin" > NOW())`,
+        [usuarioId],
+      ),
+      this.retoRepo.query(
+        `SELECT COUNT(*)::int AS n FROM retos_fc r
+          WHERE (r."retadorId" = $1 OR r."retadoId" = $1)
+            AND r.estado IN ('activo', 'pendiente')
+            AND (r."fechaFin" IS NULL OR r."fechaFin" > NOW())
+            AND NOT EXISTS (SELECT 1 FROM resultados_reto_fc x
+                             WHERE x."retoFcId" = r.id AND x."usuarioId" = $1 AND x.completado = true)`,
+        [usuarioId],
+      ),
+      this.retoRepo.query(
+        `SELECT COUNT(*)::int AS n FROM retos_psicotecnicos r
+          WHERE (r."retadorId" = $1 OR r."retadoId" = $1)
+            AND r.estado IN ('activo', 'pendiente')
+            AND (r."fechaFin" IS NULL OR r."fechaFin" > NOW())
+            AND NOT EXISTS (SELECT 1 FROM resultados_reto_psicotecnico x
+                             WHERE x."retoPsicotecnicoId" = r.id AND x."usuarioId" = $1 AND x.completado = true)`,
+        [usuarioId],
+      ),
+    ]);
+    const test = Number(t?.n ?? 0), fc = Number(f?.n ?? 0), psico = Number(p?.n ?? 0);
+    return { total: test + fc + psico, test, fc, psico };
+  }
+
   async getMisRetos(usuarioId: string): Promise<ParticipacionReto[]> {
   const participaciones = await this.participacionRepo.find({
     where: { usuario: { id: usuarioId } },

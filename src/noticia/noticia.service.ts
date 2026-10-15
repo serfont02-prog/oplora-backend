@@ -265,6 +265,33 @@ export class NoticiaService {
     return qb.getMany();
   }
 
+  /**
+   * ⭐ Novedades para el Inicio: cuántas noticias no ha visto el usuario (últimos 30 días) y la
+   * más reciente sin ver si tiene menos de 2 días. "Visto" = posterior a usuarios.noticiasVistasHasta.
+   */
+  async novedades(usuarioId: string, filtros: FiltrosFeedNoticia = {}): Promise<{ noLeidas: number; ultima: Noticia | null }> {
+    const filas: { noticiasVistasHasta: Date | null }[] = await this.noticiaRepo.query(
+      `SELECT "noticiasVistasHasta" FROM usuarios WHERE id = $1`,
+      [usuarioId],
+    );
+    const vistasHasta = filas[0]?.noticiasVistasHasta ? new Date(filas[0].noticiasVistasHasta).getTime() : 0;
+    const ahora = Date.now();
+    const hace30 = ahora - 30 * 86400000;
+    const hace2 = ahora - 2 * 86400000;
+    const feed = await this.getFeed({ ...filtros, limite: 60 });
+    const fecha = (n: Noticia) => new Date(n.fechaPublicacion ?? n.creadoEn).getTime();
+    const nuevas = feed
+      .filter((n) => fecha(n) > vistasHasta && fecha(n) >= hace30)
+      .sort((a, b) => fecha(b) - fecha(a));
+    const ultima = nuevas.find((n) => fecha(n) >= hace2) ?? null;
+    return { noLeidas: nuevas.length, ultima };
+  }
+
+  async marcarVistas(usuarioId: string): Promise<{ ok: true }> {
+    await this.noticiaRepo.query(`UPDATE usuarios SET "noticiasVistasHasta" = NOW() WHERE id = $1`, [usuarioId]);
+    return { ok: true };
+  }
+
   // ─── GENERACIÓN AUTOMÁTICA: OFICIALES ────────────────────────
 
   async generarNoticiaOficialDesdeDocumento(documento: DocumentoConvocatoria): Promise<Noticia | null> {

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Request } from '@nestjs/common';
 import { NoticiaService } from './noticia.service';
 import { CreateNoticiaDto, UpdateNoticiaDto } from './noticia.dto';
 import { TipoNoticia } from './noticia.entity';
@@ -27,6 +27,24 @@ export class NoticiaController {
       tipos: tipos ? (tipos.split(',').filter(Boolean) as TipoNoticia[]) : undefined,
       limite: limite ? Number(limite) : undefined,
     });
+  }
+
+  // ─── NOVEDADES DEL USUARIO (Inicio) ────────────────────────
+
+  @Get('novedades')
+  @UseGuards(JwtAuthGuard)
+  novedades(
+    @Request() req: any,
+    @Query('convocatoriaId') convocatoriaId?: string,
+    @Query('oposicionId') oposicionId?: string,
+  ) {
+    return this.service.novedades(req.user.id, { convocatoriaId, oposicionId });
+  }
+
+  @Post('marcar-vistas')
+  @UseGuards(JwtAuthGuard)
+  marcarVistas(@Request() req: any) {
+    return this.service.marcarVistas(req.user.id);
   }
 
   // ─── ADMIN ─────────────────────────────────────────────────

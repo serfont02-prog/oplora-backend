@@ -46,6 +46,7 @@ const CAMPOS_PRIVADOS_DE_OTROS = new Set([
   'estado',
   'activo',
   'onboardingGeneralCompletado',
+  'noticiasVistasHasta',
 ]);
 
 // Un objeto "parece un Usuario" si tiene id y email (las relaciones a Usuario

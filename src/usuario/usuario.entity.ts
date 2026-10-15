@@ -137,6 +137,10 @@ export class Usuario {
 
   // ⭐ Liga Oplora: copa que se muestra sobre el avatar (la mejor y cuántas veces).
   // Se recalcula al repartir copas; es un dato público del perfil.
+  // ⭐ Hasta cuándo ha visto las noticias (Inicio: la última noticia se muestra mientras sea nueva)
+  @Column({ type: 'timestamp', nullable: true })
+  noticiasVistasHasta: Date | null;
+
   @Column({ type: 'jsonb', nullable: true })
   copaLiga: { color: string; veces: number; total: number } | null;
 
