@@ -97,10 +97,16 @@ guardarNotaTema(
 @Post('nota-tema/:temaId/programar')
 programarRepaso(
   @Param('temaId') temaId: string,
-  @Body('fecha') fecha: string,
+  @Body('fecha') fecha: string | null,
   @Request() req: any,
 ) {
-  return this.normativaService.programarRepasoTema(req.user.id, temaId, new Date(fecha));
+  // fecha "YYYY-MM-DD" para programar, o null para quitar el repaso (también al marcarlo hecho)
+  return this.normativaService.programarRepasoTema(req.user.id, temaId, fecha || null);
+}
+
+@Get('repasos-pendientes')
+getRepasosPendientes(@Query('oposicionId') oposicionId: string, @Request() req: any) {
+  return this.normativaService.getRepasosPendientes(req.user.id, oposicionId);
 }
 
 @Post('nota/:articuloId')

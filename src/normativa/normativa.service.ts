@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Articulo } from './articulo.entity';
@@ -14,8 +15,34 @@ import { SubrayadoArticulo } from './subrayado-articulo.entity';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { TipoNotificacion, PrioridadNotificacion } from '../notificacion/notificacion.entity';
 
+const TZ_REPASOS = 'Europe/Madrid';
+
+/** "2026-10-16" del día de hoy en Madrid */
+function hoyMadrid(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ_REPASOS, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
+/** Inicio (00:00 UTC) del día "YYYY-MM-DD" desplazado `dias` días */
+function inicioDiaUTC(ymd: string, dias = 0): Date {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + dias));
+}
+
+/**
+ * Normaliza la fecha de repaso a las 12:00 UTC del día elegido, para que el día no cambie por la
+ * zona horaria (antes "2026-10-20" se guardaba a medianoche UTC y en algunos casos se leía como el
+ * día anterior).
+ */
+function normalizarFechaRepaso(fecha: string | Date): Date {
+  const s = typeof fecha === 'string' ? fecha : fecha.toISOString();
+  const ymd = s.slice(0, 10);
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12));
+}
+
 @Injectable()
 export class NormativaService {
+  private readonly logger = new Logger('NormativaService');
   constructor(
     @InjectRepository(Articulo)
     private readonly articuloRepo: Repository<Articulo>,
@@ -348,10 +375,16 @@ async guardarNotaTema(usuarioId: string, temaId: string, contenido: string): Pro
   }));
 }
 
-async programarRepasoTema(usuarioId: string, temaId: string, fecha: Date): Promise<void> {
+async programarRepasoTema(usuarioId: string, temaId: string, fecha: string | null): Promise<{ fechaRepaso: Date | null }> {
   let nota = await this.notaRepo.findOne({
     where: { usuario: { id: usuarioId }, tema: { id: temaId } } as any,
   });
+
+  // ⭐ fecha = null → quitar el repaso (antes "Eliminar" solo lo borraba de la pantalla)
+  if (!fecha) {
+    if (nota) await this.notaRepo.update(nota.id, { fechaRepaso: null as any });
+    return { fechaRepaso: null };
+  }
 
   if (!nota) {
     nota = await this.notaRepo.save(this.notaRepo.create({
@@ -361,23 +394,88 @@ async programarRepasoTema(usuarioId: string, temaId: string, fecha: Date): Promi
     }));
   }
 
-  await this.notaRepo.update(nota.id, { fechaRepaso: fecha });
+  const fechaRepaso = normalizarFechaRepaso(fecha);
+  await this.notaRepo.update(nota.id, { fechaRepaso });
+  // ⭐ Antes se creaba aquí mismo la notificación "Tienes programado repasar…", así que llegaba el
+  // día en que se programaba y no el día del repaso. Ahora la envía avisarRepasosDelDia().
+  return { fechaRepaso };
+}
 
-  // Crear notificación programada
-  // ⭐ Enlace al tema concreto (antes /app/tema, que no existe)
-  const tema: any = await this.notaRepo.manager
-    .getRepository('Tema')
-    .findOne({ where: { id: temaId }, relations: ['convocatoria', 'convocatoria.oposicion'] })
-    .catch(() => null);
-  const oposicionId = tema?.convocatoria?.oposicion?.id;
-  await this.notificacionService.crear({
-    usuarioId,
-    tipo: TipoNotificacion.RETO_DIARIO,
-    titulo: '📅 Repaso programado',
-    mensaje: tema ? `Tienes programado repasar el tema ${tema.numero}: ${tema.titulo}` : `Tienes programado repasar un tema hoy`,
-    prioridad: PrioridadNotificacion.MEDIA,
-    urlAccion: oposicionId && tema?.numero != null ? `/app/tema/${oposicionId}/${tema.numero}` : '/app/dashboard',
-  });
+/**
+ * Repasos de temas que tocan hoy (o que se quedaron sin hacer en los últimos 7 días) para el
+ * widget de Inicio. Solo los temas de la oposición indicada.
+ */
+async getRepasosPendientes(usuarioId: string, oposicionId?: string): Promise<any[]> {
+  const hoy = hoyMadrid();
+  const desde = inicioDiaUTC(hoy, -7);
+  const hasta = inicioDiaUTC(hoy, 1);
+  const qb = this.notaRepo
+    .createQueryBuilder('n')
+    .innerJoinAndSelect('n.tema', 't')
+    .leftJoinAndSelect('t.convocatoria', 'c')
+    .leftJoinAndSelect('c.oposicion', 'o')
+    .where('n.usuario = :usuarioId', { usuarioId })
+    .andWhere('n.fechaRepaso >= :desde', { desde })
+    .andWhere('n.fechaRepaso < :hasta', { hasta })
+    .orderBy('n.fechaRepaso', 'ASC')
+    .addOrderBy('t.numero', 'ASC');
+  if (oposicionId) qb.andWhere('o.id = :oposicionId', { oposicionId });
+  const notas = await qb.getMany();
+  const inicioHoy = inicioDiaUTC(hoy).getTime();
+  return notas.map((n: any) => ({
+    temaId: n.tema.id,
+    numero: n.tema.numero,
+    titulo: n.tema.titulo,
+    oposicionId: n.tema.convocatoria?.oposicion?.id ?? null,
+    fechaRepaso: n.fechaRepaso,
+    atrasado: new Date(n.fechaRepaso).getTime() < inicioHoy,
+  }));
+}
+
+/**
+ * ⭐ Cada día a las 8:00 (Madrid) avisa de los repasos de temas de ese día. Un solo aviso por
+ * usuario aunque tenga varios repasos, para no llenarle de notificaciones.
+ */
+@Cron('0 8 * * *', { timeZone: TZ_REPASOS })
+async avisarRepasosDelDia(): Promise<void> {
+  try {
+    const hoy = hoyMadrid();
+    const notas: any[] = await this.notaRepo
+      .createQueryBuilder('n')
+      .innerJoinAndSelect('n.tema', 't')
+      .leftJoinAndSelect('t.convocatoria', 'c')
+      .leftJoinAndSelect('c.oposicion', 'o')
+      .innerJoinAndSelect('n.usuario', 'u')
+      .where('n.fechaRepaso >= :desde', { desde: inicioDiaUTC(hoy) })
+      .andWhere('n.fechaRepaso < :hasta', { hasta: inicioDiaUTC(hoy, 1) })
+      .getMany();
+
+    const porUsuario = new Map<string, any[]>();
+    for (const n of notas) {
+      const lista = porUsuario.get(n.usuario.id) ?? [];
+      lista.push(n);
+      porUsuario.set(n.usuario.id, lista);
+    }
+
+    for (const [usuarioId, lista] of porUsuario) {
+      const primero = lista[0];
+      const opo = primero.tema?.convocatoria?.oposicion?.id;
+      const uno = lista.length === 1;
+      await this.notificacionService.crear({
+        usuarioId,
+        tipo: TipoNotificacion.RETO_DIARIO,
+        titulo: uno ? 'Hoy toca repasar un tema' : `Hoy tienes ${lista.length} repasos programados`,
+        mensaje: uno
+          ? `Tema ${primero.tema.numero}: ${primero.tema.titulo}`
+          : lista.slice(0, 3).map((n) => `Tema ${n.tema.numero}`).join(', ') + (lista.length > 3 ? ` y ${lista.length - 3} más` : ''),
+        prioridad: PrioridadNotificacion.MEDIA,
+        urlAccion: uno && opo ? `/app/tema/${opo}/${primero.tema.numero}` : '/app/dashboard',
+      }).catch((e) => this.logger.warn(`Aviso de repaso a ${usuarioId}: ${e?.message}`));
+    }
+    if (porUsuario.size) this.logger.log(`Avisos de repaso enviados a ${porUsuario.size} usuarios`);
+  } catch (e: any) {
+    this.logger.error(`avisarRepasosDelDia: ${e?.message}`);
+  }
 }
 
 async getRepasosProgramados(usuarioId: string): Promise<any[]> {
