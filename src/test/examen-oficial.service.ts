@@ -47,6 +47,7 @@ export interface FilaInforme {
   estado: EstadoPregunta;
   avisos: string[];
   error: string | null;
+  reutilizada?: boolean; // ya estaba en el banco (sin examen): se vincula a este examen, no se duplica
 }
 
 export interface InformeExamen {
@@ -57,6 +58,7 @@ export interface InformeExamen {
   noVigentes: number;
   conError: number;
   conAvisos: number;
+  reutilizadas: number;
   temario: { convocatoriaId: string; anyo: number } | null;
   filas: FilaInforme[];
 }
@@ -66,6 +68,7 @@ interface PreguntaResuelta {
   temaId: string | null;
   articuloId: string | null;
   estado: EstadoPregunta;
+  reutilizarId: string | null; // pregunta del banco que se vincula al examen en lugar de crear otra
 }
 
 interface LeyOposicion {
@@ -294,14 +297,27 @@ export class ExamenOficialService {
     const resueltas: PreguntaResuelta[] = [];
     const vistos = new Set<string>();
 
-    // Enunciados que ya existen en el banco (fuera de este examen) → no se duplican en los tests
+    // ⭐ Preguntas que ya existen en el banco con el mismo enunciado.
+    //  - Si una no pertenece a ningún examen y tiene las mismas opciones y respuesta (p. ej. tras
+    //    borrar el examen y volver a crearlo), se REUTILIZA: se vincula a este examen.
+    //  - Si pertenece a otro examen o difiere, se crea otra fila solo para el simulacro,
+    //    sin clasificar, para no duplicarla en los tests.
     const enunciados = preguntas
       .map((p) => (typeof p?.enunciado === 'string' ? p.enunciado.trim() : ''))
       .filter(Boolean);
     const existentes = enunciados.length
-      ? await this.preguntaRepo.find({ where: { enunciado: In(enunciados) }, select: ['id', 'enunciado'] })
+      ? await this.preguntaRepo.find({
+          where: { enunciado: In(enunciados) },
+          relations: ['examenAnterior', 'temas', 'articulos'],
+        })
       : [];
-    const enBanco = new Set(existentes.map((e) => e.enunciado.trim()));
+    const porEnunciado = new Map<string, PreguntaTest[]>();
+    for (const e of existentes) {
+      const k = e.enunciado.trim();
+      porEnunciado.set(k, [...(porEnunciado.get(k) ?? []), e]);
+    }
+    const normOps = (ops: any) => JSON.stringify((Array.isArray(ops) ? ops : []).map((o: any) => normTexto(o)));
+    const yaReutilizadas = new Set<string>();
 
     for (const [i, p] of preguntas.entries()) {
       const n = offset + i + 1;
@@ -321,9 +337,25 @@ export class ExamenOficialService {
       }
 
       let { temaId, articuloId, avisos, etiqueta } = await this.clasificar(ctx, p);
+      let reutilizarId: string | null = null;
 
-      if (enBanco.has(enunciado) && (temaId || articuloId)) {
-        avisos.push('ya existe en el banco de preguntas: aquí queda solo para el simulacro, para no duplicarla en los tests');
+      const iguales = porEnunciado.get(enunciado) ?? [];
+      const libre = iguales.find(
+        (e) => !e.examenAnterior && !yaReutilizadas.has(e.id) && e.correcta === p.correcta && normOps(e.opciones) === normOps(p.opciones),
+      );
+      if (libre) {
+        reutilizarId = libre.id;
+        yaReutilizadas.add(libre.id);
+        // Conserva su clasificación y suma la del JSON (si la hay)
+        const etiquetasPrevias = [
+          ...(libre.articulos ?? []).map((a) => `Art. ${a.numero}`),
+          ...(libre.temas ?? []).map((t) => `Tema ${t.numero}`),
+        ];
+        if (!etiqueta && etiquetasPrevias.length) etiqueta = etiquetasPrevias.join(' + ');
+        if (!articuloId && libre.articulos?.length) articuloId = libre.articulos[0].id;
+        if (!temaId && libre.temas?.length) temaId = libre.temas[0].id;
+      } else if (iguales.length && (temaId || articuloId)) {
+        avisos.push('ya existe en el banco (en otro examen o con otras opciones): aquí queda solo para el simulacro, para no duplicarla en los tests');
         temaId = null;
         articuloId = null;
         etiqueta = '';
@@ -341,8 +373,9 @@ export class ExamenOficialService {
         estado,
         avisos,
         error: null,
+        reutilizada: !!reutilizarId,
       });
-      resueltas.push({ entrada: p, temaId, articuloId, estado });
+      resueltas.push({ entrada: p, temaId, articuloId, estado, reutilizarId });
     }
 
     const validas = filas.filter((f) => !f.error);
@@ -354,6 +387,7 @@ export class ExamenOficialService {
       noVigentes: validas.filter((f) => f.estado !== 'vigente').length,
       conError: filas.filter((f) => f.error).length,
       conAvisos: filas.filter((f) => f.avisos.length > 0).length,
+      reutilizadas: filas.filter((f) => f.reutilizada).length,
       temario: ctx.temario ? { convocatoriaId: ctx.temario.id, anyo: ctx.temario.anyo } : null,
       filas,
     };
@@ -377,6 +411,32 @@ export class ExamenOficialService {
   ) {
     for (const [i, r] of resueltas.entries()) {
       const p = r.entrada;
+
+      if (r.reutilizarId) {
+        // ⭐ Pregunta que ya estaba en el banco: se vincula al examen (sin duplicarla) y se le
+        // aplica el estado/nota del JSON; su clasificación previa se conserva.
+        await manager.update(PreguntaTest, r.reutilizarId, {
+          examenAnterior: { id: examen.id } as any,
+          ordenExamen: offset + i + 1,
+          estado: r.estado,
+          notaActualizacion: p.notaActualizacion?.trim() || null,
+          ...(p.explicacion?.trim() ? { explicacion: p.explicacion.trim() } : {}),
+        } as any);
+        if (r.temaId) {
+          await manager.query(
+            `INSERT INTO preguntas_test_temas_temas ("preguntasTestId", "temasId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+            [r.reutilizarId, r.temaId],
+          );
+        }
+        if (r.articuloId) {
+          await manager.query(
+            `INSERT INTO preguntas_test_articulos_articulos ("preguntasTestId", "articulosId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+            [r.reutilizarId, r.articuloId],
+          );
+        }
+        continue;
+      }
+
       const pregunta = manager.create(PreguntaTest, {
         enunciado: p.enunciado.trim(),
         opciones: p.opciones.map((o) => o.trim()),
