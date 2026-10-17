@@ -30,8 +30,9 @@ export class ExamenAnterior {
   @Column({ type: 'int', default: 1 })
   parte: number; // nº de ejercicio dentro de la convocatoria
 
-  @Column()
-  urlArchivo: string; // PDF del examen real
+  // ⭐ Opcional: los exámenes se crean directamente con sus preguntas, sin PDF.
+  @Column({ type: 'varchar', nullable: true })
+  urlArchivo: string | null; // PDF del examen real (exámenes antiguos)
 
   @Column({ default: true })
   activo: boolean;

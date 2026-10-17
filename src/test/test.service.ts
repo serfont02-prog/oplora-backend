@@ -323,6 +323,10 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
       'pregunta.activa = true',
     );
 
+    // ⭐ Solo preguntas vigentes: las fuera de temario, desactualizadas o anuladas
+    // de exámenes oficiales se quedan únicamente en el simulacro de su examen.
+    query = query.andWhere("pregunta.estado = 'vigente'");
+
     return { query, numOpcionesTestActiva };
   }
 
@@ -1283,7 +1287,7 @@ async generarRepasoInteligente(
   let preguntasPrioritarias: PreguntaTest[] = [];
   if (prioridadIds.length > 0) {
     const encontradas = await this.preguntaRepo.find({
-      where: { id: In(prioridadIds), activa: true },
+      where: { id: In(prioridadIds), activa: true, estado: 'vigente' },
       relations: ['temas', 'articulos'],
     });
     // Mantener el orden de prioridad (por ratio de fallo)

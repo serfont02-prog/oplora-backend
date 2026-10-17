@@ -52,6 +52,28 @@ export class PreguntaTest {
   origen: string; // 'generada' | 'convocatoria' | 'ia'
 
   /* =========================================================
+     ⭐ Estado de la pregunta (sobre todo, preguntas de exámenes oficiales)
+     - vigente: sale en tests (si tiene tema o artículo) y en su simulacro.
+     - fuera_temario: solo en el simulacro de su examen (ya no entra en el temario).
+     - desactualizada: solo en el simulacro, con la respuesta oficial de entonces
+       y el aviso de notaActualizacion (la normativa ha cambiado).
+     - anulada: anulada por el tribunal; se muestra en el simulacro pero no puntúa.
+  ========================================================= */
+  @Column({ default: 'vigente' })
+  estado: string;
+
+  @Column({ type: 'text', nullable: true })
+  notaActualizacion: string | null;
+
+  // Posición dentro del examen oficial (1, 2, 3…). Las preguntas sueltas lo dejan vacío.
+  @Column({ type: 'int', nullable: true })
+  ordenExamen: number | null;
+
+  // Si es la copia actualizada de una pregunta desactualizada, id de la original.
+  @Column({ type: 'uuid', nullable: true })
+  actualizadaDesdeId: string | null;
+
+  /* =========================================================
      Para estadísticas
   ========================================================= */
   @Column({ default: 0 })

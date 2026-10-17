@@ -390,6 +390,7 @@ export class LigaService {
       .leftJoin('p.temas', 't')
       .leftJoin('p.articulos', 'a')
       .where('p.activa = true')
+      .andWhere("p.estado = 'vigente'")
       .andWhere(
         new Brackets((qb) => {
           qb.where('t.id = :temaId', { temaId }).orWhere(

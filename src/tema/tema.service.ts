@@ -410,6 +410,7 @@ async getTotalPreguntasDelTema(temaId: string): Promise<number> {
     .leftJoin('p.articulos', 'art')
     .where('art.id IN (:...articuloIds)', { articuloIds })
     .andWhere('p.activa = true')
+    .andWhere("p.estado = 'vigente'")
     .getCount();
 }
 
@@ -530,8 +531,11 @@ async crearExamen(datos: {
   mes?: string;
   tipo: string;
   parte: number;
-  archivo: Express.Multer.File;
+  archivo?: Express.Multer.File;
 }): Promise<ExamenAnterior> {
+  // ⭐ El PDF es opcional: sin archivo se crea el examen vacío y se le añaden preguntas.
+  let urlArchivo: string | null = null;
+  if (datos.archivo) {
   // Sube el PDF a Supabase Storage, en su propio bucket dedicado a exámenes
   // (antes reutilizaba el bucket 'apuntes-oplora' de los apuntes OPLORA).
   const nombreLimpio = sanitizarNombreArchivo(datos.archivo.originalname);
@@ -543,6 +547,8 @@ async crearExamen(datos: {
   if (error) throw new Error(`Error subiendo PDF: ${error.message}`);
 
   const { data: urlData } = this.supabase.storage.from('examenes').getPublicUrl(nombreArchivo);
+  urlArchivo = urlData.publicUrl;
+  }
 
   const examen = this.examenRepo.create({
     nombre: datos.nombre,
@@ -550,7 +556,7 @@ async crearExamen(datos: {
     mes: datos.mes,
     tipo: datos.tipo,
     parte: datos.parte,
-    urlArchivo: urlData.publicUrl,
+    urlArchivo,
     convocatoria: { id: datos.convocatoriaId } as any,
   });
 
@@ -558,10 +564,18 @@ async crearExamen(datos: {
 }
 
 async eliminarExamen(id: string): Promise<void> {
-  // Desvincula las preguntas de este examen antes de borrarlo (no se borran las preguntas)
+  // ⭐ Las preguntas que solo existían para este examen (sin tema ni artículo) se borran;
+  // las clasificadas se conservan para los tests y solo se desvinculan del examen.
+  await this.preguntaTestRepo.query(
+    `DELETE FROM preguntas_test p
+      WHERE p."examenAnteriorId" = $1
+        AND NOT EXISTS (SELECT 1 FROM preguntas_test_temas_temas t WHERE t."preguntasTestId" = p.id)
+        AND NOT EXISTS (SELECT 1 FROM preguntas_test_articulos_articulos a WHERE a."preguntasTestId" = p.id)`,
+    [id],
+  );
   await this.preguntaTestRepo.update(
     { examenAnterior: { id } as any },
-    { examenAnterior: null as any },
+    { examenAnterior: null as any, ordenExamen: null },
   );
   await this.examenRepo.delete(id);
 }
@@ -594,10 +608,10 @@ async getPreguntasDeExamen(examenId: string, usuarioId?: string, rol?: string) {
   });
   if (!examen) throw new NotFoundException('Examen no encontrado');
 
-  // ⭐ Mismo orden en que se importaron (antes salían en un orden distinto cada vez).
+  // ⭐ Orden del examen real (ordenExamen); las antiguas sin orden, por fecha de importación.
   const preguntas = await this.preguntaTestRepo.find({
     where: { examenAnterior: { id: examenId } as any },
-    order: { creadoEn: 'ASC' } as any,
+    order: { ordenExamen: 'ASC', creadoEn: 'ASC' } as any,
   });
 
   return {
@@ -607,7 +621,8 @@ async getPreguntasDeExamen(examenId: string, usuarioId?: string, rol?: string) {
       id: p.id,
       enunciado: p.enunciado,
       opciones: p.opciones,
-      // ⭐ NO incluir "correcta" aquí — se valida al enviar, no antes
+      // ⭐ Solo se avisa de las anuladas (no puntúan). NO incluir "correcta" aquí.
+      anulada: p.estado === 'anulada',
     })),
   };
 }
@@ -767,10 +782,13 @@ async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { pregu
   const listaRespuestas = Array.isArray(respuestas) ? respuestas : [];
   if (!examen) throw new NotFoundException('Examen no encontrado');
 
-  const preguntas = await this.preguntaTestRepo.find({
+  const todas = await this.preguntaTestRepo.find({
     where: { examenAnterior: { id: examenId } as any },
-    order: { creadoEn: 'ASC' } as any,
+    order: { ordenExamen: 'ASC', creadoEn: 'ASC' } as any,
   });
+  // ⭐ Las anuladas por el tribunal no puntúan (ni cuentan en el total), como en el examen real.
+  const preguntas = todas.filter((p) => p.estado !== 'anulada');
+  const anuladas = todas.filter((p) => p.estado === 'anulada');
 
   const fraccion = parseFraccion(examen.convocatoria.fraccionPenalizacion);
   const fraccionBlanco = examen.convocatoria.permiteBlancos === false
@@ -833,7 +851,25 @@ async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { pregu
     nota: Math.round(notaSobreDiez * 100) / 100,
     notaMinima,
     aprobarias,
-    revision: detalle.map((d) => ({ ...d, explicacion: preguntas.find((p) => p.id === d.preguntaId)?.explicacion ?? null })),
+    anuladas: anuladas.length,
+    // ⭐ Revisión en el orden del examen, con las anuladas incluidas (sin puntuar) y los
+    // avisos de las preguntas que ya no entran en el temario o cuya normativa ha cambiado.
+    revision: todas.map((p) => {
+      const d = detalle.find((x) => x.preguntaId === p.id) ?? {
+        preguntaId: p.id,
+        estado: 'anulada',
+        enBlanco: false,
+        correcta: false,
+        indiceSeleccionada: listaRespuestas.find((r) => r?.preguntaId === p.id)?.opcionElegida ?? null,
+        indiceCorrecta: p.correcta,
+      };
+      return {
+        ...d,
+        explicacion: p.explicacion ?? null,
+        estadoPregunta: p.estado,
+        notaActualizacion: p.estado === 'desactualizada' ? p.notaActualizacion ?? null : null,
+      };
+    }),
   };
 }
 

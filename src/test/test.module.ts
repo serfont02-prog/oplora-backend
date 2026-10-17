@@ -14,6 +14,11 @@ import { TemaNormativa } from '../tema/tema-normativa.entity';
 import { ConfiguracionModule } from '../config/configuracion.module';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { SesionTest } from './sesion-test.entity';
+import { ExamenAnterior } from '../tema/examen-anterior.entity';
+import { Convocatoria } from '../convocatoria/convocatoria.entity';
+import { VersionLey } from '../ley/version-ley.entity';
+import { ExamenOficialService } from './examen-oficial.service';
+import { ExamenOficialController } from './examen-oficial.controller';
 
 @Module({
   imports: [
@@ -31,12 +36,15 @@ import { SesionTest } from './sesion-test.entity';
       Articulo,
       UsuarioOposicion,
       SesionTest,
+      ExamenAnterior,
+      Convocatoria,
+      VersionLey,
     ]),
     forwardRef(() => TemaModule), 
   ],
 
-  controllers: [TestController],
-  providers: [TestService],
+  controllers: [TestController, ExamenOficialController],
+  providers: [TestService, ExamenOficialService],
   exports: [TestService],
 })
 export class TestModule {}
