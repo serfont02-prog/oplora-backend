@@ -25,7 +25,7 @@ export class OposicionService {
     private readonly notaRepo: Repository<NotaArticulo>,
   ) {}
 
-  async findAll(search?: string): Promise<Oposicion[]> {
+  async findAll(search?: string, soloPublicadas = false): Promise<Oposicion[]> {
     const qb = this.repo.createQueryBuilder('o')
       .loadRelationCountAndMap('o.totalConvocatorias', 'o.convocatorias')
       .loadRelationCountAndMap('o.totalLeyes', 'o.oposicionLeyes')
@@ -35,10 +35,12 @@ export class OposicionService {
       .orderBy('o.creadoEn', 'DESC');
 
     if (search) {
-      qb.where('LOWER(o.nombre) LIKE :search OR LOWER(o.administracion) LIKE :search', {
+      qb.where('(LOWER(o.nombre) LIKE :search OR LOWER(o.administracion) LIKE :search)', {
           search: `%${search.toLowerCase()}%`,
         });
       }
+    // ⭐ El onboarding solo debe ofrecer las oposiciones publicadas (no las que están en preparación)
+    if (soloPublicadas) qb.andWhere('o.activa = true');
       const result = await qb.getMany();
       //result.forEach(o => console.log(o.nombre, 'convocatoriasActivas:', (o as any).convocatoriasActivas));
       return result;

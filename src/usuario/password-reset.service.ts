@@ -5,6 +5,10 @@ import { Usuario } from './usuario.entity';
 import { Resend } from 'resend';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import { invalidarCacheUsuario } from '../auth/jwt.strategy';
+
+const escaparHtml = (s: string) =>
+  String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 
 // ⭐ En BD solo se guarda el hash del token: si alguien llegara a leer la columna,
 // no podría usarla para cambiar la contraseña.
@@ -20,10 +24,14 @@ export class PasswordResetService {
   ) {}
 
   async solicitarReset(email: string): Promise<void> {
-    const usuario = await this.repo.findOne({ where: { email: email?.toLowerCase().trim() } });
+    const emailNormalizado = typeof email === 'string' ? email.toLowerCase().trim() : '';
+    if (!emailNormalizado) return;
+    const usuario = await this.repo.findOne({ where: { email: emailNormalizado } });
 
     // Por seguridad, no revelamos si el email existe o no
     if (!usuario) return;
+    // ⭐ Una cuenta desactivada no puede recuperar la contraseña para volver a entrar
+    if (usuario.activo === false) return;
 
     const token = crypto.randomBytes(32).toString('hex');
     const expira = new Date();
@@ -36,27 +44,39 @@ export class PasswordResetService {
       resetPasswordExpira: expira,
     });
 
-    const urlReset = `${process.env.FRONTEND_URL}/app/resetear-password?token=${token}`;
+    // ⭐ Si FRONTEND_URL no está definida, el enlace salía como "undefined/app/…" y no funcionaba.
+    const base = (process.env.FRONTEND_URL || 'https://oplora-frontend.vercel.app').replace(/\/+$/, '');
+    const urlReset = `${base}/app/resetear-password?token=${token}`;
 
-    await this.resend.emails.send({
-      from: 'OPLORA <onboarding@resend.dev>',
-      to: email,
-      subject: 'Recupera tu contraseña de OPLORA',
-      html: `
-        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-          <h2 style="color: #111827;">Recupera tu contraseña</h2>
-          <p style="color: #6b7280; font-size: 14px;">
-            Hemos recibido una solicitud para restablecer tu contraseña. Este enlace caduca en 30 minutos.
-          </p>
-          <a href="${urlReset}" style="display: inline-block; background: #111827; color: white; padding: 12px 24px; border-radius: 12px; text-decoration: none; font-weight: 700; margin: 16px 0;">
-            Restablecer contraseña
-          </a>
-          <p style="color: #9ca3af; font-size: 12px;">
-            Si no solicitaste esto, puedes ignorar este email.
-          </p>
-        </div>
-      `,
-    });
+    // ⭐ Remitente configurable (MAIL_FROM), igual que las invitaciones: con el remitente de pruebas
+    // de Resend (onboarding@resend.dev) los correos solo llegan al dueño de la cuenta de Resend.
+    // Si el envío falla no se lanza el error al cliente (eso revelaría que el email existe).
+    try {
+      await this.resend.emails.send({
+        from: process.env.MAIL_FROM ?? 'OPLORA <onboarding@resend.dev>',
+        to: usuario.email,
+        subject: 'Recupera tu contraseña de OPLORA',
+        html: `
+          <div style="font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; background: #EAF0FF;">
+            <div style="background: #ffffff; border-radius: 20px; padding: 28px 24px;">
+              <div style="font-size: 20px; font-weight: 800; color: #0f172a; margin-bottom: 18px;">Oplora</div>
+              <h2 style="color: #0f172a; font-size: 18px; margin: 0 0 8px;">Hola, ${escaparHtml(usuario.nombre || '')}</h2>
+              <p style="color: #6b7280; font-size: 14px; line-height: 1.6; margin: 0 0 18px;">
+                Hemos recibido una solicitud para cambiar la contraseña de tu cuenta. El enlace caduca en 30 minutos y solo se puede usar una vez.
+              </p>
+              <a href="${urlReset}" style="display: inline-block; background: #0f172a; color: #ffffff; padding: 13px 24px; border-radius: 12px; text-decoration: none; font-weight: 700; font-size: 14px;">
+                Crear contraseña nueva
+              </a>
+              <p style="color: #6b7280; font-size: 12px; line-height: 1.6; margin: 20px 0 0;">
+                Si no has sido tú, ignora este correo: tu contraseña no cambiará.
+              </p>
+            </div>
+          </div>
+        `,
+      });
+    } catch (e: any) {
+      console.error('Error enviando el correo de recuperación de contraseña:', e?.message ?? e);
+    }
   }
 
   async validarToken(token: string): Promise<boolean> {
@@ -74,6 +94,9 @@ export class PasswordResetService {
     if (typeof nuevaPassword !== 'string' || nuevaPassword.length < 6) {
       throw new BadRequestException('La contraseña debe tener al menos 6 caracteres');
     }
+    if (nuevaPassword.length > 72) {
+      throw new BadRequestException('La contraseña no puede tener más de 72 caracteres');
+    }
     const usuario = await this.repo.findOne({
       where: { resetPasswordToken: hashToken(token) },
       select: { id: true, resetPasswordExpira: true },
@@ -89,6 +112,8 @@ export class PasswordResetService {
       password: passwordHasheada,
       resetPasswordToken: null,
       resetPasswordExpira: null,
+      passwordCambiadaEn: new Date(), // ⭐ cierra todas las sesiones abiertas con la contraseña anterior
     });
+    invalidarCacheUsuario(usuario.id);
   }
 }

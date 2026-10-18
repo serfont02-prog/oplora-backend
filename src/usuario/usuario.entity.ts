@@ -43,6 +43,11 @@ export class Usuario {
   @Column({ select: false })
   password: string;
 
+  // ⭐ Momento del último cambio de contraseña. Los tokens emitidos antes dejan de valer,
+  // así que cambiarla cierra todas las sesiones abiertas (otros móviles, ordenadores…).
+  @Column({ type: 'timestamptz', nullable: true, select: false })
+  passwordCambiadaEn: Date | null;
+
   // ⭐ select:false: no se lee por defecto, así nunca viaja en relaciones de otros usuarios.
   @Column({ nullable: true, select: false })
   dni: string;

@@ -17,8 +17,8 @@ export class OposicionController {
 }
 
   @Get()
-  findAll(@Query('search') search?: string) {
-    return this.service.findAll(search);
+  findAll(@Query('search') search?: string, @Query('publicadas') publicadas?: string) {
+    return this.service.findAll(search, publicadas === '1' || publicadas === 'true');
   }
 
   @Get('count')

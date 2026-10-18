@@ -93,6 +93,12 @@ export class UsuarioService {
 
 
  async activarOposicion(usuarioId: string, oposicionId: string) {
+  // ⭐ Antes se podía activar cualquier id: una oposición inexistente daba un error 500 y una
+  // oposición aún no publicada (activa = false, en preparación en el admin) se podía elegir.
+  const oposicion = await this.oposicionRepo.findOne({ where: { id: oposicionId } });
+  if (!oposicion) throw new NotFoundException('Oposición no encontrada');
+  if (oposicion.activa === false) throw new BadRequestException('Esta oposición todavía no está disponible');
+
   // 1. Desactivar todas las oposiciones anteriores del usuario
   await this.usuarioOposicionRepo.update(
     { usuario: { id: usuarioId } },
@@ -225,6 +231,13 @@ async desactivarOposicion(usuarioId: string, oposicionId: string) {
 }
 
 async marcarOnboardingGeneral(usuarioId: string) {
+  // ⭐ Sin oposición activa el Inicio no tiene nada que mostrar: no se da por terminado el
+  // onboarding hasta que el usuario haya elegido una.
+  const activa = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, activa: true },
+  });
+  if (!activa) throw new BadRequestException('Elige primero tu oposición');
+
   await this.repo.update(usuarioId, {
     onboardingGeneralCompletado: true,
   });
@@ -817,15 +830,23 @@ private async migrarProgreso(usuarioId: string, oposicionId: string, origenId: s
 }
 
   async actualizarTiempoDisponible(id: string, tiempoDisponible: string) {
+    // ⭐ Solo los valores que ofrece el onboarding (antes se guardaba cualquier texto)
+    if (!['menos_1h', '1_3h', 'mas_3h', 'variable'].includes(tiempoDisponible)) {
+      throw new BadRequestException('Tiempo disponible no válido');
+    }
     await this.repo.update(id, { tiempoDisponible });
     return this.findById(id);
   }
 
   async actualizarNivelExperiencia(usuarioId: string, oposicionId: string, nivelExperiencia: number) {
-  await this.usuarioOposicionRepo.update(
+  const nivel = Number(nivelExperiencia);
+  if (![1, 2, 3].includes(nivel)) throw new BadRequestException('Nivel de experiencia no válido');
+  if (!oposicionId) throw new BadRequestException('Falta la oposición');
+  const res = await this.usuarioOposicionRepo.update(
     { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
-    { nivelExperiencia },
+    { nivelExperiencia: nivel },
   );
+  if (!res.affected) throw new NotFoundException('No estás apuntado a esta oposición');
   return this.findMe(usuarioId);
 }
 

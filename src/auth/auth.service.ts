@@ -25,7 +25,7 @@ export class AuthService {
   }
 
   async login(emailONick: string, password: string): Promise<{ usuario: any; token: string }> {
-    const credencialesInvalidas = 'Email/usuario o contraseña incorrectos';
+    const credencialesInvalidas = 'Email, nick o contraseña incorrectos';
 
     // Buscar por email o nick (normalizado, igual que al crear el usuario)
     const valorNormalizado = emailONick?.toLowerCase().trim();
