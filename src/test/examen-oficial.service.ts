@@ -326,8 +326,10 @@ export class ExamenOficialService {
       let error = this.validar(p);
 
       if (!error) {
-        const clave = normTexto(enunciado);
-        if (vistos.has(clave)) error = 'pregunta repetida dentro del propio examen';
+        // ⭐ Repetida = mismo enunciado Y mismas opciones. Hay enunciados genéricos que se repiten
+        // con opciones distintas (p. ej. "¿Cuál de las siguientes opciones es correcta?").
+        const clave = `${normTexto(enunciado)}§${normOps(p.opciones)}`;
+        if (vistos.has(clave)) error = 'pregunta repetida dentro del propio examen (mismo enunciado y opciones)';
         vistos.add(clave);
       }
 
@@ -339,9 +341,10 @@ export class ExamenOficialService {
       let { temaId, articuloId, avisos, etiqueta } = await this.clasificar(ctx, p);
       let reutilizarId: string | null = null;
 
-      const iguales = porEnunciado.get(enunciado) ?? [];
+      // Solo cuentan como "la misma pregunta" las que tienen también las mismas opciones
+      const iguales = (porEnunciado.get(enunciado) ?? []).filter((e) => normOps(e.opciones) === normOps(p.opciones));
       const libre = iguales.find(
-        (e) => !e.examenAnterior && !yaReutilizadas.has(e.id) && e.correcta === p.correcta && normOps(e.opciones) === normOps(p.opciones),
+        (e) => !e.examenAnterior && !yaReutilizadas.has(e.id) && e.correcta === p.correcta,
       );
       if (libre) {
         reutilizarId = libre.id;
@@ -517,7 +520,7 @@ export class ExamenOficialService {
 
     const actuales = await this.preguntaRepo.find({
       where: { examenAnterior: { id: examenId } as any },
-      select: ['id', 'enunciado', 'ordenExamen'],
+      select: ['id', 'enunciado', 'opciones', 'ordenExamen'],
     });
     const offset = actuales.reduce((m, p) => Math.max(m, p.ordenExamen ?? 0), actuales.length);
 
@@ -525,10 +528,12 @@ export class ExamenOficialService {
     const { informe, resueltas } = await this.analizar(ctx, datos.preguntas, offset);
 
     // Repetidas respecto a las que ya tiene el examen
-    const yaEnExamen = new Set(actuales.map((p) => normTexto(p.enunciado)));
+    const claveP = (e: any, ops: any) =>
+      `${normTexto(e)}§${JSON.stringify((Array.isArray(ops) ? ops : []).map((o: any) => normTexto(o)))}`;
+    const yaEnExamen = new Set(actuales.map((p) => claveP(p.enunciado, p.opciones)));
     for (const f of informe.filas) {
       const original = datos.preguntas[f.n - offset - 1];
-      if (!f.error && yaEnExamen.has(normTexto(original?.enunciado))) {
+      if (!f.error && yaEnExamen.has(claveP(original?.enunciado, original?.opciones))) {
         f.error = 'esta pregunta ya está en el examen';
       }
     }

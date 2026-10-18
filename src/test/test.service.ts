@@ -50,6 +50,12 @@ export function recortarOpcionesArticulo(
   return { opciones: seleccion, correcta: seleccion.indexOf(correctaTexto) };
 }
 
+/** Clave para detectar preguntas duplicadas: enunciado + opciones, sin mayúsculas ni espacios extra. */
+function claveDuplicado(enunciado: string, opciones: any): string {
+  const n = (v: any) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return `${n(enunciado)}§${JSON.stringify((Array.isArray(opciones) ? opciones : []).map(n))}`;
+}
+
 // ⭐ Topes de seguridad (ver generarTest y listarPreguntasBanco).
 const MAX_PREGUNTAS_TEST = 100;
 const MAX_POR_PAGINA_BANCO = 200;
@@ -1082,17 +1088,20 @@ async importarPorConvocatoria(
     }
 
     // ⭐ Evitar duplicados: dentro del mismo lote y contra preguntas ya existentes
+    // ⭐ Duplicada = mismo enunciado Y mismas opciones (hay enunciados genéricos que se repiten
+    // con opciones distintas, p. ej. "¿Cuál de las siguientes opciones es correcta?").
     const enunciadoNormalizado = p.enunciado.trim();
-    if (enunciadosDeEsteLote.has(enunciadoNormalizado)) {
+    const claveLote = claveDuplicado(enunciadoNormalizado, p.opciones);
+    if (enunciadosDeEsteLote.has(claveLote)) {
       errores.push(`${etiqueta}: pregunta duplicada dentro del propio archivo — "${enunciadoNormalizado.slice(0, 60)}..."`);
       continue;
     }
-    const existente = await this.preguntaRepo.findOne({ where: { enunciado: enunciadoNormalizado } });
-    if (existente) {
+    const mismoEnunciado = await this.preguntaRepo.find({ where: { enunciado: enunciadoNormalizado }, select: ['id', 'enunciado', 'opciones'] });
+    if (mismoEnunciado.some((e) => claveDuplicado(e.enunciado, e.opciones) === claveLote)) {
       errores.push(`${etiqueta}: pregunta ya existente en el banco — "${enunciadoNormalizado.slice(0, 60)}..."`);
       continue;
     }
-    enunciadosDeEsteLote.add(enunciadoNormalizado);
+    enunciadosDeEsteLote.add(claveLote);
 
     const pregunta = this.preguntaRepo.create({
       enunciado: p.enunciado,
@@ -1183,17 +1192,20 @@ async importarPorVersionLey(
     }
 
     // ⭐ Evitar duplicados: dentro del mismo lote y contra preguntas ya existentes
+    // ⭐ Duplicada = mismo enunciado Y mismas opciones (hay enunciados genéricos que se repiten
+    // con opciones distintas, p. ej. "¿Cuál de las siguientes opciones es correcta?").
     const enunciadoNormalizado = p.enunciado.trim();
-    if (enunciadosDeEsteLote.has(enunciadoNormalizado)) {
+    const claveLote = claveDuplicado(enunciadoNormalizado, p.opciones);
+    if (enunciadosDeEsteLote.has(claveLote)) {
       errores.push(`${etiqueta}: pregunta duplicada dentro del propio archivo — "${enunciadoNormalizado.slice(0, 60)}..."`);
       continue;
     }
-    const existente = await this.preguntaRepo.findOne({ where: { enunciado: enunciadoNormalizado } });
-    if (existente) {
+    const mismoEnunciado = await this.preguntaRepo.find({ where: { enunciado: enunciadoNormalizado }, select: ['id', 'enunciado', 'opciones'] });
+    if (mismoEnunciado.some((e) => claveDuplicado(e.enunciado, e.opciones) === claveLote)) {
       errores.push(`${etiqueta}: pregunta ya existente en el banco — "${enunciadoNormalizado.slice(0, 60)}..."`);
       continue;
     }
-    enunciadosDeEsteLote.add(enunciadoNormalizado);
+    enunciadosDeEsteLote.add(claveLote);
 
     const pregunta = this.preguntaRepo.create({
       enunciado: p.enunciado,
