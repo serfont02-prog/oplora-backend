@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, Index } from 'typeorm';
 import { Usuario } from '../usuario/usuario.entity';
 
 export enum TipoNotificacion {
@@ -24,6 +24,8 @@ export enum PrioridadNotificacion {
   BAJA = 'baja',
 }
 
+// ⭐ Índice para la lista y el contador de la campana (se consultan en cada pantalla de inicio).
+@Index('idx_notificacion_usuario_fecha', ['usuario', 'creadoEn'])
 @Entity('notificaciones')
 export class Notificacion {
   @PrimaryGeneratedColumn('uuid')
@@ -53,6 +55,6 @@ export class Notificacion {
   @CreateDateColumn()
   creadoEn: Date;
 
-  @ManyToOne(() => Usuario)
+  @ManyToOne(() => Usuario, { onDelete: 'CASCADE' })
   usuario: Usuario;
 }

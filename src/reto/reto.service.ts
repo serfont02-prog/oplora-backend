@@ -13,6 +13,12 @@ import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import { ConfiguracionService } from '../config/configuracion.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { SorteoReto } from './sorteo-reto.entity';
+
+// Reto al azar
+const AZAR_MAX_RECIBIDOS_DIA = 3;   // retos al azar que puede recibir una persona en 24 h
+const AZAR_MAX_SORTEOS_DIA = 10;    // sorteos que puede hacer cada uno en 24 h (incluye "otro rival")
+const AZAR_DIAS_ACTIVO = 7;         // solo gente que ha entrado en la app en los últimos 7 días
 
 
 @Injectable()
@@ -35,7 +41,94 @@ export class RetoService {
     private readonly configuracionService: ConfiguracionService,
     @InjectRepository(UsuarioOposicion)
     private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
+    @InjectRepository(SorteoReto)
+    private readonly sorteoRepo: Repository<SorteoReto>,
   ) {}
+
+  // ─── RETO AL AZAR ────────────────────────────────────────
+
+  /**
+   * ⭐ Elige al azar un rival para quien no conoce a nadie. Candidatos:
+   * - misma oposición y misma convocatoria activa que quien reta,
+   * - con "Recibir retos al azar" activado (Notificaciones y avisos), cuenta activa y nick,
+   * - que haya entrado en la app en los últimos 7 días,
+   * - que no haya recibido ya 3 retos al azar en las últimas 24 h,
+   * - sin un duelo de test en curso contigo y que no te haya tocado ya hoy.
+   * Devuelve sus datos públicos; el reto se crea después con el flujo normal (test, flashcards o
+   * psicotécnicos), usando su nick.
+   */
+  async sortearRival(retadorId: string, oposicionId: string) {
+    if (!oposicionId) throw new BadRequestException('Falta la oposición');
+    const uo = await this.usuarioOposicionRepo.findOne({
+      where: { usuario: { id: retadorId } as any, oposicion: { id: oposicionId } as any, activa: true },
+      relations: ['convocatoriaActiva'],
+    });
+    const convocatoriaId = uo?.convocatoriaActiva?.id;
+    if (!convocatoriaId) throw new BadRequestException('Elige primero tu convocatoria para poder retar al azar');
+
+    const hace24h = new Date(Date.now() - 24 * 3600_000);
+    const sorteosHoy = await this.sorteoRepo
+      .createQueryBuilder('s')
+      .where('s."retadorId" = :yo', { yo: retadorId })
+      .andWhere('s."creadoEn" >= :hace24h', { hace24h })
+      .getCount();
+    if (sorteosHoy >= AZAR_MAX_SORTEOS_DIA) {
+      throw new BadRequestException('Has hecho muchos sorteos hoy. Vuelve a probar mañana o reta a alguien por su nick.');
+    }
+
+    const haceActivo = new Date(Date.now() - AZAR_DIAS_ACTIVO * 24 * 3600_000);
+    const rival = await this.usuarioRepo
+      .createQueryBuilder('u')
+      .innerJoin(
+        UsuarioOposicion, 'uo',
+        'uo."usuario_id" = u.id AND uo.activa = true AND uo."oposicion_id" = :op AND uo."convocatoriaActivaId" = :conv',
+        { op: oposicionId, conv: convocatoriaId },
+      )
+      .select(['u.id', 'u.nick', 'u.nombre', 'u.tipoAvatar', 'u.avatarUrl'])
+      .addSelect('uo.nivel', 'nivel')
+      .where('u.id != :yo', { yo: retadorId })
+      .andWhere('u.activo = true')
+      .andWhere('u."recibirRetosAleatorios" = true')
+      .andWhere('u.nick IS NOT NULL')
+      .andWhere('u."ultimoAcceso" >= :haceActivo', { haceActivo })
+      .andWhere(
+        `(SELECT COUNT(*) FROM sorteos_reto s WHERE s."retadoId" = u.id AND s."creadoEn" >= :hace24h) < :maxRecibidos`,
+        { hace24h, maxRecibidos: AZAR_MAX_RECIBIDOS_DIA },
+      )
+      .andWhere(
+        `NOT EXISTS (SELECT 1 FROM sorteos_reto s2 WHERE s2."retadorId" = :yo AND s2."retadoId" = u.id AND s2."creadoEn" >= :hace24h)`,
+      )
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1 FROM participaciones_reto p1
+          JOIN participaciones_reto p2 ON p2."retoId" = p1."retoId"
+          JOIN retos r ON r.id = p1."retoId"
+          WHERE p1."usuarioId" = :yo AND p2."usuarioId" = u.id AND r.estado = 'activo'
+        )`,
+      )
+      .orderBy('RANDOM()')
+      .limit(1)
+      .getRawAndEntities();
+
+    const elegido = rival.entities[0];
+    if (!elegido) {
+      throw new NotFoundException('Ahora mismo no hay nadie disponible en tu convocatoria para un reto al azar. Prueba más tarde o invita a alguien.');
+    }
+
+    await this.sorteoRepo.save(this.sorteoRepo.create({
+      retador: { id: retadorId } as any,
+      retado: { id: elegido.id } as any,
+    }));
+
+    return {
+      id: elegido.id,
+      nick: elegido.nick,
+      nombre: elegido.nombre,
+      tipoAvatar: elegido.tipoAvatar,
+      avatarUrl: elegido.avatarUrl,
+      nivel: Number(rival.raw[0]?.nivel) || 1,
+    };
+  }
 
   // ─── EXPIRACIÓN ──────────────────────────────────────────
 
@@ -103,7 +196,15 @@ async crearRetoUsuario(
   // ⭐ Límite razonable: evita retos absurdamente largos/costosos por un valor manipulado del cliente
   const numPreguntasFinal = Math.min(Math.max(Math.trunc(numPreguntas) || 10, 1), 30);
 
-  const preguntas = await this.testService.generarTest(oposicionId, numPreguntasFinal, temaId, versionLeyId);
+  // ⭐ Con el id del retador: preguntas del temario de SU convocatoria y con el nº de opciones de
+  // esa convocatoria (antes salían siempre 4 opciones aunque el examen fuera de 3, y podían
+  // colarse preguntas de fuera de la convocatoria). Ambos están en la misma convocatoria.
+  const preguntas = await this.testService.generarTest(
+    oposicionId, numPreguntasFinal, temaId, versionLeyId,
+    undefined, undefined, undefined, undefined, undefined,
+    retadorId, undefined, true,
+  );
+  if (!preguntas.length) throw new BadRequestException('No hay preguntas disponibles para este reto');
 
    const horasPlazoFinal = horasPlazo && horasPlazo > 0 ? horasPlazo : 48;
    const fechaFin = new Date();

@@ -72,6 +72,12 @@ async getLimites(@Request() req: any) {
   };
 }
 
+// ⭐ Notificaciones y avisos (Perfil)
+@Patch('preferencias')
+actualizarPreferencias(@Body() body: any, @Request() req: any) {
+  return this.service.actualizarPreferencias(req.user.id, body ?? {});
+}
+
 @Post('onboarding-general/completado')
 async marcarOnboardingGeneral(@Request() req) {
   return this.service.marcarOnboardingGeneral(req.user.id);

@@ -352,6 +352,8 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
     dificultad?: string,
     usuarioId?: string,
     temasIds?: string[],
+    // ⭐ Retos: se usa la convocatoria del usuario (temas y nº de opciones) sin gastar su cupo de tests.
+    sinLimite = false,
   ): Promise<Pregunta[]> {
 
     // ⭐ Normalizar numPreguntas ANTES de comprobar límites: con valores negativos
@@ -367,7 +369,7 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
     }
 
     // Verificar límites si hay usuarioId
-    if (usuarioId && modo !== 'primer_reto') {
+    if (usuarioId && modo !== 'primer_reto' && !sinLimite) {
       const tipoTest = temaId ? 'tema' : modo ?? 'rapido';
       const verificacion = await this.verificarLimiteTest(
         usuarioId,

@@ -11,6 +11,8 @@ import { Usuario } from '../usuario/usuario.entity';
 // comprueba en BD, con una caché corta para no hacer una consulta en cada petición.
 const CACHE_MS = 30_000;
 const cache = new Map<string, { activo: boolean; rol: string; email: string; passwordCambiadaEn: number; hasta: number }>();
+// Última conexión: se guarda como mucho una vez por hora por usuario (reto al azar → activos en 7 días).
+const ACCESO_MS = 60 * 60 * 1000;
 
 /** Olvida lo cacheado de un usuario (al desactivarlo, reactivarlo, cambiarle el rol o la contraseña). */
 export function invalidarCacheUsuario(id: string) {
@@ -39,7 +41,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!datos || datos.hasta < ahora) {
       const u = await this.usuarioRepo.findOne({
         where: { id },
-        select: { id: true, activo: true, rol: true, email: true, passwordCambiadaEn: true },
+        select: { id: true, activo: true, rol: true, email: true, passwordCambiadaEn: true, ultimoAcceso: true },
       });
       if (!u) {
         cache.delete(id);
@@ -53,6 +55,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         hasta: ahora + CACHE_MS,
       };
       cache.set(id, datos);
+      if (datos.activo && (!u.ultimoAcceso || ahora - new Date(u.ultimoAcceso).getTime() > ACCESO_MS)) {
+        this.usuarioRepo.update(id, { ultimoAcceso: new Date(ahora) }).catch(() => undefined);
+      }
       if (cache.size > 20_000) cache.clear();
     }
     if (!datos.activo) throw new UnauthorizedException('Tu cuenta está desactivada');

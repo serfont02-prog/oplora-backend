@@ -107,6 +107,15 @@ export class Usuario {
   @Column({ type: 'timestamp', nullable: true })
   ultimaActividad: Date;
 
+  // ⭐ Última vez que abrió la app (se actualiza como mucho una vez por hora desde la sesión).
+  // ultimaActividad solo cambia al hacer tests; esto cuenta cualquier entrada.
+  @Column({ type: 'timestamptz', nullable: true })
+  ultimoAcceso: Date | null;
+
+  // ⭐ Notificaciones y avisos: acepta que otros opositores de su convocatoria le reten al azar.
+  @Column({ default: true })
+  recibirRetosAleatorios: boolean;
+
   @Column({ type: 'date', nullable: true })
   fechaResetConsumo: string;
   

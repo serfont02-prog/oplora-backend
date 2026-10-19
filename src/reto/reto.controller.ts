@@ -21,6 +21,12 @@ validarDestinatario(
   return this.service.validarDestinatarioReto(req.user.id, nickOEmail, oposicionId);
 }
 
+// ⭐ Reto al azar: elige un rival de tu convocatoria que acepte retos de desconocidos.
+@Post('sortear-rival')
+sortearRival(@Body('oposicionId') oposicionId: string, @Request() req: any) {
+  return this.service.sortearRival(req.user.id, oposicionId);
+}
+
 @Get('estadisticas')
 getEstadisticas(@Request() req: any) {
   return this.service.getEstadisticasUsuario(req.user.id);

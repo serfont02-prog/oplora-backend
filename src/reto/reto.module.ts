@@ -12,11 +12,12 @@ import { ContactoReciente } from './contacto-reciente.entity';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import { ConfiguracionModule } from '../config/configuracion.module';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { SorteoReto } from './sorteo-reto.entity';
 
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Reto, ParticipacionReto, Usuario, Tema, ContactoReciente, Convocatoria, UsuarioOposicion]),
+    TypeOrmModule.forFeature([Reto, ParticipacionReto, Usuario, Tema, ContactoReciente, Convocatoria, UsuarioOposicion, SorteoReto]),
     TestModule,
     NotificacionModule,
     ConfiguracionModule, 

@@ -99,20 +99,24 @@ export class UsuarioService {
   if (!oposicion) throw new NotFoundException('Oposición no encontrada');
   if (oposicion.activa === false) throw new BadRequestException('Esta oposición todavía no está disponible');
 
-  // 1. Desactivar todas las oposiciones anteriores del usuario
-  await this.usuarioOposicionRepo.update(
-    { usuario: { id: usuarioId } },
-    { activa: false }
-  );
-
-  // 2. Buscar si ya existe la relación usuario-oposición
+  // Buscar si ya existe la relación usuario-oposición
   let relacion = await this.usuarioOposicionRepo.findOne({
     where: {
       usuario: { id: usuarioId },
       oposicion: { id: oposicionId },
     },
-    relations: ['usuario', 'oposicion'],
+    relations: ['usuario', 'oposicion', 'convocatoriaActiva'],
   });
+
+  // ⭐ Ya es su oposición activa: no se toca nada. Antes se volvía a asignar la última
+  // convocatoria (perdiendo la que hubiera elegido) y se añadía otra fila al historial.
+  if (relacion?.activa) return relacion;
+
+  // 1. Desactivar todas las oposiciones anteriores del usuario
+  await this.usuarioOposicionRepo.update(
+    { usuario: { id: usuarioId } },
+    { activa: false }
+  );
 
   // 3. Si no existe, crearla
   if (!relacion) {
@@ -128,7 +132,9 @@ export class UsuarioService {
   // 4. Guardar la relación
   await this.usuarioOposicionRepo.save(relacion);
 
-  // 5. Asignar convocatoria
+  // 5. Asignar convocatoria, solo si no tenía ya una (al volver a una oposición anterior
+  //    se conserva la convocatoria con la que estaba).
+  if (relacion.convocatoriaActiva) return relacion;
     const convocatorias = await this.convocatoriaRepo.find({
       where: { oposicion: { id: oposicionId } },
       order: { anyo: 'DESC' },
@@ -448,6 +454,19 @@ async actualizarNivel(usuarioId: string, oposicionId: string, nivel: number) {
   async actualizarCompromiso(id: string, compromiso: boolean) {
   await this.repo.update(id, { compromiso });
   return this.findById(id);
+}
+
+/** ⭐ Notificaciones y avisos: de momento, si acepta retos al azar. */
+async actualizarPreferencias(usuarioId: string, datos: { recibirRetosAleatorios?: unknown }) {
+  const cambios: Partial<Usuario> = {};
+  if (datos.recibirRetosAleatorios !== undefined) {
+    if (typeof datos.recibirRetosAleatorios !== 'boolean') throw new BadRequestException('Valor no válido');
+    cambios.recibirRetosAleatorios = datos.recibirRetosAleatorios;
+  }
+  if (Object.keys(cambios).length) await this.repo.update(usuarioId, cambios);
+  const u = await this.repo.findOne({ where: { id: usuarioId }, select: { id: true, recibirRetosAleatorios: true } });
+  if (!u) throw new NotFoundException('Usuario no encontrado');
+  return { recibirRetosAleatorios: u.recibirRetosAleatorios };
 }
 
 async findMe(id: string) {

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Query, UseGuards, Request, ParseUUIDPipe } from '@nestjs/common';
 import { NotificacionService } from './notificacion.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -23,7 +23,7 @@ export class NotificacionController {
 
   @Patch(':id/leer')
   @UseGuards(JwtAuthGuard)
-  marcarLeida(@Param('id') id: string, @Request() req: any) {
+  marcarLeida(@Param('id', ParseUUIDPipe) id: string, @Request() req: any) {
     return this.service.marcarLeida(id, req.user.id);
   }
 
@@ -36,7 +36,7 @@ export class NotificacionController {
   @Post('seed/:usuarioId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
-  async seed(@Param('usuarioId') usuarioId: string) {
+  async seed(@Param('usuarioId', ParseUUIDPipe) usuarioId: string) {
     const tipos = [
       {
         tipo: TipoNotificacion.ADMITIDO,
