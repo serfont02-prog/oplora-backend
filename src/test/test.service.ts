@@ -50,6 +50,29 @@ export function recortarOpcionesArticulo(
   return { opciones: seleccion, correcta: seleccion.indexOf(correctaTexto) };
 }
 
+/**
+ * ⭐ Subconsulta con los artículos vinculados a unos temas (tabla temas_normativa), sea cual sea
+ * el nivel del vínculo: artículo suelto, capítulo (también sus secciones), título o ley completa.
+ * El artículo puede colgar de capítulo, de sección o directamente de título, y el título de una
+ * versión de ley o de un libro.
+ */
+function sqlArticulosDeTemas(parametroTemas: string): string {
+  return `
+    SELECT a_tn.id FROM articulos a_tn
+    LEFT JOIN capitulos c_tn ON c_tn.id = a_tn."capituloId"
+    LEFT JOIN secciones s_tn ON s_tn.id = a_tn."seccionId"
+    LEFT JOIN capitulos cs_tn ON cs_tn.id = s_tn."capituloId"
+    LEFT JOIN titulos t_tn ON t_tn.id = COALESCE(a_tn."tituloRefId", c_tn."tituloRefId", cs_tn."tituloRefId")
+    LEFT JOIN libros l_tn ON l_tn.id = t_tn."libroId"
+    INNER JOIN temas_normativa tn_tn ON tn_tn."temaId" IN (${parametroTemas}) AND (
+      tn_tn."articuloId" = a_tn.id
+      OR tn_tn."capituloId" = c_tn.id
+      OR tn_tn."capituloId" = cs_tn.id
+      OR tn_tn."tituloId" = t_tn.id
+      OR (tn_tn."versionLeyId" IS NOT NULL AND (tn_tn."versionLeyId" = t_tn."versionLeyId" OR tn_tn."versionLeyId" = l_tn."versionLeyId"))
+    )`;
+}
+
 /** Clave para detectar preguntas duplicadas: enunciado + opciones, sin mayúsculas ni espacios extra. */
 function claveDuplicado(enunciado: string, opciones: any): string {
   const n = (v: any) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -148,11 +171,15 @@ export class TestService {
        FILTRO POR TEMA
     ========================================================= */
 
+    // ⭐ Un tema incluye sus preguntas propias Y las de la normativa vinculada a ese tema
+    // (artículos, capítulos, títulos o la ley entera en "Vincular normativa" del admin).
+    // Antes, un tema sin preguntas propias pero con artículos vinculados decía "no hay preguntas".
     if (temaId) {
-
       query = query.andWhere(
-        'tema.id = :temaId',
-        { temaId },
+        new Brackets((qb) => {
+          qb.where('tema.id = :temaId', { temaId })
+            .orWhere(`articulo.id IN (${sqlArticulosDeTemas(':...temasFiltroNorma')})`, { temasFiltroNorma: [temaId] });
+        }),
       );
     }
 
@@ -161,7 +188,12 @@ export class TestService {
     ========================================================= */
 
     if (temasIds && temasIds.length > 0) {
-      query = query.andWhere('tema.id IN (:...temasIds)', { temasIds });
+      query = query.andWhere(
+        new Brackets((qb) => {
+          qb.where('tema.id IN (:...temasIds)', { temasIds })
+            .orWhere(`articulo.id IN (${sqlArticulosDeTemas(':...temasIdsNorma')})`, { temasIdsNorma: temasIds });
+        }),
+      );
     }
 
     /* =========================================================
