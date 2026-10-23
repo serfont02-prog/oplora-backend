@@ -59,7 +59,7 @@ crearRetoUsuario(
   @Post(':id/completar')
   completarReto(
     @Param('id') id: string,
-    @Body('respuestas') respuestas: number[],
+    @Body('respuestas') respuestas: (number | null)[],
     @Body('tiempoSegundos') tiempoSegundos: number,
     @Request() req: any,
   ) {

@@ -15,6 +15,23 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { SorteoReto } from './sorteo-reto.entity';
 
+/** "1/3" → 0.333…, "0,25" → 0.25, vacío → 0 */
+function parseFraccionReto(f: string | null | undefined): number {
+  if (f == null || String(f).trim() === '') return 0;
+  const s = String(f).trim().replace(',', '.');
+  if (s.includes('/')) {
+    const [a, b] = s.split('/').map(Number);
+    return b ? a / b : 0;
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Nota del duelo (participaciones antiguas sin puntuación: su % de acierto sobre 10). */
+const notaDe = (p: { puntuacion?: number | null; porcentaje?: number | null }) =>
+  p.puntuacion ?? (p.porcentaje ?? 0) / 10;
+const fmtNota = (n: number) => n.toLocaleString('es-ES', { maximumFractionDigits: 2 });
+
 // Reto al azar
 const AZAR_MAX_RECIBIDOS_DIA = 3;   // retos al azar que puede recibir una persona en 24 h
 const AZAR_MAX_SORTEOS_DIA = 10;    // sorteos que puede hacer cada uno en 24 h (incluye "otro rival")
@@ -281,7 +298,7 @@ async crearRetoUsuario(
 async completarReto(
   retoId: string,
   usuarioId: string,
-  respuestasSeleccionadas: number[],
+  respuestasSeleccionadas: (number | null)[],
   tiempoSegundos: number,
 ): Promise<ParticipacionReto> {
 
@@ -339,18 +356,36 @@ async completarReto(
 
   // ⭐ La corrección se calcula en el servidor a partir de las preguntas
   // reales del reto, nunca a partir de lo que envíe el cliente.
-  const respuestas = reto.preguntas.map((p: any, i: number) => ({
-    seleccionada: respuestasSeleccionadas[i],
-    correcta: respuestasSeleccionadas[i] === p.correcta,
-  }));
+  // null (o cualquier valor que no sea una opción válida) = pregunta en blanco.
+  const respuestas = reto.preguntas.map((p: any, i: number) => {
+    const v = respuestasSeleccionadas[i];
+    const valida = Number.isInteger(v) && (v as number) >= 0 && (v as number) < (p.opciones?.length ?? 0);
+    const seleccionada = valida ? (v as number) : null;
+    return { seleccionada, correcta: seleccionada !== null && seleccionada === p.correcta, enBlanco: seleccionada === null };
+  });
+  const total = reto.preguntas.length;
   const correctas = respuestas.filter((r) => r.correcta).length;
-  const porcentaje = Math.round((correctas / reto.preguntas.length) * 100);
+  const blancos = respuestas.filter((r) => r.enBlanco).length;
+  const fallos = total - correctas - blancos;
+  const porcentaje = Math.round((correctas / total) * 100);
+
+  // Penalización de la convocatoria (la misma que ve en la nota de los tests de Practicar)
+  const uoPen = await this.usuarioOposicionRepo.findOne({
+    where: { usuario: { id: usuarioId } as any, oposicion: { id: (reto.oposicion as any)?.id } as any },
+    relations: ['convocatoriaActiva'],
+  });
+  const conv = uoPen?.convocatoriaActiva;
+  const fraccion = parseFraccionReto(conv?.fraccionPenalizacion);
+  const fraccionBlanco = conv?.permiteBlancos === false ? parseFraccionReto(conv?.fraccionPenalizacionBlanco) : 0;
+  const puntuacion = Math.round(Math.max(0, ((correctas - fallos * fraccion - blancos * fraccionBlanco) / total) * 10) * 100) / 100;
 
   await this.participacionRepo.update(participacion.id, {
     completado: true,
     porcentaje,
     tiempoSegundos,
     respuestas,
+    blancos,
+    puntuacion,
   });
 
   // ⭐ Nota: al completar, todavía no sabemos si el usuario "gana" el reto (en los
@@ -375,26 +410,26 @@ async completarReto(
     where: { id: participacion.id },
   });
 
-  return { ...participacionFinal, gamificacion } as any;
+  return { ...participacionFinal, gamificacion, correctas, fallos, blancos, penalizacion: { fraccion, fraccionBlanco } } as any;
 }
 
  // ⭐ Generalizado para cualquier número de participantes (hoy siempre 2 en retos de tipo
  // usuario, pero ya no asume índices fijos [0]/[1] ni rompe si algún día hay más).
  private async cerrarRetoUsuario(reto: Reto): Promise<void> {
-  const participaciones = await this.participacionRepo.find({
+  // ⭐ Gana la mejor nota (con penalización); a igualdad de nota, el más rápido.
+  const participaciones = (await this.participacionRepo.find({
     where: { reto: { id: reto.id } },
     relations: ['usuario'],
-    order: { porcentaje: 'DESC', tiempoSegundos: 'ASC' },
-  });
+  })).sort((a, b) => notaDe(b) - notaDe(a) || (a.tiempoSegundos ?? 0) - (b.tiempoSegundos ?? 0));
 
   await this.retoRepo.update(reto.id, { estado: EstadoReto.COMPLETADO });
 
   if (participaciones.length < 2) return;
 
+  const igual = (a: ParticipacionReto, b: ParticipacionReto) =>
+    notaDe(a) === notaDe(b) && a.tiempoSegundos === b.tiempoSegundos;
   const mejor = participaciones[0];
-  const ganadores = participaciones.filter(
-    (p) => p.porcentaje === mejor.porcentaje && p.tiempoSegundos === mejor.tiempoSegundos,
-  );
+  const ganadores = participaciones.filter((p) => igual(p, mejor));
   const empateGeneral = ganadores.length === participaciones.length;
 
   // Asignar posiciones: los empatados en cabeza comparten puesto; el resto se numera
@@ -403,9 +438,7 @@ async completarReto(
   let i = 0;
   while (i < participaciones.length) {
     const actual = participaciones[i];
-    const empatadosConActual = participaciones.filter(
-      (p) => p.porcentaje === actual.porcentaje && p.tiempoSegundos === actual.tiempoSegundos,
-    );
+    const empatadosConActual = participaciones.filter((p) => igual(p, actual));
     for (const p of empatadosConActual) {
       await this.participacionRepo.update(p.id, { posicion: posicionActual });
     }
@@ -420,7 +453,7 @@ async completarReto(
         usuarioId: u.id,
         tipo: TipoNotificacion.RETO_RESULTADO,
         titulo: '¡Empate en el reto! 🤝',
-        mensaje: `Habéis empatado con ${mejor.porcentaje}% de acierto`,
+        mensaje: `Habéis empatado con un ${fmtNota(notaDe(mejor))} sobre 10`,
         prioridad: PrioridadNotificacion.MEDIA,
       });
     }
@@ -439,8 +472,8 @@ async completarReto(
         tipo: TipoNotificacion.RETO_RESULTADO,
         titulo: '¡Has ganado el reto! 🏆',
         mensaje: rivalUsuario
-          ? `Has ganado a ${rivalUsuario.nick ?? rivalUsuario.nombre} con ${p.porcentaje}% de acierto`
-          : `Has terminado con ${p.porcentaje}% de acierto`,
+          ? `Has ganado a ${rivalUsuario.nick ?? rivalUsuario.nombre} con un ${fmtNota(notaDe(p))} sobre 10`
+          : `Has terminado con un ${fmtNota(notaDe(p))} sobre 10`,
         prioridad: PrioridadNotificacion.MEDIA,
       });
       await this.darPuntosPorReto(usuario.id, (reto.oposicion as any).id, 0, true);
@@ -451,8 +484,8 @@ async completarReto(
         tipo: TipoNotificacion.RETO_RESULTADO,
         titulo: 'Reto finalizado',
         mensaje: ganador
-          ? `${ganador.nick ?? ganador.nombre} ha ganado con ${mejor.porcentaje}%. ¡Sigue practicando!`
-          : `Has terminado con ${p.porcentaje}% de acierto. ¡Sigue practicando!`,
+          ? `${ganador.nick ?? ganador.nombre} ha ganado con un ${fmtNota(notaDe(mejor))} sobre 10. ¡Sigue practicando!`
+          : `Has terminado con un ${fmtNota(notaDe(p))} sobre 10. ¡Sigue practicando!`,
         prioridad: PrioridadNotificacion.MEDIA,
       });
     }

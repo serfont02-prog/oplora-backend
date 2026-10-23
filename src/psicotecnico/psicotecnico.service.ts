@@ -832,7 +832,7 @@ export class PsicotecnicoService {
   async completarRetoPsicotecnico(
     retoId: string,
     usuarioId: string,
-    respuestas: { preguntaId: string; respuestaTexto: string; tiempoRespuesta: number }[],
+    respuestas: { preguntaId: string; respuestaTexto: string | null; tiempoRespuesta: number }[],
   ): Promise<ResultadoRetoPsicotecnico> {
     const reto = await this.retoPsicotecnicoRepo.findOne({
       where: { id: retoId },
@@ -904,11 +904,22 @@ export class PsicotecnicoService {
         : r,
     );
 
+    // ⭐ Solo vale una opción que exista en la pregunta del duelo; lo demás (o null) = en blanco.
+    const opcionesPorPregunta = new Map((reto.preguntas ?? []).map((p: any) => [p.id, p.opciones ?? []]));
+    respuestas = respuestas.map((r) => ({
+      ...r,
+      respuestaTexto: typeof r.respuestaTexto === 'string' && (opcionesPorPregunta.get(r.preguntaId) ?? []).includes(r.respuestaTexto) ? r.respuestaTexto : null,
+      tiempoRespuesta: Math.min(Math.max(0, Math.trunc(Number(r.tiempoRespuesta)) || 0), 30 * 60 * 1000),
+    }));
+
     const idsPreguntas = respuestas.map((r) => r.preguntaId);
     const preguntasOriginales = await this.preguntaRepo.find({ where: { id: In(idsPreguntas) } });
     const mapaOriginales = new Map(preguntasOriginales.map((p) => [p.id, p]));
 
-    const respuestasCorregidas: { preguntaId: string; correcta: boolean; tiempoRespuesta: number }[] = [];
+    const respuestasCorregidas: {
+      preguntaId: string; correcta: boolean; tiempoRespuesta: number;
+      respuestaTexto: string | null; correctaTexto: string | null; enBlanco: boolean;
+    }[] = [];
     for (const r of respuestas) {
       const original = mapaOriginales.get(r.preguntaId);
       const textoCorrecta = original?.opciones?.[original.correcta];
@@ -918,10 +929,18 @@ export class PsicotecnicoService {
         r.respuestaTexto != null &&
         r.respuestaTexto.trim() === textoCorrecta.trim()
       );
-      respuestasCorregidas.push({ preguntaId: r.preguntaId, correcta, tiempoRespuesta: r.tiempoRespuesta });
+      respuestasCorregidas.push({
+        preguntaId: r.preguntaId,
+        correcta,
+        tiempoRespuesta: r.tiempoRespuesta,
+        respuestaTexto: r.respuestaTexto ?? null,
+        correctaTexto: typeof textoCorrecta === 'string' ? textoCorrecta : null,
+        enBlanco: r.respuestaTexto == null,
+      });
     }
 
     const aciertos = respuestasCorregidas.filter((r) => r.correcta).length;
+    const blancos = respuestasCorregidas.filter((r) => r.enBlanco).length;
     const tiempoTotal = respuestasCorregidas.reduce((acc, r) => acc + r.tiempoRespuesta, 0);
 
     // Transacción: guarda el resultado y, de paso, las estadísticas de uso del
@@ -937,14 +956,16 @@ export class PsicotecnicoService {
       if (previo) throw new BadRequestException('Ya completaste este reto');
 
       for (const r of respuestasCorregidas) {
-        await manager.increment(PreguntaPsicotecnica, { id: r.preguntaId }, r.correcta ? 'aciertos' : 'fallos', 1);
+        // Una pregunta en blanco no cuenta como fallo en las estadísticas del banco
+        if (!r.enBlanco) await manager.increment(PreguntaPsicotecnica, { id: r.preguntaId }, r.correcta ? 'aciertos' : 'fallos', 1);
         await manager.increment(PreguntaPsicotecnica, { id: r.preguntaId }, 'vecesUsada', 1);
       }
 
       const datos = {
         completado: true,
         aciertos,
-        fallos: respuestasCorregidas.length - aciertos,
+        fallos: respuestasCorregidas.length - aciertos - blancos,
+        blancos,
         tiempoTotal,
         respuestas: respuestasCorregidas,
       };

@@ -20,7 +20,15 @@ export class ParticipacionReto {
   posicion: number;
 
   @Column({ type: 'jsonb', nullable: true })
-  respuestas: { seleccionada: number; correcta: boolean }[];
+  respuestas: { seleccionada: number | null; correcta: boolean; enBlanco?: boolean }[];
+
+  // ⭐ Duelos como el test de Practicar: se pueden dejar preguntas en blanco y gana la mejor
+  // nota sobre 10 con la penalización de la convocatoria (fallos y, si resta, blancos).
+  @Column({ type: 'int', nullable: true })
+  blancos: number | null;
+
+  @Column({ type: 'float', nullable: true })
+  puntuacion: number | null;
 
   @CreateDateColumn()
   creadoEn: Date;

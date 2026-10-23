@@ -27,7 +27,19 @@ export class ResultadoRetoPsicotecnico {
   posicion: number;
 
   @Column({ type: 'jsonb', nullable: true })
-  respuestas: { preguntaId: string; correcta: boolean; tiempoRespuesta: number }[];
+  respuestas: {
+    preguntaId: string;
+    correcta: boolean;
+    tiempoRespuesta: number;
+    // ⭐ Para la revisión al terminar (como en Practicar): lo que contestó y la correcta
+    respuestaTexto?: string | null;
+    correctaTexto?: string | null;
+    enBlanco?: boolean;
+  }[];
+
+  // ⭐ Preguntas dejadas en blanco (no cuentan como fallo)
+  @Column({ default: 0 })
+  blancos: number;
 
   // ⭐ Respuestas que ya se han dado durante el duelo (pregunta → respuesta). Al contestar
   // cada pregunta se fija aquí y solo entonces se revela la solución; al terminar, cuenta
