@@ -3,6 +3,7 @@ import { Injectable, ConflictException, NotFoundException, BadRequestException  
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull, In } from 'typeorm';
 import { Usuario } from './usuario.entity';
+import { CATEGORIAS_AVISOS, normalizarAvisos } from '../notificacion/categorias-avisos';
 import * as bcrypt from 'bcrypt';
 import { UsuarioOposicion } from './usuario-oposicion.entity';
 import { Oposicion } from '../oposicion/oposicion.entity';
@@ -457,16 +458,29 @@ async actualizarNivel(usuarioId: string, oposicionId: string, nivel: number) {
 }
 
 /** ⭐ Notificaciones y avisos: de momento, si acepta retos al azar. */
-async actualizarPreferencias(usuarioId: string, datos: { recibirRetosAleatorios?: unknown }) {
+async actualizarPreferencias(usuarioId: string, datos: { recibirRetosAleatorios?: unknown; avisos?: unknown }) {
+  const actual = await this.repo.findOne({ where: { id: usuarioId }, select: { id: true, recibirRetosAleatorios: true, preferenciasAvisos: true } });
+  if (!actual) throw new NotFoundException('Usuario no encontrado');
   const cambios: Partial<Usuario> = {};
   if (datos.recibirRetosAleatorios !== undefined) {
     if (typeof datos.recibirRetosAleatorios !== 'boolean') throw new BadRequestException('Valor no válido');
     cambios.recibirRetosAleatorios = datos.recibirRetosAleatorios;
   }
-  if (Object.keys(cambios).length) await this.repo.update(usuarioId, cambios);
-  const u = await this.repo.findOne({ where: { id: usuarioId }, select: { id: true, recibirRetosAleatorios: true } });
-  if (!u) throw new NotFoundException('Usuario no encontrado');
-  return { recibirRetosAleatorios: u.recibirRetosAleatorios };
+  // ⭐ Avisos por categoría (retos, repasos, noticias, convocatoria, normativa): se mezclan con lo guardado.
+  if (datos.avisos !== undefined) {
+    if (!datos.avisos || typeof datos.avisos !== 'object' || Array.isArray(datos.avisos)) throw new BadRequestException('Valor no válido');
+    const nuevas = { ...normalizarAvisos(actual.preferenciasAvisos) };
+    for (const [clave, valor] of Object.entries(datos.avisos as Record<string, unknown>)) {
+      if (!(CATEGORIAS_AVISOS as readonly string[]).includes(clave) || typeof valor !== 'boolean') {
+        throw new BadRequestException('Valor no válido');
+      }
+      (nuevas as any)[clave] = valor;
+    }
+    cambios.preferenciasAvisos = nuevas;
+  }
+  if (Object.keys(cambios).length) await this.repo.update(usuarioId, cambios as any);
+  const u = { ...actual, ...cambios };
+  return { recibirRetosAleatorios: u.recibirRetosAleatorios, avisos: normalizarAvisos(u.preferenciasAvisos) };
 }
 
 async findMe(id: string) {

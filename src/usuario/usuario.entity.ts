@@ -116,6 +116,10 @@ export class Usuario {
   @Column({ default: true })
   recibirRetosAleatorios: boolean;
 
+  // ⭐ Notificaciones y avisos: categorías desactivadas ({ retos: false, ... }). null = todas activadas.
+  @Column({ type: 'jsonb', nullable: true })
+  preferenciasAvisos: Record<string, boolean> | null;
+
   @Column({ type: 'date', nullable: true })
   fechaResetConsumo: string;
   

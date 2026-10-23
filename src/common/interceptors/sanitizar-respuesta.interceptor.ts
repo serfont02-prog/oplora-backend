@@ -42,6 +42,7 @@ const CAMPOS_PRIVADOS_DE_OTROS = new Set([
   'ultimaActividad',
   'ultimoAcceso',
   'recibirRetosAleatorios',
+  'preferenciasAvisos',
   'notificacionesListas',
   'emailVerificado',
   'rol',

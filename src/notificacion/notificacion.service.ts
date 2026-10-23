@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Cron } from '@nestjs/schedule';
 import { Repository } from 'typeorm';
 import { Notificacion, TipoNotificacion, PrioridadNotificacion } from './notificacion.entity';
+import { Usuario } from '../usuario/usuario.entity';
+import { categoriaDeTipo } from './categorias-avisos';
 
 // ⭐ La app no usa emojis (solo iconos): se quitan de los textos al crear la notificación,
 // así no hay que tocar cada servicio que avisa (retos, duelos, flashcards…).
@@ -23,7 +25,27 @@ export class NotificacionService {
   constructor(
     @InjectRepository(Notificacion)
     private readonly repo: Repository<Notificacion>,
+    @InjectRepository(Usuario)
+    private readonly usuarioRepo: Repository<Usuario>,
   ) {}
+
+  /**
+   * ⭐ Respeta "Notificaciones y avisos": de los usuarios indicados, devuelve los que quieren
+   * recibir avisos de este tipo. Los tipos sin categoría (soporte, Liga…) llegan a todos.
+   */
+  private async filtrarPorPreferencias(usuarioIds: string[], tipo: TipoNotificacion): Promise<string[]> {
+    const categoria = categoriaDeTipo(tipo);
+    if (!categoria || usuarioIds.length === 0) return usuarioIds;
+    const desactivados = await this.usuarioRepo
+      .createQueryBuilder('u')
+      .select('u.id', 'id')
+      .where('u.id IN (:...ids)', { ids: usuarioIds })
+      .andWhere(`u."preferenciasAvisos" ->> :categoria = 'false'`, { categoria })
+      .getRawMany();
+    if (desactivados.length === 0) return usuarioIds;
+    const fuera = new Set(desactivados.map((d: any) => d.id));
+    return usuarioIds.filter((id) => !fuera.has(id));
+  }
 
   async crear(datos: {
     usuarioId: string;
@@ -33,7 +55,10 @@ export class NotificacionService {
     prioridad?: PrioridadNotificacion;
     urlAccion?: string;
     metadata?: Record<string, any>;
-  }): Promise<Notificacion> {
+  }): Promise<Notificacion | null> {
+    // El usuario ha desactivado este tipo de aviso: no se crea.
+    const [destino] = await this.filtrarPorPreferencias([datos.usuarioId], datos.tipo);
+    if (!destino) return null;
     const n = this.repo.create({
       tipo: datos.tipo,
       titulo: limpiar(datos.titulo, 255),
@@ -58,7 +83,7 @@ export class NotificacionService {
       metadata?: Record<string, any>;
     },
   ): Promise<number> {
-    const ids = [...new Set((usuarioIds ?? []).filter(Boolean))];
+    const ids = await this.filtrarPorPreferencias([...new Set((usuarioIds ?? []).filter(Boolean))], datos.tipo);
     const LOTE = 500;
     for (let i = 0; i < ids.length; i += LOTE) {
       const filas = ids.slice(i, i + LOTE).map((usuarioId) =>
