@@ -1,4 +1,6 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Request, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -23,6 +25,14 @@ export class TemarioPapelController {
     return this.service.guardarFicha(oposicionId, datos);
   }
 
+  @Post('admin/:oposicionId/imagen')
+  @UseGuards(RolesGuard)
+  @Roles('admin')
+  @UseInterceptors(FileInterceptor('imagen', { storage: memoryStorage(), limits: { fileSize: 6 * 1024 * 1024 } }))
+  subirImagen(@Param('oposicionId', ParseUUIDPipe) oposicionId: string, @UploadedFile() imagen: any) {
+    return this.service.subirImagen(oposicionId, imagen);
+  }
+
   @Get('admin/:oposicionId/interesados')
   @UseGuards(RolesGuard)
   @Roles('admin')
@@ -36,8 +46,8 @@ export class TemarioPapelController {
   }
 
   @Post('oposicion/:oposicionId/interes')
-  apuntar(@Param('oposicionId', ParseUUIDPipe) oposicionId: string, @Request() req: any) {
-    return this.service.apuntarInteres(req.user.id, oposicionId);
+  apuntar(@Param('oposicionId', ParseUUIDPipe) oposicionId: string, @Request() req: any, @Body('opciones') opciones: any) {
+    return this.service.apuntarInteres(req.user.id, oposicionId, opciones);
   }
 
   @Delete('oposicion/:oposicionId/interes')

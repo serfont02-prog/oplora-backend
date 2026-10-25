@@ -22,6 +22,10 @@ export class InteresTemarioPapel {
   @CreateDateColumn({ type: 'timestamptz' })
   creadoEn: Date;
 
+  // Cómo lo quiere: { idGrupo: idValor }, p. ej. { impresion: 'color', caras: 'una' }
+  @Column({ type: 'jsonb', nullable: true })
+  opciones: Record<string, string> | null;
+
   // Cuándo se le avisó de que ya se puede comprar (para no avisar dos veces)
   @Column({ type: 'timestamptz', nullable: true })
   avisadoEn: Date | null;
