@@ -27,6 +27,7 @@
   import { SoporteModule } from './soporte/soporte.module';
   import { LigaModule } from './liga/liga.module';
   import { InvitacionModule } from './invitacion/invitacion.module';
+  import { TemarioPapelModule } from './temario-papel/temario-papel.module';
 
 
 @Module({
@@ -81,6 +82,7 @@ NoticiaModule,
 SoporteModule,
 LigaModule,
 InvitacionModule,
+TemarioPapelModule,
   ],
   providers: [
     {

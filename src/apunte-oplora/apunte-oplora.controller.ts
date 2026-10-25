@@ -11,6 +11,18 @@ import { Roles } from '../auth/roles.decorator';
 import { memoryStorage } from 'multer';
 import { Request } from '@nestjs/common';
 
+// ⭐ El PDF original de los apuntes OPLORA no se entrega a los usuarios: se estudian dentro de
+// la app y el temario se vende impreso. Solo los administradores reciben el enlace al archivo.
+function sinArchivo<T>(datos: T, req: any): T {
+  if (req?.user?.rol === 'admin') return datos;
+  const limpiar = (a: any) => {
+    if (!a || typeof a !== 'object') return a;
+    const { urlArchivo, ...resto } = a;
+    return resto;
+  };
+  return (Array.isArray(datos) ? datos.map(limpiar) : limpiar(datos)) as T;
+}
+
 
 @Controller('apuntes-oplora')
 @UseGuards(JwtAuthGuard)
@@ -18,19 +30,18 @@ export class ApunteOploraController {
   constructor(private readonly service: ApunteOploraService) {}
 
   @Get('oposicion/:oposicionId')
-  findByOposicion(@Param('oposicionId') oposicionId: string) {
-    return this.service.findByOposicion(oposicionId);
+  async findByOposicion(@Param('oposicionId') oposicionId: string, @Request() req: any) {
+    return sinArchivo(await this.service.findByOposicion(oposicionId), req);
   }
-  
+
   @Get('tema/:temaId')
-  findByTema(@Param('temaId') temaId: string) {
-    return this.service.findByTema(temaId);
+  async findByTema(@Param('temaId') temaId: string, @Request() req: any) {
+    return sinArchivo(await this.service.findByTema(temaId), req);
   }
 
-
-   @Get(':id')
-  findOne(@Param('id') id: string) {
-  return this.service.findOne(id);
+  @Get(':id')
+  async findOne(@Param('id') id: string, @Request() req: any) {
+    return sinArchivo(await this.service.findOne(id), req);
   }
 
  @Post('oposicion/:oposicionId')
