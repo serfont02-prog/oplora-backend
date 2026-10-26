@@ -272,31 +272,18 @@ export class TestService {
             .orWhere('tituloDirectoLey.versionLeyId = :versionLeyId', { versionLeyId });
         }),
       )
-      // ⭐ Exigir que el artículo esté realmente vinculado a algún tema del
-      // temario real DE ESTA OPOSICIÓN (no de cualquier otra oposición que
-      // también use la misma ley, ej. la Constitución). Sin este join a
-      // oposicionLeyFiltro, cuando no había convocatoria activa resuelta se
-      // colaban preguntas de artículos vinculados a temas de otras oposiciones.
-      .leftJoin(TemaNormativa, 'tnLey', '"tnLey"."articuloId" = articulo.id')
-      .leftJoin('tnLey.tema', 'temaLey')
-      .leftJoin('temaLey.convocatoria', 'convocatoriaTemaLey')
-      .leftJoin('convocatoriaTemaLey.oposicion', 'oposicionTemaLey')
-      .andWhere('temaLey.id IS NOT NULL')
+      // ⭐ Solo artículos vinculados al temario DE ESTA OPOSICIÓN (no de otra que use la misma
+      // ley, p. ej. la Constitución), sea cual sea el nivel del vínculo en el tema: artículo
+      // suelto, capítulo, título o ley entera. Antes solo contaban los artículos vinculados uno
+      // a uno: si en un tema se vinculaba un capítulo o un título completo, sus artículos no
+      // entraban en el "Test de esta ley".
       .andWhere(
-        // ⭐ El tema puede tener la convocatoria seteada directamente (caso
-        // ideal, se compara con la convocatoria activa del usuario) o no
-        // tenerla (campo nullable) y solo poder verificarse por oposición.
-        // Antes esto era un AND estricto contra convocatoriaActivaId: si el
-        // tema no tenía convocatoria asignada, la condición nunca se cumplía
-        // y "Test por Ley" no devolvía NINGUNA pregunta aunque hubiera
-        // artículos correctamente vinculados. Ahora, igual que en el test
-        // general, se acepta cualquiera de los dos caminos.
-        new Brackets((qb) => {
-          if (convocatoriaActivaId) {
-            qb.where('convocatoriaTemaLey.id = :convocatoriaActivaId', { convocatoriaActivaId });
-          }
-          qb.orWhere('oposicionTemaLey.id = :oposicionId', { oposicionId });
-        }),
+        `articulo.id IN (${sqlArticulosDeTemas(
+          `SELECT tm_ley.id FROM temas tm_ley
+             LEFT JOIN convocatorias cv_ley ON cv_ley.id = tm_ley."convocatoriaId"
+            WHERE cv_ley."oposicionId" = :oposicionIdLey${convocatoriaActivaId ? ' OR tm_ley."convocatoriaId" = :convocatoriaIdLey' : ''}`,
+        )})`,
+        { oposicionIdLey: oposicionId, ...(convocatoriaActivaId ? { convocatoriaIdLey: convocatoriaActivaId } : {}) },
       );
   }
 
