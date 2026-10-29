@@ -23,7 +23,13 @@ export class PasswordResetService {
     private readonly repo: Repository<Usuario>,
   ) {}
 
+  // ⭐ Responde al momento y hace el trabajo después: así tarda lo mismo exista o no la cuenta
+  // (antes, si existía, la respuesta esperaba al envío del correo y eso delataba el email).
   async solicitarReset(email: string): Promise<void> {
+    this.procesarReset(email).catch((e) => console.error('Error en la recuperación de contraseña:', e?.message ?? e));
+  }
+
+  private async procesarReset(email: string): Promise<void> {
     const emailNormalizado = typeof email === 'string' ? email.toLowerCase().trim() : '';
     if (!emailNormalizado) return;
     const usuario = await this.repo.findOne({ where: { email: emailNormalizado } });

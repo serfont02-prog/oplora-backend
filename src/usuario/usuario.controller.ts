@@ -45,11 +45,11 @@ async getLimites(@Request() req: any) {
   const usuario = await this.service.findById(req.user.id);
   if (!usuario) throw new NotFoundException('Usuario no encontrado');
 
+  // ⭐ Solo pone a cero los contadores si es otro día; abrir la app ya no cuenta como estudiar.
   const fechaOriginal = usuario.fechaResetConsumo;
-  const rachaOriginal = usuario.rachaActual;
   const usuarioActualizado = resetearConsumosSiEsNuevoDia(usuario);
 
-  if (usuarioActualizado.fechaResetConsumo !== fechaOriginal || usuarioActualizado.rachaActual !== rachaOriginal) {
+  if (usuarioActualizado.fechaResetConsumo !== fechaOriginal) {
   await this.service.guardarConsumo(usuarioActualizado);
 }
 
@@ -99,6 +99,14 @@ async exportarProgreso(@Param('oposicionId') oposicionId: string, @Request() req
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="progreso-oplora.csv"');
   res.send(csv);
+}
+
+// ⭐ Borrar mi cuenta (RGPD). Pide la contraseña para que no se pueda hacer con un móvil desbloqueado
+// ajeno o un token robado sin más.
+@Delete('me')
+@Throttle({ default: { limit: 5, ttl: 60000 } })
+eliminarMiCuenta(@Body('password') password: string, @Request() req: any) {
+  return this.service.eliminarCuenta(req.user.id, password);
 }
 
 @Delete('desactivar-oposicion/:oposicionId')
@@ -154,9 +162,20 @@ resetearProgreso(
   return this.service.resetearProgreso(req.user.id, oposicionId, conservar ?? {});
 }
 
+  // ⭐ Antes se aceptaba cualquier archivo de cualquier tamaño. Ahora: solo JPG, PNG o WEBP de hasta 5 MB,
+  // y se comprueba el contenido real del archivo (no solo lo que dice el navegador).
   @Post('avatar')
-  @UseInterceptors(FileInterceptor('archivo', { storage: memoryStorage() }))
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @UseInterceptors(FileInterceptor('archivo', {
+    storage: memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    fileFilter: (_req, file, cb) => {
+      if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) cb(null, true);
+      else cb(new BadRequestException('La foto tiene que ser JPG, PNG o WEBP'), false);
+    },
+  }))
   async subirAvatar(@UploadedFile() archivo: Express.Multer.File, @Request() req: any) {
+    if (!archivo?.buffer?.length) throw new BadRequestException('No se ha recibido ninguna imagen');
     return this.service.subirAvatar(req.user.id, archivo.buffer, archivo.mimetype);
   }
 
@@ -230,17 +249,7 @@ async actualizarNivelExperiencia(
   return this.service.actualizarNivelExperiencia(req.user.id, oposicionId, nivelExperiencia);
 }
 
-// ⭐ El nivel sale de los puntos; antes cualquiera podía ponerse el nivel que quisiera.
-@Patch('nivel')
-@UseGuards(RolesGuard)
-@Roles('admin')
-async actualizarNivel(
-  @Request() req,
-  @Body('nivel') nivel: number,
-  @Body('oposicionId') oposicionId: string,
-) {
-  return this.service.actualizarNivel(req.user.id, oposicionId, nivel);
-}
+// ⭐ PATCH /usuarios/nivel eliminado: el nivel sale solo de los puntos y nadie debe poder fijarlo a mano.
 
 
 }

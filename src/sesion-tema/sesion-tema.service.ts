@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SesionTema } from './sesion-tema.entity';
@@ -11,12 +12,10 @@ export class SesionTemaService {
   ) {}
 
 async registrar(usuarioId: string, temaId: string) {
-  console.log('=== REGISTRAR SESIÓN ===', 'usuario:', usuarioId, 'tema:', temaId);
 
-  const inicioHoy = new Date();
-  inicioHoy.setHours(0, 0, 0, 0);
-  const finHoy = new Date();
-  finHoy.setHours(23, 59, 59, 999);
+  // ⭐ "Hoy" en hora de España (antes UTC)
+  const inicioHoy = inicioDiaMadrid();
+  const finHoy = new Date(inicioDiaMadridDesplazado(1).getTime() - 1);
 
   const sesionHoy = await this.repo
     .createQueryBuilder('s')
@@ -25,12 +24,10 @@ async registrar(usuarioId: string, temaId: string) {
     .andWhere('s.creadoEn BETWEEN :inicio AND :fin', { inicio: inicioHoy, fin: finHoy })
     .getOne();
 
-  console.log('¿Sesión hoy encontrada?', sesionHoy?.id ?? 'NO');
 
   if (sesionHoy) {
   sesionHoy.ultimaVisita = new Date(); // ⭐ forzar el cambio para que TypeORM sí actualice
   const actualizada = await this.repo.save(sesionHoy);
-  console.log('Sesión actualizada:', actualizada.id, actualizada.ultimaVisita);
   return actualizada;
 }
 
@@ -40,7 +37,6 @@ async registrar(usuarioId: string, temaId: string) {
       tema: { id: temaId } as any,
     });
     const guardada = await this.repo.save(sesion);
-    console.log('NUEVA sesión guardada:', guardada.id, guardada.tema, guardada.ultimaVisita);
     return guardada;
   } catch (error: any) {
     console.error('ERROR guardando sesión:', error.message);
@@ -58,7 +54,7 @@ async registrar(usuarioId: string, temaId: string) {
     const sesiones = await this.getPorTema(usuarioId, temaId);
 
     const diasUnicos = new Set(
-      sesiones.map((s) => s.creadoEn.toISOString().slice(0, 10)),
+      sesiones.map((s) => diaMadrid(s.creadoEn)),
     );
 
     return {

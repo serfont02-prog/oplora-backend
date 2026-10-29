@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
+import { InicioDueloService } from '../duelo/inicio-duelo.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Brackets, In } from 'typeorm';
 import { Flashcard, TipoFlashcard, NivelFlashcard } from './flashcard.entity';
@@ -10,7 +12,7 @@ import { TipoNotificacion, PrioridadNotificacion } from '../notificacion/notific
 import { Usuario } from '../usuario/usuario.entity';
 import { ConfiguracionService } from '../config/configuracion.service';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
-import { resetearConsumosSiEsNuevoDia } from '../common/helpers/consumo.helper';
+import { resetearConsumosSiEsNuevoDia, registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
 
 
 // ⭐ Tipos corregibles en servidor (respuesta true/false). Los de respuesta libre (hueco,
@@ -36,6 +38,7 @@ export class FlashcardService {
     private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
     @InjectRepository(Flashcard)
     private readonly flashcardRepo: Repository<Flashcard>,
+    private readonly inicioDuelo: InicioDueloService,
   ) {}
 
   // ─── CRUD FLASHCARDS ─────────────────────────────────────
@@ -213,13 +216,29 @@ export class FlashcardService {
           );
       }
 
-      return query.orderBy('fc.creadoEn', 'ASC').take(limite).getMany();
+      const filas = await query.select('fc.id', 'id').getRawMany();
+      return this.cargarAlAzar(filas.map((f: any) => f.id), limite);
     }
-    return this.fcRepo.find({
+    const todas = await this.fcRepo.find({
       where: { oposicion: { id: oposicionId }, activa: true, esParaDuelo: true, tipo: In(TIPOS_DUELO) },
-      take: limite,
-      order: { creadoEn: 'ASC' },
+      select: ['id'],
     });
+    return this.cargarAlAzar(todas.map((f) => f.id), limite);
+  }
+
+  // ⭐ Antes los duelos salían siempre con las mismas tarjetas (las más antiguas). Ahora se eligen
+  // al azar entre todas las válidas.
+  private async cargarAlAzar(ids: string[], limite: number): Promise<Flashcard[]> {
+    const elegidos = [...new Set(ids)];
+    for (let i = elegidos.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [elegidos[i], elegidos[j]] = [elegidos[j], elegidos[i]];
+    }
+    const lote = elegidos.slice(0, Math.max(0, limite));
+    if (!lote.length) return [];
+    const filas = await this.fcRepo.find({ where: { id: In(lote) } });
+    const orden = new Map(lote.map((id, i) => [id, i]));
+    return filas.sort((a, b) => (orden.get(a.id) ?? 0) - (orden.get(b.id) ?? 0));
   }
 
   // ─── REPASO ──────────────────────────────────────────────
@@ -394,6 +413,7 @@ async registrarRespuesta(
 
   const repasoGuardado = await this.repasoRepo.save(repaso);
   await this.usuarioRepo.increment({ id: usuarioId }, 'flashcardsHoy', 1);
+  await registrarDiaDeEstudio(this.usuarioRepo.manager, usuarioId); // ⭐ cuenta para la racha
 
   if (
     repasoGuardado.estado === EstadoFC.DOMINADA &&
@@ -426,9 +446,6 @@ private async comprobarLimiteFlashcards(usuarioId: string): Promise<void> {
       flashcardsHoy: usuario.flashcardsHoy,
       temasRevisadosHoy: usuario.temasRevisadosHoy,
       fechaResetConsumo: usuario.fechaResetConsumo,
-      rachaActual: usuario.rachaActual,
-      rachaMaxima: usuario.rachaMaxima,
-      ultimaActividad: usuario.ultimaActividad,
     });
   }
   const limites = await this.configuracionService.getLimitesPlanes();
@@ -577,11 +594,8 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
   // ─── RETOS FC ────────────────────────────────────────────
 
   async crearRetoDiarioFC(oposicionId: string): Promise<RetoFC> {
-    const flashcards = await this.fcRepo.find({
-      where: { oposicion: { id: oposicionId }, activa: true },
-      order: { creadoEn: 'ASC' },
-      take: 10,
-    });
+    const todas = await this.fcRepo.find({ where: { oposicion: { id: oposicionId }, activa: true }, select: ['id'] });
+    const flashcards = await this.cargarAlAzar(todas.map((f) => f.id), 10);
 
     const fechaFin = new Date();
     fechaFin.setHours(23, 59, 59, 999);
@@ -701,26 +715,6 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
     await this.retoFcRepo.delete(retoId);
   }
 
-  async enviarFCPersonal(
-    remiteteId: string,
-    destinatarioId: string,
-    flashcardId: string,
-    mensaje?: string,
-  ): Promise<void> {
-    const fc = await this.fcRepo.findOne({ where: { id: flashcardId } });
-    if (!fc) throw new NotFoundException('Flashcard no encontrada');
-
-    await this.notificacionService.crear({
-      usuarioId: destinatarioId,
-      tipo: TipoNotificacion.RETO_RECIBIDO,
-      titulo: '📬 Te han enviado una flashcard',
-      mensaje: mensaje ?? `Alguien te ha enviado una flashcard para repasar: "${fc.pregunta.slice(0, 60)}..."`,
-      prioridad: PrioridadNotificacion.BAJA,
-      urlAccion: '/app/flashcards', // ⭐ no existe página por tarjeta
-      metadata: { flashcardId, remiteteId },
-    });
-  }
-
 async getEstadisticasFCTema(
   usuarioId: string,
   oposicionId: string,
@@ -764,7 +758,7 @@ async getEstadisticasFCTema(
 
 async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
   const ahora = new Date();
-  const inicioHoy = new Date(ahora); inicioHoy.setHours(0, 0, 0, 0);
+  const inicioHoy = inicioDiaMadrid(ahora); // ⭐ medianoche de España (antes UTC)
   const inicioSemana = new Date(ahora); inicioSemana.setDate(ahora.getDate() - 7);
   const inicioMes = new Date(ahora); inicioMes.setDate(ahora.getDate() - 30);
 
@@ -877,7 +871,10 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     }
 
     const aciertos = respuestas.filter((r) => r.correcta).length;
-    const tiempoTotal = respuestas.reduce((acc, r) => acc + r.tiempoRespuesta, 0);
+    // ⭐ En los duelos el tiempo total (que desempata) lo mide el servidor desde que pulsó "Empezar".
+    const tiempoTotal = reto.tipo === TipoRetoFC.DUELO
+      ? await this.inicioDuelo.tiempoMs('fc', reto.id, usuarioId, reto.creadoEn)
+      : respuestas.reduce((acc, r) => acc + r.tiempoRespuesta, 0);
 
     // ⭐ Antes el bucle de registrarRespuesta y el guardado del resultado no estaban en una
     // transacción: si el proceso fallaba a mitad del bucle, quedaban repasos SM2 actualizados

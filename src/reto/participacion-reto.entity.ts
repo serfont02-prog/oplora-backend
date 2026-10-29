@@ -1,7 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, Index } from 'typeorm';
 import { Reto } from './reto.entity';
 import { Usuario } from '../usuario/usuario.entity';
 
+// ⭐ Índices para las consultas de cada usuario (antes casi no había)
+@Index(['usuario'])
+@Index(['reto'])
 @Entity('participaciones_reto')
 export class ParticipacionReto {
   @PrimaryGeneratedColumn('uuid')

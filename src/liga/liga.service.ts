@@ -1,3 +1,4 @@
+import { registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
 import {
   Injectable,
   Logger,
@@ -875,7 +876,9 @@ export class LigaService {
 
     // Fuera de plazo: cuenta lo que tuviera guardado, no lo que llegue ahora
     const tarde = Date.now() > this.finPartida(jornada, resultado) + MARGEN_ENVIO_MS;
-    return this.finalizar(jornada, resultado, tarde ? resultado.respuestas : respuestas, tarde);
+    const final = await this.finalizar(jornada, resultado, tarde ? resultado.respuestas : respuestas, tarde);
+    await registrarDiaDeEstudio(this.resultadoRepo.manager, usuarioId); // ⭐ cuenta para la racha
+    return final;
   }
 
   private async finalizar(

@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { borrarConvocatorias } from '../common/helpers/borrado.helper';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Convocatoria, EstadoConvocatoria } from './convocatoria.entity';
@@ -223,7 +224,7 @@ private async actualizarEstadoOposicion(oposicionId: string): Promise<void> {
 }
 
 async remove(id: string): Promise<void> {
-  const convocatoria = await this.convocatoriaRepo.findOne({ where: { id } });
+  const convocatoria = await this.convocatoriaRepo.findOne({ where: { id }, relations: ['oposicion'] });
   if (!convocatoria) throw new NotFoundException('Convocatoria no encontrada');
 
   const usuariosAfectados = await this.usuarioOposicionRepo
@@ -236,15 +237,15 @@ async remove(id: string): Promise<void> {
     throw new BadRequestException(`No se puede borrar: ${usuariosAfectados} usuario(s) vinculados.`);
   }
 
-  await this.documentoRepo.delete({ convocatoria: { id } as any });
-  
+  // Los apuntes de cada tema se borran primero con su archivo (fuera de la transacción)
   const temas = await this.temaRepo.find({ where: { convocatoria: { id } as any } });
-  
   for (const tema of temas) {
     await this.temaService.remove(tema.id);
   }
-
-  await this.convocatoriaRepo.delete(id);
+  // ⭐ El resto (documentos, exámenes anteriores, liga…) sin chocar con las claves foráneas
+  await this.convocatoriaRepo.manager.transaction((manager) => borrarConvocatorias(manager, [id]));
+  const oposicionId = (convocatoria as any).oposicion?.id;
+  if (oposicionId) await this.actualizarEstadoOposicion(oposicionId).catch(() => undefined);
 }
 
   async saveDocumento(datos: Partial<DocumentoConvocatoria>): Promise<DocumentoConvocatoria> {

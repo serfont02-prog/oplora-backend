@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
+import { InicioDueloService } from '../duelo/inicio-duelo.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull } from 'typeorm';
 import { Reto, TipoReto, EstadoReto } from './reto.entity';
@@ -60,6 +62,7 @@ export class RetoService {
     private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
     @InjectRepository(SorteoReto)
     private readonly sorteoRepo: Repository<SorteoReto>,
+    private readonly inicioDuelo: InicioDueloService,
   ) {}
 
   // ─── RETO AL AZAR ────────────────────────────────────────
@@ -379,10 +382,17 @@ async completarReto(
   const fraccionBlanco = conv?.permiteBlancos === false ? parseFraccionReto(conv?.fraccionPenalizacionBlanco) : 0;
   const puntuacion = Math.round(Math.max(0, ((correctas - fallos * fraccion - blancos * fraccionBlanco) / total) * 10) * 100) / 100;
 
+  // ⭐ El tiempo que desempata lo mide el servidor (desde que pulsó "Empezar"); el que manda el
+  // móvil ya no cuenta, porque se podía enviar 1 segundo y ganar cualquier empate.
+  void tiempoSegundos;
+  const tiempoServidor = Math.round(
+    (await this.inicioDuelo.tiempoMs('test', reto.id, usuarioId, reto.creadoEn)) / 1000,
+  );
+
   await this.participacionRepo.update(participacion.id, {
     completado: true,
     porcentaje,
-    tiempoSegundos,
+    tiempoSegundos: tiempoServidor,
     respuestas,
     blancos,
     puntuacion,
@@ -392,6 +402,7 @@ async completarReto(
   // retos de tipo USUARIO eso depende de que el rival también termine), así que aquí
   // solo se abonan los puntos por aciertos; el bonus por ganar (si aplica) se añade
   // más tarde en cerrarRetoUsuario y no llega a este toast de feedback inmediato.
+  await registrarDiaDeEstudio(this.participacionRepo.manager, usuarioId); // ⭐ cuenta para la racha
   const gamificacion = await this.darPuntosPorReto(usuarioId, (reto.oposicion as any).id, correctas, false);
 
    // Verificar si todos han completado (el cierre con ganador/perdedor solo aplica a duelos entre usuarios;
@@ -755,17 +766,25 @@ async eliminarRetoUsuario(retoId: string, usuarioId: string): Promise<void> {
 }
 
 // En reto.service.ts:
-async getEstadisticasUsuario(usuarioId: string) {
-  const completados = await this.participacionRepo.find({
-    where: { usuario: { id: usuarioId }, completado: true, posicion: Not(IsNull()) } as any,
-  });
-
-  const victorias = completados.filter((p) => p.posicion === 1).length;
-  const derrotas = completados.length - victorias;
-  const total = completados.length;
+async getEstadisticasUsuario(usuarioId: string, oposicionId?: string) {
+  // ⭐ Un empate ya no cuenta como victoria para los dos: si alguien más del mismo duelo comparte
+  // el primer puesto, es empate (igual que lo calcula la pantalla de Retos).
+  const filas: { posicion: number; empatados: number }[] = await this.participacionRepo.query(
+    `SELECT p.posicion,
+            (SELECT COUNT(*)::int FROM participaciones_reto o
+              WHERE o."retoId" = p."retoId" AND o.id <> p.id AND o.posicion = p.posicion) AS empatados
+       FROM participaciones_reto p
+      WHERE p."usuarioId" = $1 AND p.completado = true AND p.posicion IS NOT NULL
+        AND ($2::uuid IS NULL OR p."retoId" IN (SELECT r.id FROM retos r WHERE r."oposicionId" = $2::uuid))`,
+    [usuarioId, oposicionId || null],
+  );
+  const empates = filas.filter((f) => f.empatados > 0).length;
+  const victorias = filas.filter((f) => f.posicion === 1 && f.empatados === 0).length;
+  const total = filas.length;
+  const derrotas = total - victorias - empates;
   const porcentajeVictoria = total > 0 ? Math.round((victorias / total) * 100) : 0;
 
-  return { victorias, derrotas, total, porcentajeVictoria };
+  return { victorias, empates, derrotas, total, porcentajeVictoria };
 }
 
 private async enriquecerNivelesParticipantes(reto: Reto, oposicionId: string): Promise<Reto> {
@@ -819,4 +838,4 @@ async validarDestinatarioReto(retadorId: string, nickOEmail: string, oposicionId
     mismaConvocatoria,
   };
 }
-}
+}

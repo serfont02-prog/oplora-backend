@@ -13,6 +13,7 @@ import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import { ConfiguracionModule } from '../config/configuracion.module';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { SorteoReto } from './sorteo-reto.entity';
+import { InicioDueloModule } from '../duelo/inicio-duelo.module';
 
 
 @Module({
@@ -21,6 +22,7 @@ import { SorteoReto } from './sorteo-reto.entity';
     TestModule,
     NotificacionModule,
     ConfiguracionModule, 
+    InicioDueloModule,
   ],
   controllers: [RetoController],
   providers: [RetoService],

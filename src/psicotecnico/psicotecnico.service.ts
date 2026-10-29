@@ -1,4 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
+import { registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
+import { InicioDueloService } from '../duelo/inicio-duelo.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull } from 'typeorm';
 import { PsicotecnicoConfigOposicion } from './psicotecnico-config-oposicion.entity';
@@ -74,6 +77,7 @@ export class PsicotecnicoService {
     @InjectRepository(Usuario)
     private readonly usuarioRepo: Repository<Usuario>,
     private readonly notificacionService: NotificacionService,
+    private readonly inicioDuelo: InicioDueloService,
   ) {}
 
   /* =========================================================
@@ -459,6 +463,7 @@ export class PsicotecnicoService {
     // El primer intento no cuenta como "mejor marca"; después, solo si supera la anterior.
     const esMejorMarca = !!mejorAnterior && porcentaje > mejorAnterior.porcentaje;
 
+    await registrarDiaDeEstudio(this.resultadoRepo.manager, datos.usuarioId); // ⭐ cuenta para la racha
     const resultado = await this.resultadoRepo.save(
       this.resultadoRepo.create({
         tipo: datos.tipo,
@@ -516,7 +521,7 @@ export class PsicotecnicoService {
 
   async getProgresoPorPeriodo(usuarioId: string, oposicionId?: string) {
     const ahora = new Date();
-    const inicioHoy = new Date(ahora); inicioHoy.setHours(0, 0, 0, 0);
+    const inicioHoy = inicioDiaMadrid(ahora); // ⭐ medianoche de España (antes UTC)
     const inicioSemana = new Date(ahora); inicioSemana.setDate(ahora.getDate() - 7);
     const inicioMes = new Date(ahora); inicioMes.setDate(ahora.getDate() - 30);
 
@@ -941,7 +946,9 @@ export class PsicotecnicoService {
 
     const aciertos = respuestasCorregidas.filter((r) => r.correcta).length;
     const blancos = respuestasCorregidas.filter((r) => r.enBlanco).length;
-    const tiempoTotal = respuestasCorregidas.reduce((acc, r) => acc + r.tiempoRespuesta, 0);
+    // ⭐ El tiempo total (que desempata) lo mide el servidor desde que pulsó "Empezar".
+    const tiempoTotal = await this.inicioDuelo.tiempoMs('psico', reto.id, usuarioId, reto.creadoEn);
+    await registrarDiaDeEstudio(this.resultadoRepo.manager, usuarioId); // ⭐ cuenta para la racha
 
     // Transacción: guarda el resultado y, de paso, las estadísticas de uso del
     // banco (aciertos/fallos/vecesUsada), igual que completarRetoFC envuelve

@@ -1,5 +1,8 @@
+import { diaMadrid } from './dia.helper';
+
+// ⭐ En hora de España (antes en UTC).
 export function obtenerFechaHoy() {
-  return new Date().toISOString().split('T')[0];
+  return diaMadrid();
 }
 
 export function hanPasadoDias(fecha: Date, dias: number) {
@@ -18,9 +21,5 @@ export function esMismoDia(
   fecha2?: Date | string
 ) {
   if (!fecha1 || !fecha2) return false;
-
-  return (
-    new Date(fecha1).toISOString().split('T')[0] ===
-    new Date(fecha2).toISOString().split('T')[0]
-  );
+  return diaMadrid(fecha1) === diaMadrid(fecha2);
 }

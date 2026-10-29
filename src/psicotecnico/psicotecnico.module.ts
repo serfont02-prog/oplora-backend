@@ -11,6 +11,7 @@ import { RetoPsicotecnico } from './reto-psicotecnico.entity';
 import { ResultadoRetoPsicotecnico } from './resultado-reto-psicotecnico.entity';
 import { Usuario } from '../usuario/usuario.entity';
 import { NotificacionModule } from '../notificacion/notificacion.module';
+import { InicioDueloModule } from '../duelo/inicio-duelo.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { NotificacionModule } from '../notificacion/notificacion.module';
       Usuario,
     ]),
     NotificacionModule,
+    InicioDueloModule,
   ],
   controllers: [PsicotecnicoController],
   providers: [PsicotecnicoService],

@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, UpdateDateColumn, Index } from 'typeorm';
 import { Flashcard } from './flashcard.entity';
 import { Usuario } from '../usuario/usuario.entity';
 
@@ -8,6 +8,8 @@ export enum EstadoFC {
   NO_DOMINADA = 'no_dominada',
 }
 
+// ⭐ Índices para las consultas de cada usuario (antes casi no había)
+@Index(['usuario', 'flashcard'])
 @Entity('repasos_fc')
 export class RepasoFC {
   @PrimaryGeneratedColumn('uuid')

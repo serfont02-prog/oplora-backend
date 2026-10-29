@@ -107,15 +107,8 @@ getPendientes(
     return this.service.eliminarDueloFC(id, req.user.id);
   }
 
-  @Post('enviar')
-  enviarFC(
-    @Body('destinatarioId') destinatarioId: string,
-    @Body('flashcardId') flashcardId: string,
-    @Body('mensaje') mensaje: string,
-    @Request() req: any,
-  ) {
-    return this.service.enviarFCPersonal(req.user.id, destinatarioId, flashcardId, mensaje);
-  }
+  // ⭐ POST /flashcards/enviar eliminado: la app no lo usaba y permitía mandar notificaciones con
+  // texto libre a cualquier usuario (spam).
 
   @Post('reto/:id/completar')
   completarReto(

@@ -28,6 +28,7 @@
   import { LigaModule } from './liga/liga.module';
   import { InvitacionModule } from './invitacion/invitacion.module';
   import { TemarioPapelModule } from './temario-papel/temario-papel.module';
+  import { InicioDueloModule } from './duelo/inicio-duelo.module';
 
 
 @Module({
@@ -83,6 +84,7 @@ SoporteModule,
 LigaModule,
 InvitacionModule,
 TemarioPapelModule,
+InicioDueloModule,
   ],
   providers: [
     {

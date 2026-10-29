@@ -1,5 +1,7 @@
 import { invalidarCacheUsuario } from '../auth/jwt.strategy';
-import { Injectable, ConflictException, NotFoundException, BadRequestException  } from '@nestjs/common';
+import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
+import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull, In } from 'typeorm';
 import { Usuario } from './usuario.entity';
@@ -8,7 +10,7 @@ import * as bcrypt from 'bcrypt';
 import { UsuarioOposicion } from './usuario-oposicion.entity';
 import { Oposicion } from '../oposicion/oposicion.entity';
 import { EstadoUsuario, SuscripcionUsuario } from './usuario.entity';
-import { resetearConsumosSiEsNuevoDia } from '../common/helpers/consumo.helper';
+import { resetearConsumosSiEsNuevoDia, rachaVigente } from '../common/helpers/consumo.helper';
 import { getSuscripcionLimits, haSuperadoLimite } from '../common/helpers/plan.helper';
 import { createClient } from '@supabase/supabase-js';
 import { TipoAvatar } from './usuario.entity';
@@ -21,6 +23,15 @@ import { ProgresoLectura } from '../apunte-oplora/progreso-lectura.entity'; // a
 import { ApunteUsuario } from '../apunte-usuario/apunte-usuario.entity';
 import { Tema } from '../tema/tema.entity';
 import { ResultadoTest } from '../test/resultado-test.entity';
+
+// ⭐ Reconoce JPG, PNG y WEBP por sus primeros bytes (la "firma" del archivo).
+function tipoImagenReal(b: Buffer): { mime: string; ext: string } | null {
+  if (!b || b.length < 12) return null;
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return { mime: 'image/png', ext: 'png' };
+  if (b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP') return { mime: 'image/webp', ext: 'webp' };
+  return null;
+}
 
 
 
@@ -389,7 +400,7 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
         suscripcion: u.suscripcion,
         creadoEn: u.creadoEn,
         ultimaActividad: u.ultimaActividad,
-        rachaActual: u.rachaActual,
+        rachaActual: rachaVigente(u),
         preguntasRespondidasTotales: u.preguntasRespondidasTotales,
         preguntasCorrectasTotales: u.preguntasCorrectasTotales,
         oposicion: activa?.oposicion ? { id: activa.oposicion.id, nombre: activa.oposicion.nombre } : null,
@@ -418,28 +429,95 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
     invalidarCacheUsuario(id);
   }
 
+  // ─── BORRAR MI CUENTA (RGPD) ─────────────────────────────
+  /**
+   * ⭐ Borra la cuenta a petición del usuario (derecho de supresión).
+   * - Se borra lo que es solo suyo: notas, subrayados, apuntes, avisos, contactos, invitaciones
+   *   enviadas, tickets de soporte, interés en el temario en papel, repasos, sesiones…
+   * - Lo que comparte con otros (duelos, Liga, resultados) se queda, pero anónimo: deja de haber
+   *   nombre, email, nick, DNI o foto, así que ya no es un dato personal y no se rompe el historial
+   *   de sus rivales.
+   * - El email y el nick quedan libres para registrarse de nuevo.
+   */
+  async eliminarCuenta(usuarioId: string, password: string): Promise<{ ok: true }> {
+    const u = await this.repo.findOne({
+      where: { id: usuarioId },
+      select: { id: true, rol: true, password: true, activo: true },
+    });
+    if (!u) throw new NotFoundException('Usuario no encontrado');
+    if (u.rol === 'admin') throw new BadRequestException('Una cuenta de administrador no se puede borrar desde la app');
+    const valida = typeof password === 'string' && password.length > 0 && (await bcrypt.compare(password, u.password));
+    // 400 y no 401: un 401 hace que la app cierre la sesión.
+    if (!valida) throw new BadRequestException('La contraseña no es correcta');
+
+    const PERSONALES = new Set([
+      'notas_articulo', 'subrayados_articulo', 'subrayados_apunte', 'apuntes_usuario', 'progreso_lectura',
+      'notificaciones', 'contactos_recientes', 'preferencias_widget', 'invitaciones', 'tickets_soporte',
+      'interes_temario_papel', 'sesiones_tema', 'sesiones_test', 'repasos_fc', 'usuario_convocatoria_historial',
+    ]);
+
+    await this.repo.manager.transaction(async (m) => {
+      // Columnas que apuntan a usuarios (se leen de la BD para no depender de los nombres).
+      const fks: { tabla: string; columna: string }[] = await m.query(`
+        SELECT cl.relname AS tabla, att.attname AS columna
+        FROM pg_constraint con
+        JOIN pg_class cl ON cl.oid = con.conrelid
+        JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
+        WHERE con.contype = 'f' AND con.confrelid = 'usuarios'::regclass
+      `);
+      for (const { tabla, columna } of fks) {
+        if (!PERSONALES.has(tabla)) continue;
+        await m.query(`DELETE FROM "${tabla}" WHERE "${columna}" = $1`, [usuarioId]);
+      }
+
+      await m.update(Usuario, usuarioId, {
+        email: `eliminado-${usuarioId}@oplora.invalid`,
+        nombre: 'Usuario eliminado',
+        apellidos: null as any,
+        nick: null as any,
+        dni: null as any,
+        avatarUrl: null as any,
+        tipoAvatar: TipoAvatar.OPLO,
+        password: await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10),
+        passwordCambiadaEn: new Date(),
+        resetPasswordToken: null,
+        resetPasswordExpira: null,
+        activo: false,
+        estado: EstadoUsuario.INACTIVO,
+        objetivo: null as any,
+        preferenciasAvisos: null,
+        recibirRetosAleatorios: false,
+        notificacionesListas: false,
+      });
+    });
+    invalidarCacheUsuario(usuarioId);
+
+    // Fotos de perfil (fuera de la transacción: si Supabase falla, la cuenta ya está borrada).
+    try {
+      const carpeta = `usuarios/${usuarioId}`;
+      const { data } = await this.supabase.storage.from('avatares').list(carpeta, { limit: 1000 });
+      const rutas = (data ?? []).map((f) => `${carpeta}/${f.name}`);
+      if (rutas.length) await this.supabase.storage.from('avatares').remove(rutas);
+    } catch (e: any) {
+      console.error(`No se pudieron borrar las fotos de la cuenta ${usuarioId}:`, e?.message ?? e);
+    }
+
+    return { ok: true };
+  }
+
   async reactivar(id: string): Promise<void> {
     await this.repo.update(id, { activo: true });
     invalidarCacheUsuario(id);
   }
 
-async actualizarNivel(usuarioId: string, oposicionId: string, nivel: number) {
-  await this.usuarioOposicionRepo.update(
-    { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
-    { nivel },
-  );
-  return this.findMe(usuarioId);
-}
-
+  // ⭐ Solo los contadores del día: antes también reescribía racha y última actividad con lo leído
+  // un momento antes, y podía pisar lo que otra petición acababa de guardar.
   async guardarConsumo(usuario: Usuario): Promise<void> {
   await this.repo.update(usuario.id, {
     preguntasTestHoy: usuario.preguntasTestHoy,
     flashcardsHoy: usuario.flashcardsHoy,
     temasRevisadosHoy: usuario.temasRevisadosHoy,
     fechaResetConsumo: usuario.fechaResetConsumo,
-    ultimaActividad: usuario.ultimaActividad,
-    rachaActual: usuario.rachaActual, 
-    rachaMaxima: usuario.rachaMaxima, 
   });
 }
   async actualizarObjetivo(
@@ -500,6 +578,7 @@ async findMe(id: string) {
 
   return {
     ...usuarioSeguro,
+    rachaActual: rachaVigente(usuario), // ⭐ 0 si ya no estudió ni hoy ni ayer
     oposicionActiva: activa
       ? {
           ...activa.oposicion,
@@ -522,10 +601,9 @@ async verificarLimiteTest(
   if (!usuario) throw new NotFoundException('Usuario no encontrado');
 
   // Reset diario si es nuevo día
-  const usuarioActualizado = resetearConsumosSiEsNuevoDia(usuario);
-  if (usuarioActualizado.fechaResetConsumo !== usuario.fechaResetConsumo) {
-    await this.repo.save(usuarioActualizado);
-  }
+  const fechaAntes = usuario.fechaResetConsumo;
+  resetearConsumosSiEsNuevoDia(usuario);
+  if (usuario.fechaResetConsumo !== fechaAntes) await this.guardarConsumo(usuario);
 
   const limits = getSuscripcionLimits(usuario.suscripcion);
 
@@ -562,10 +640,9 @@ async verificarLimiteFlashcards(
   const usuario = await this.findById(usuarioId);
   if (!usuario) throw new NotFoundException('Usuario no encontrado');
 
-  const usuarioActualizado = resetearConsumosSiEsNuevoDia(usuario);
-  if (usuarioActualizado.fechaResetConsumo !== usuario.fechaResetConsumo) {
-    await this.repo.save(usuarioActualizado);
-  }
+  const fechaAntes = usuario.fechaResetConsumo;
+  resetearConsumosSiEsNuevoDia(usuario);
+  if (usuario.fechaResetConsumo !== fechaAntes) await this.guardarConsumo(usuario);
 
   const limits = getSuscripcionLimits(usuario.suscripcion);
 
@@ -605,8 +682,7 @@ async verificarLimiteFlashcards(
     .orderBy('uo.nivel', 'ASC')
     .getRawMany();
 
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
+    const hoy = inicioDiaMadrid(); // ⭐ día de España
 
     const hace7dias = new Date(hoy);
     hace7dias.setDate(hace7dias.getDate() - 7);
@@ -655,12 +731,16 @@ async verificarLimiteFlashcards(
     };
   }
 
-  async subirAvatar(usuarioId: string, buffer: Buffer, mimeType: string): Promise<Usuario> {
-  const path = `usuarios/${usuarioId}/${Date.now()}.jpg`;
+  async subirAvatar(usuarioId: string, buffer: Buffer, _mimeType: string): Promise<Usuario> {
+  // ⭐ El tipo se saca de los primeros bytes del archivo, no de lo que declara el navegador.
+  const tipo = tipoImagenReal(buffer);
+  if (!tipo) throw new BadRequestException('La foto tiene que ser JPG, PNG o WEBP');
+  if (buffer.length > 5 * 1024 * 1024) throw new BadRequestException('La foto no puede pasar de 5 MB');
+  const path = `usuarios/${usuarioId}/${Date.now()}.${tipo.ext}`;
 
   const { error } = await this.supabase.storage
     .from('avatares')
-    .upload(path, buffer, { contentType: mimeType, upsert: false });
+    .upload(path, buffer, { contentType: tipo.mime, upsert: false });
 
   if (error) throw new Error(`Error subiendo avatar: ${error.message}`);
 

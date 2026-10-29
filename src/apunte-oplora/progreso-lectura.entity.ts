@@ -1,7 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, UpdateDateColumn, Index } from 'typeorm';
 import { Usuario } from '../usuario/usuario.entity';
 import { ApunteOplora } from './apunte-oplora.entity';
 
+// ⭐ Índices para las consultas de cada usuario (antes casi no había)
+@Index(['usuario', 'apunte'])
 @Entity('progreso_lectura')
 export class ProgresoLectura {
   @PrimaryGeneratedColumn('uuid')

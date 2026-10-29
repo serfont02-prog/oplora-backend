@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -479,10 +480,8 @@ async avisarRepasosDelDia(): Promise<void> {
 }
 
 async getRepasosProgramados(usuarioId: string): Promise<any[]> {
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  const manana = new Date(hoy);
-  manana.setDate(manana.getDate() + 1);
+  const hoy = inicioDiaMadrid(); // ⭐ día de España
+  const manana = inicioDiaMadridDesplazado(1);
 
   return this.notaRepo
     .createQueryBuilder('n')

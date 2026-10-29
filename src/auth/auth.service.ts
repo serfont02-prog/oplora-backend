@@ -3,6 +3,10 @@ import { JwtService } from '@nestjs/jwt';
 import { UsuarioService } from '../usuario/usuario.service';
 import * as bcrypt from 'bcrypt';
 
+// ⭐ Hash de relleno: si la cuenta no existe se compara igualmente contra él, para que la respuesta
+// tarde lo mismo y no se pueda averiguar qué emails o nicks están registrados midiendo el tiempo.
+const HASH_RELLENO = bcrypt.hashSync('oplora-cuenta-inexistente', 10);
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -34,15 +38,10 @@ export class AuthService {
       usuario = await this.usuarioService.findByNick(valorNormalizado);
     }
 
-    if (!usuario) {
-      // Log interno específico para debugging; al cliente nunca se le revela la causa exacta
-      console.warn(`Login fallido: no existe ninguna cuenta para "${emailONick}"`);
-      throw new UnauthorizedException(credencialesInvalidas);
-    }
-
-    const valido = await bcrypt.compare(password, usuario.password);
-    if (!valido) {
-      console.warn(`Login fallido: contraseña incorrecta para la cuenta "${usuario.email}"`);
+    // ⭐ Se compara siempre (aunque no exista la cuenta) y no se escribe el email en los logs.
+    const valido = await bcrypt.compare(String(password ?? ''), usuario?.password || HASH_RELLENO);
+    if (!usuario || !valido) {
+      console.warn(`Login fallido${usuario ? ` (cuenta ${usuario.id})` : ' (cuenta inexistente)'}`);
       throw new UnauthorizedException(credencialesInvalidas);
     }
 

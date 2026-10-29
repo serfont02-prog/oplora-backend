@@ -40,6 +40,7 @@ const CAMPOS_PRIVADOS_DE_OTROS = new Set([
   'flashcardsHoy',
   'temasRevisadosHoy',
   'ultimaActividad',
+  'ultimoDiaRacha',
   'ultimoAcceso',
   'recibirRetosAleatorios',
   'preferenciasAvisos',

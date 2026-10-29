@@ -28,8 +28,9 @@ sortearRival(@Body('oposicionId') oposicionId: string, @Request() req: any) {
 }
 
 @Get('estadisticas')
-getEstadisticas(@Request() req: any) {
-  return this.service.getEstadisticasUsuario(req.user.id);
+getEstadisticas(@Request() req: any, @Query('oposicionId') oposicionId?: string) {
+  const valida = /^[0-9a-f-]{36}$/i.test(oposicionId ?? '') ? oposicionId : undefined;
+  return this.service.getEstadisticasUsuario(req.user.id, valida);
 }
 
 @Post('revisar-expirados')

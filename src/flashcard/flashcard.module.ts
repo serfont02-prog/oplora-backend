@@ -12,6 +12,7 @@ import { Usuario } from '../usuario/usuario.entity';
 import { NotificacionModule } from '../notificacion/notificacion.module';
 import { ConfiguracionModule } from '../config/configuracion.module';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
+import { InicioDueloModule } from '../duelo/inicio-duelo.module';
 
 
 
@@ -22,6 +23,7 @@ import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
     TypeOrmModule.forFeature([Flashcard, RepasoFC, RetoFC, ResultadoRetoFC, Articulo, Tema, Usuario, UsuarioOposicion]),
     NotificacionModule,
     ConfiguracionModule, // ⭐ aquí, fuera de forFeature
+    InicioDueloModule,
   ],
   controllers: [FlashcardController],
   providers: [FlashcardService],

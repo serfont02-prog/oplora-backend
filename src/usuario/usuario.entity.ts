@@ -64,6 +64,10 @@ export class Usuario {
   @Column({ default: 0 })
   rachaMaxima: number;
 
+  // ⭐ Último día (de España) en que estudió y contó para la racha.
+  @Column({ type: 'date', nullable: true })
+  ultimoDiaRacha: string | null;
+
   @Column({ default: false })
   emailVerificado: boolean;
 

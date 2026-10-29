@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { borrarOposicion } from '../common/helpers/borrado.helper';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -56,23 +57,8 @@ export class OposicionService {
       `No se puede borrar: tiene ${inscritos} usuario(s) inscrito(s). Desactívala para ocultarla sin perder sus datos.`,
     );
   }
-  const convocatorias = await this.convocatoriaRepo.find({
-    where: { oposicion: { id } },
-  });
-
-  for (const conv of convocatorias) {
-    const temas = await this.temaRepo.find({
-      where: { convocatoria: { id: conv.id } },
-    });
-    for (const tema of temas) {
-      await this.notaRepo.delete({ tema: { id: tema.id } } as any);
-    }
-    await this.temaRepo.delete({ convocatoria: { id: conv.id } } as any);
-    await this.documentoRepo.delete({ convocatoria: { id: conv.id } } as any);
-  }
-
-  await this.convocatoriaRepo.delete({ oposicion: { id } } as any);
-  await this.repo.delete(id);
+  // ⭐ Todo en una transacción y sin chocar con las claves foráneas (antes fallaba a medias).
+  await this.repo.manager.transaction((manager) => borrarOposicion(manager, id));
 }
 
   async findOne(id: string): Promise<Oposicion> {
@@ -100,7 +86,7 @@ export class OposicionService {
 
   async remove(id: string): Promise<void> {
     await this.findOne(id);
-    await this.repo.delete(id);
+    await this.eliminar(id); // ⭐ misma comprobación y limpieza que eliminar()
   }
 
   async count(): Promise<number> {

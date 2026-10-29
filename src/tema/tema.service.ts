@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { borrarTemas } from '../common/helpers/borrado.helper';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Brackets } from 'typeorm';
 import { Tema } from './tema.entity';
 import { TemaNormativa } from './tema-normativa.entity';
 import { Articulo } from '../normativa/articulo.entity';
@@ -9,7 +10,7 @@ import { PreguntaTest } from '../test/pregunta-test.entity';
 import { NivelNormativa } from './tema-normativa.entity';
 import { ApunteOploraService } from '../apunte-oplora/apunte-oplora.service';
 import { FlashcardService } from '../flashcard/flashcard.service';
-import { TestService } from '../test/test.service';
+import { TestService, sqlArticulosDeTemas } from '../test/test.service';
 import { ApunteOplora } from '../apunte-oplora/apunte-oplora.entity';
 import { Flashcard } from '../flashcard/flashcard.entity'; 
 import { RepasoFC } from '../flashcard/repaso-fc.entity';
@@ -141,22 +142,10 @@ async remove(id: string) {
   // ⭐ Todo lo que sigue son escrituras puras de BD (sin efectos externos), así que se agrupan
   // en una única transacción: si cualquier paso falla, no se confirma ninguno y el tema queda
   // intacto para poder reintentar el borrado, en vez de quedar parcialmente borrado.
-  return this.temaRepo.manager.transaction(async (manager) => {
-    await manager.delete(TemaNormativa, { tema: { id } as any });
-    await manager.query(
-      `DELETE FROM preguntas_test_temas_temas WHERE "temasId" = $1`,
-      [id],
-    );
-
-    const flashcardsDelTema = await manager.find(Flashcard, { where: { tema: { id } as any }, select: ['id'] });
-    const flashcardIds = flashcardsDelTema.map((f) => f.id);
-    if (flashcardIds.length > 0) {
-      await manager.delete(RepasoFC, { flashcard: { id: In(flashcardIds) } as any });
-    }
-    await manager.delete(Flashcard, { tema: { id } as any });
-    await manager.delete(ApunteUsuario, { tema: { id } as any });
-    return manager.delete(Tema, id);
-  });
+  // ⭐ Antes fallaba si el tema tenía resultados de test, duelos, notas, preguntas cortas…
+  // Ahora el historial de los usuarios se conserva sin el tema y el contenido se borra.
+  await this.temaRepo.manager.transaction((manager) => borrarTemas(manager, [id]));
+  return { ok: true };
 }
 
   async getNormativa(temaId: string): Promise<TemaNormativa[]> {
@@ -322,6 +311,7 @@ async getExamenesByOposicionUsuario(usuarioId: string, oposicionId: string) {
     temaId: string,
     oposicionId: string,
     porcentajeLecturaPrecalculado?: number,
+    resultadosPrecargados?: any[],
   ) {
   // 1. LECTURA (50%) — promedio del % leído de apuntes OPLORA del tema
   // Si ya viene precalculado (ver getProgresoOposicion / getProgresoCompletoConvocatoria,
@@ -347,11 +337,12 @@ async getExamenesByOposicionUsuario(usuarioId: string, oposicionId: string) {
   const puntosLectura = Math.round((porcentajeLectura / 100) * 50);
 
   // 2. TEST (25%) — % preguntas hechas + % acierto
-  const progresoTest = await this.testService.getProgresoTema(usuarioId, oposicionId, temaId);
+  const progresoTest = await this.testService.getProgresoTema(usuarioId, oposicionId, temaId, resultadosPrecargados);
   const totalPreguntasTema = await this.getTotalPreguntasDelTema(temaId);
 
+  // ⭐ Tope 100 %: preguntas ya contestadas que luego se desactivan podían hacerlo pasar de 100
   const pctPreguntasHechas = totalPreguntasTema > 0
-    ? (progresoTest.total / totalPreguntasTema) * 100
+    ? Math.min(100, (progresoTest.total / totalPreguntasTema) * 100)
     : 0;
   const pctAcierto = progresoTest.porcentajeAcierto ?? 0;
 
@@ -393,22 +384,18 @@ async getExamenesByOposicionUsuario(usuarioId: string, oposicionId: string) {
   };
 }
 
+// ⭐ Preguntas del tema: las ligadas al propio tema y las de los artículos vinculados al tema a
+// cualquier nivel (artículo, capítulo, título o ley entera). Antes solo contaban los artículos
+// vinculados uno a uno, así que un capítulo vinculado entero no sumaba.
 async getTotalPreguntasDelTema(temaId: string): Promise<number> {
-  const temaNormativas = await this.temaNormativaRepo.find({
-    where: { tema: { id: temaId }, nivel: NivelNormativa.ARTICULO },
-    relations: ['articulo'],
-  });
-
-  const articuloIds = temaNormativas
-    .map((tn) => tn.articulo?.id)
-    .filter((id): id is string => !!id);
-
-  if (articuloIds.length === 0) return 0;
-
   return this.preguntaTestRepo
     .createQueryBuilder('p')
     .leftJoin('p.articulos', 'art')
-    .where('art.id IN (:...articuloIds)', { articuloIds })
+    .leftJoin('p.temas', 'tmp')
+    .where(new Brackets((qb) => {
+      qb.where(`art.id IN (${sqlArticulosDeTemas(':...temasTotal')})`, { temasTotal: [temaId] })
+        .orWhere('tmp.id = :temaIdTotal', { temaIdTotal: temaId });
+    }))
     .andWhere('p.activa = true')
     .andWhere("p.estado = 'vigente'")
     .getCount();
@@ -488,9 +475,10 @@ async getTotalPreguntasDelTema(temaId: string): Promise<number> {
   }
 
   const mapaProgresoLectura = await this.calcularProgresoLecturaBatch(usuarioId, temas);
+  const resultados = await this.testService.resultadosParaProgreso(usuarioId, oposicionId);
 
   const progresos = await Promise.all(
-    temas.map((t) => this.getProgresoCompleto(usuarioId, t.id, oposicionId, mapaProgresoLectura.get(t.id) ?? 0))
+    temas.map((t) => this.getProgresoCompleto(usuarioId, t.id, oposicionId, mapaProgresoLectura.get(t.id) ?? 0, resultados))
   );
 
   const porcentajeGlobal = Math.round(
@@ -513,10 +501,11 @@ async getProgresoCompletoConvocatoria(usuarioId: string, convocatoriaId: string,
   });
 
   const mapaProgresoLectura = await this.calcularProgresoLecturaBatch(usuarioId, temas);
+  const historial = await this.testService.resultadosParaProgreso(usuarioId, oposicionId);
 
   const resultados = await Promise.all(
     temas.map(async (t) => {
-      const progreso = await this.getProgresoCompleto(usuarioId, t.id, oposicionId, mapaProgresoLectura.get(t.id) ?? 0);
+      const progreso = await this.getProgresoCompleto(usuarioId, t.id, oposicionId, mapaProgresoLectura.get(t.id) ?? 0, historial);
       return { temaId: t.id, numero: t.numero, titulo: t.titulo, ...progreso };
     })
   );

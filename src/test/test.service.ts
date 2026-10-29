@@ -1,4 +1,5 @@
 import { InjectRepository } from '@nestjs/typeorm';
+import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
 import { Repository, In, Brackets } from 'typeorm';
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { SesionTest } from './sesion-test.entity';
@@ -10,7 +11,7 @@ import { TemaNormativa, NivelNormativa } from '../tema/tema-normativa.entity';
 import { Tema } from '../tema/tema.entity';
 import { Articulo } from '../normativa/articulo.entity';
 import { OposicionLey } from '../ley/oposicion-ley.entity';
-import { resetearConsumosSiEsNuevoDia } from '../common/helpers/consumo.helper';
+import { resetearConsumosSiEsNuevoDia, registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
 import { ConfiguracionService } from '../config/configuracion.service';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 
@@ -56,7 +57,7 @@ export function recortarOpcionesArticulo(
  * El artículo puede colgar de capítulo, de sección o directamente de título, y el título de una
  * versión de ley o de un libro.
  */
-function sqlArticulosDeTemas(parametroTemas: string): string {
+export function sqlArticulosDeTemas(parametroTemas: string): string {
   return `
     SELECT a_tn.id FROM articulos a_tn
     LEFT JOIN capitulos c_tn ON c_tn.id = a_tn."capituloId"
@@ -677,6 +678,8 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
 
   const preguntasReales = await this.preguntaRepo.find({
     where: { id: In(sesion.preguntas.map((p) => p.id)) },
+    // ⭐ Temas y artículos de cada pregunta: se guardan con la respuesta para el progreso por tema
+    relations: ['temas', 'articulos'],
   });
   const mapaPreguntas = new Map(preguntasReales.map((p) => [p.id, p]));
 
@@ -694,6 +697,11 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
       indiceCorrecta: sp.correcta,
       enBlanco,
       correcta: !enBlanco && !!real && indice === sp.correcta,
+      // Todos los temas y artículos de la pregunta (antes solo el primero, y lo mandaba la app)
+      temaIds: (real?.temas ?? []).map((t: any) => t.id),
+      articuloIds: (real?.articulos ?? []).map((a: any) => a.id),
+      temaId: real?.temas?.[0]?.id ?? d.temaId ?? null,
+      articuloId: real?.articulos?.[0]?.id ?? d.articuloId ?? null,
     };
   });
 
@@ -741,8 +749,9 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
     await Promise.all([
       manager.increment(Usuario, { id: datos.usuarioId }, 'preguntasTestHoy', totalPreguntasVerificado),
       manager.increment(Usuario, { id: datos.usuarioId }, 'preguntasRespondidasTotales', totalPreguntasVerificado),
-      manager.update(Usuario, datos.usuarioId, { ultimaActividad: new Date() }),
     ]);
+    // ⭐ Cuenta para la racha (y última actividad) en hora de España
+    await registrarDiaDeEstudio(manager, datos.usuarioId);
 
     /* =========================================================
        ⭐ PRIMER RETO → MARCAR USUARIO COMO ACTIVO
@@ -879,9 +888,15 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
   ========================================================= */
 
 async getUltimoResultado(usuarioId: string) {
+  // ⭐ Solo de la oposición activa (antes podía salir un test de otra oposición)
+  const [activa] = await this.resultadoRepo.query(
+    `SELECT oposicion_id AS id FROM usuario_oposiciones WHERE usuario_id = $1 AND activa = true LIMIT 1`,
+    [usuarioId],
+  );
   const resultado = await this.resultadoRepo.findOne({
     where: {
       usuario: { id: usuarioId },
+      ...(activa?.id ? { oposicion: { id: activa.id } } : {}),
     },
     relations: ['oposicion'],
     order: { creadoEn: 'DESC' },
@@ -931,47 +946,58 @@ return {
   gamificacion: resultado.gamificacion ?? null,
 };}
 
+  /** Artículos vinculados a un tema, a cualquier nivel (artículo, capítulo, título o ley entera). */
+  async articulosDelTema(temaId: string): Promise<Set<string>> {
+    const filas: { id: string }[] = await this.resultadoRepo.query(`SELECT DISTINCT x.id FROM (${sqlArticulosDeTemas('$1')}) x`, [temaId]);
+    return new Set(filas.map((f) => f.id));
+  }
+
+  /**
+   * ⭐ Progreso de test de un tema, con todos los test del usuario en la oposición (por tema,
+   * por ley o generales). Una respuesta cuenta para el tema si su pregunta es del tema o de un
+   * artículo vinculado al tema a cualquier nivel (si el artículo está en varios temas, cuenta
+   * en todos). Cada pregunta cuenta una sola vez, con la última respuesta dada; las preguntas
+   * en blanco no cuentan (como si no se hubieran hecho).
+   */
+  /** Resultados de test del usuario en una oposición, del más antiguo al más reciente. */
+  async resultadosParaProgreso(usuarioId: string, oposicionId: string): Promise<ResultadoTest[]> {
+    return this.resultadoRepo.find({
+      where: { usuario: { id: usuarioId }, oposicion: { id: oposicionId } },
+      select: { id: true, detallePreguntas: true, creadoEn: true },
+      order: { creadoEn: 'ASC' },
+    });
+  }
+
   async getProgresoTema(
-  usuarioId: string,
-  oposicionId: string,
-  temaId: string,
-): Promise<any> {
+    usuarioId: string,
+    oposicionId: string,
+    temaId: string,
+    resultadosPrecargados?: ResultadoTest[],
+  ): Promise<any> {
+    const articulosTema = await this.articulosDelTema(temaId);
 
-  const temaNormativas = await this.temaNormativaRepo.find({
-    where: {
-      tema: { id: temaId },
-      nivel: NivelNormativa.ARTICULO,
-    },
-    relations: ['articulo'],
-  });
+    // ⭐ Al calcular todos los temas a la vez, el historial se lee una sola vez (antes una por tema)
+    const resultados = resultadosPrecargados ?? (await this.resultadosParaProgreso(usuarioId, oposicionId));
 
-  const articuloIds = temaNormativas
-  .map(tn => tn.articulo?.id)
-  .filter((id): id is string => !!id);
+    // preguntaId → acertada en su última respuesta (los resultados van del más antiguo al más reciente)
+    const ultimaRespuesta = new Map<string, boolean>();
+    for (const r of resultados) {
+      for (const d of (r.detallePreguntas ?? []) as any[]) {
+        if (!d?.preguntaId || d.enBlanco) continue;
+        const temas: string[] = Array.isArray(d.temaIds) ? d.temaIds : d.temaId ? [d.temaId] : [];
+        const articulos: string[] = Array.isArray(d.articuloIds) ? d.articuloIds : d.articuloId ? [d.articuloId] : [];
+        const delTema = temas.includes(temaId) || articulos.some((a) => articulosTema.has(a));
+        if (delTema) ultimaRespuesta.set(d.preguntaId, !!d.correcta);
+      }
+    }
 
-  const resultados = await this.resultadoRepo.find({
-    where: {
-      usuario: { id: usuarioId },
-      oposicion: { id: oposicionId },
-    },
-  });
+    const total = ultimaRespuesta.size;
+    const correctas = [...ultimaRespuesta.values()].filter(Boolean).length;
+    const falladas = total - correctas;
+    const porcentajeAcierto = total > 0 ? Math.round((correctas / total) * 100) : 0;
 
-  const preguntasDelTema = resultados.flatMap(r =>
-  (r.detallePreguntas ?? []).filter(d =>
-    d.temaId === temaId ||
-    (d.articuloId != null && articuloIds.includes(d.articuloId))
-  )
-);
-
-  const total = preguntasDelTema.length;
-  const correctas = preguntasDelTema.filter(d => d.correcta).length;
-  const falladas = total - correctas;
-  const porcentajeAcierto = total > 0
-    ? Math.round((correctas / total) * 100)
-    : 0;
-
-  return { total, correctas, falladas, porcentajeAcierto };
-}
+    return { total, correctas, falladas, porcentajeAcierto };
+  }
 
   async getProgreso(
     usuarioId: string,
@@ -1045,7 +1071,7 @@ return {
 
   async getProgresoPorPeriodo(usuarioId: string, oposicionId: string) {
   const ahora = new Date();
-  const inicioHoy = new Date(ahora); inicioHoy.setHours(0, 0, 0, 0);
+  const inicioHoy = inicioDiaMadrid(ahora); // ⭐ medianoche de España (antes UTC)
   const inicioSemana = new Date(ahora); inicioSemana.setDate(ahora.getDate() - 7);
   const inicioMes = new Date(ahora); inicioMes.setDate(ahora.getDate() - 30);
 
@@ -1585,9 +1611,15 @@ async verificarLimiteTest(
   const usuario = await this.usuarioRepo.findOne({ where: { id: usuarioId } });
   if (!usuario) throw new NotFoundException('Usuario no encontrado');
 
-  const usuarioActualizado = resetearConsumosSiEsNuevoDia(usuario);
-  if (usuarioActualizado.fechaResetConsumo !== usuario.fechaResetConsumo) {
-    await this.usuarioRepo.save(usuarioActualizado);
+  const fechaAntes = usuario.fechaResetConsumo;
+  resetearConsumosSiEsNuevoDia(usuario);
+  if (usuario.fechaResetConsumo !== fechaAntes) {
+    await this.usuarioRepo.update(usuarioId, {
+      preguntasTestHoy: usuario.preguntasTestHoy,
+      flashcardsHoy: usuario.flashcardsHoy,
+      temasRevisadosHoy: usuario.temasRevisadosHoy,
+      fechaResetConsumo: usuario.fechaResetConsumo,
+    });
   }
 
   // ⭐ Leer límites desde configuración dinámica

@@ -1,7 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, Index } from 'typeorm';
 import { Usuario } from '../usuario/usuario.entity';
 import { Tema } from '../tema/tema.entity';
 
+// ⭐ Índices para las consultas de cada usuario (antes casi no había)
+@Index(['usuario', 'tema'])
 @Entity('sesiones_tema')
 export class SesionTema {
   @PrimaryGeneratedColumn('uuid')
