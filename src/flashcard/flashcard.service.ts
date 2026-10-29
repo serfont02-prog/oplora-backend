@@ -1043,6 +1043,8 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
       .where('retador.id = :usuarioId', { usuarioId })
       .orWhere('retado.id = :usuarioId', { usuarioId })
       .orderBy('reto.creadoEn', 'DESC')
+      // ⭐ Tope: los 300 más recientes (antes se cargaba el historial entero en cada visita)
+      .take(300)
       .getMany();
 
     // ⭐ Expiración "al vuelo": ningún cron marcaba como EXPIRADO los duelos de FC
@@ -1138,4 +1140,102 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     sinVer: Math.max(0, total - dominadas - dudosas - noDominadas),
   };
 }
+
+  // ─── ADMIN ───────────────────────────────────────────────
+
+  private static readonly UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  /** Listado para el panel: 50 por página, con búsqueda, tipo, estado y oposición (directa o por tema). */
+  async listarAdmin(f: { oposicionId?: string; q?: string; tipo?: string; estado?: string; pagina: number }) {
+    const POR_PAGINA = 50;
+    const qb = this.fcRepo
+      .createQueryBuilder('fc')
+      .leftJoinAndSelect('fc.tema', 'tema')
+      .leftJoinAndSelect('fc.articulo', 'art')
+      .leftJoinAndSelect('fc.oposicion', 'opo')
+      .leftJoin('tema.convocatoria', 'conv');
+    if (f.oposicionId && FlashcardService.UUID.test(f.oposicionId)) {
+      qb.andWhere('(opo.id = :o OR conv."oposicionId" = :o)', { o: f.oposicionId });
+    }
+    const q = (f.q ?? '').trim();
+    if (q) qb.andWhere('(fc.pregunta ILIKE :q OR fc.respuesta ILIKE :q OR fc.explicacion ILIKE :q)', { q: `%${q.replace(/[%_\\]/g, (c) => '\\' + c)}%` });
+    if (f.tipo && (Object.values(TipoFlashcard) as string[]).includes(f.tipo)) qb.andWhere('fc.tipo = :tipo', { tipo: f.tipo });
+    if (f.estado === 'activas') qb.andWhere('fc.activa = true');
+    if (f.estado === 'inactivas') qb.andWhere('fc.activa = false');
+    if (f.estado === 'duelo') qb.andWhere('fc.esParaDuelo = true');
+    const pagina = Math.max(1, Math.min(10_000, Math.trunc(f.pagina) || 1));
+    const [items, total] = await qb
+      .orderBy('fc.creadoEn', 'DESC')
+      .skip((pagina - 1) * POR_PAGINA)
+      .take(POR_PAGINA)
+      .getManyAndCount();
+    // Cuántos usuarios la han repasado (para avisar antes de borrar)
+    const ids = items.map((i) => i.id);
+    const usos: { id: string; n: number }[] = ids.length
+      ? await this.repasoRepo.query(`SELECT "flashcardId" AS id, COUNT(*)::int AS n FROM repasos_fc WHERE "flashcardId" = ANY($1) GROUP BY 1`, [ids])
+      : [];
+    const mapa = new Map(usos.map((u) => [u.id, u.n]));
+    return {
+      items: items.map((i) => ({
+        id: i.id, tipo: i.tipo, nivel: i.nivel, pregunta: i.pregunta, respuesta: i.respuesta,
+        explicacion: i.explicacion, esParaDuelo: i.esParaDuelo, activa: i.activa, creadoEn: i.creadoEn,
+        tema: i.tema ? { id: i.tema.id, numero: (i.tema as any).numero, titulo: (i.tema as any).titulo } : null,
+        articulo: i.articulo ? { id: i.articulo.id, numero: (i.articulo as any).numero } : null,
+        oposicion: i.oposicion ? { id: i.oposicion.id, nombre: (i.oposicion as any).nombre } : null,
+        repasos: mapa.get(i.id) ?? 0,
+      })),
+      total,
+      pagina,
+      paginas: Math.max(1, Math.ceil(total / POR_PAGINA)),
+    };
+  }
+
+  /** Corregir una tarjeta. Solo se tocan los campos enviados y se validan como en la importación. */
+  async editarAdmin(id: string, body: any) {
+    const fc = await this.fcRepo.findOne({ where: { id } });
+    if (!fc) throw new NotFoundException('Flashcard no encontrada');
+    const cambios: Partial<Flashcard> = {};
+    const texto = (v: any, campo: string, obligatorio: boolean) => {
+      if (v === undefined) return undefined;
+      const t = String(v ?? '').trim();
+      if (obligatorio && !t) throw new BadRequestException(`${campo} no puede quedar vacío`);
+      if (t.length > 4000) throw new BadRequestException(`${campo} es demasiado largo`);
+      return t;
+    };
+    const pregunta = texto(body.pregunta, 'La pregunta', true);
+    const respuesta = texto(body.respuesta, 'La respuesta', true);
+    const explicacion = texto(body.explicacion, 'La explicación', false);
+    if (pregunta !== undefined) cambios.pregunta = pregunta;
+    if (respuesta !== undefined) cambios.respuesta = respuesta;
+    if (explicacion !== undefined) cambios.explicacion = explicacion || (null as any);
+    if (body.tipo !== undefined) {
+      if (!(Object.values(TipoFlashcard) as string[]).includes(body.tipo)) throw new BadRequestException('Tipo no válido');
+      cambios.tipo = body.tipo;
+    }
+    if (body.nivel !== undefined) {
+      if (!(Object.values(NivelFlashcard) as string[]).includes(body.nivel)) throw new BadRequestException('Nivel no válido');
+      cambios.nivel = body.nivel;
+    }
+    if (typeof body.activa === 'boolean') cambios.activa = body.activa;
+    if (typeof body.esParaDuelo === 'boolean') cambios.esParaDuelo = body.esParaDuelo;
+    const tipoFinal = cambios.tipo ?? fc.tipo;
+    const respFinal = String(cambios.respuesta ?? fc.respuesta).trim().toLowerCase();
+    if ((tipoFinal === TipoFlashcard.VF || tipoFinal === TipoFlashcard.TRAMPA) && !['true', 'false'].includes(respFinal)) {
+      throw new BadRequestException('En verdadero/falso y trampa la respuesta tiene que ser "true" o "false"');
+    }
+    if (Object.keys(cambios).length) await this.fcRepo.update(id, cambios);
+    return this.fcRepo.findOne({ where: { id }, relations: ['tema', 'articulo', 'oposicion'] });
+  }
+
+  /** Borrar una tarjeta: se borran sus repasos; los resultados de duelos ya jugados se conservan. */
+  async borrarAdmin(id: string) {
+    const fc = await this.fcRepo.findOne({ where: { id } });
+    if (!fc) throw new NotFoundException('Flashcard no encontrada');
+    await this.fcRepo.manager.transaction(async (m) => {
+      await m.query(`UPDATE resultados_reto_fc SET "flashcardId" = NULL WHERE "flashcardId" = $1`, [id]);
+      await m.query(`DELETE FROM repasos_fc WHERE "flashcardId" = $1`, [id]);
+      await m.query(`DELETE FROM flashcards WHERE id = $1`, [id]);
+    });
+    return { ok: true };
+  }
 }

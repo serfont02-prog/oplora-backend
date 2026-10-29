@@ -548,6 +548,7 @@ async completarReto(
     where: { usuario: { id: usuarioId } },
     relations: ['reto', 'reto.creador', 'reto.tema', 'reto.oposicion', 'reto.participaciones', 'reto.participaciones.usuario'],
     order: { creadoEn: 'DESC' },
+    take: 300, // ⭐ los 300 más recientes (antes el historial entero en cada visita)
   });
 
   // ⭐ Chequeo de expiración "al vuelo": no confiamos solo en el @Cron de

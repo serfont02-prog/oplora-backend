@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param, UseGuards, Request, Query } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request, Query } from '@nestjs/common';
 import { FlashcardService } from './flashcard.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -14,6 +14,34 @@ export class FlashcardController {
   @Roles('admin')
   importar(@Body('flashcards') flashcards: any[]) {
     return this.service.importar(flashcards);
+  }
+
+  // ─── ADMIN: gestionar flashcards (antes solo se podían importar) ───
+  @Get('admin/lista')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  listarAdmin(
+    @Query('oposicionId') oposicionId?: string,
+    @Query('q') q?: string,
+    @Query('tipo') tipo?: string,
+    @Query('estado') estado?: string,
+    @Query('pagina') pagina?: string,
+  ) {
+    return this.service.listarAdmin({ oposicionId, q, tipo, estado, pagina: Number(pagina) || 1 });
+  }
+
+  @Patch('admin/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  editarAdmin(@Param('id') id: string, @Body() body: any) {
+    return this.service.editarAdmin(id, body ?? {});
+  }
+
+  @Delete('admin/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  borrarAdmin(@Param('id') id: string) {
+    return this.service.borrarAdmin(id);
   }
 
   @Get('mis-retos')

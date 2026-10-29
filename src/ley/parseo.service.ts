@@ -341,6 +341,10 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
     estructura: { libros?: any[]; titulos?: any[]; disposiciones?: any[] },
     forzar = false,
   ): Promise<any> {
+    // ⭐ Antes se borraba la estructura anterior sin mirar si el JSON nuevo servía: un JSON vacío o
+    // con artículos sin número/texto dejaba la ley vacía. Ahora se valida ANTES de tocar nada.
+    validarEstructuraJson(estructura);
+
     // ⭐ Importar JSON BORRA y recrea los artículos. Si ya hay cosas vinculadas,
     // solo se continúa si el admin lo confirma (forzar=true) tras ver el aviso.
     const { total, detalle } = await this.contarDependencias(versionId);
@@ -664,4 +668,45 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
 
   return nuevaVersion;
 }
+}
+
+/** Comprueba que el JSON de estructura tiene artículos válidos antes de borrar la estructura actual. */
+export function validarEstructuraJson(estructura: any): void {
+  if (!estructura || typeof estructura !== 'object') throw new BadRequestException('El JSON de estructura no es válido');
+  const errores: string[] = [];
+  let articulos = 0;
+  const revisarArticulos = (lista: any, donde: string) => {
+    if (lista === undefined || lista === null) return;
+    if (!Array.isArray(lista)) { errores.push(`${donde}: "articulos" tiene que ser una lista`); return; }
+    lista.forEach((a: any, i: number) => {
+      articulos++;
+      const etiqueta = `${donde}, artículo ${i + 1}${a?.numero ? ` (${a.numero})` : ''}`;
+      if (!a || typeof a !== 'object') { errores.push(`${etiqueta}: no es un objeto`); return; }
+      if (a.numero === undefined || a.numero === null || String(a.numero).trim() === '') errores.push(`${etiqueta}: falta el número`);
+      if (typeof a.contenido !== 'string' || !a.contenido.trim()) errores.push(`${etiqueta}: falta el texto (contenido)`);
+    });
+  };
+  const revisarTitulos = (titulos: any, donde: string) => {
+    if (titulos === undefined || titulos === null) return;
+    if (!Array.isArray(titulos)) { errores.push(`${donde}: "titulos" tiene que ser una lista`); return; }
+    titulos.forEach((t: any, ti: number) => {
+      const dt = `${donde}Título ${t?.numero ?? ti + 1}`;
+      revisarArticulos(t?.articulos, dt);
+      (Array.isArray(t?.capitulos) ? t.capitulos : []).forEach((c: any, ci: number) => {
+        const dc = `${dt} > Capítulo ${c?.numero ?? ci + 1}`;
+        revisarArticulos(c?.articulos, dc);
+        (Array.isArray(c?.secciones) ? c.secciones : []).forEach((sec: any, si: number) => {
+          revisarArticulos(sec?.articulos, `${dc} > Sección ${sec?.numero ?? si + 1}`);
+        });
+      });
+    });
+  };
+  (Array.isArray(estructura.libros) ? estructura.libros : []).forEach((l: any, li: number) => revisarTitulos(l?.titulos, `Libro ${l?.numero ?? li + 1} > `));
+  revisarTitulos(estructura.titulos, '');
+  const disposiciones = Array.isArray(estructura.disposiciones) ? estructura.disposiciones.length : 0;
+  if (articulos === 0 && disposiciones === 0) errores.unshift('El JSON no tiene ningún artículo ni disposición: no se ha tocado la ley');
+  if (errores.length) {
+    const extra = errores.length > 8 ? ` (y ${errores.length - 8} más)` : '';
+    throw new BadRequestException(`No se ha importado nada. ${errores.slice(0, 8).join('; ')}${extra}`);
+  }
 }

@@ -1117,6 +1117,8 @@ export class PsicotecnicoService {
       .where('retador.id = :usuarioId', { usuarioId })
       .orWhere('retado.id = :usuarioId', { usuarioId })
       .orderBy('reto.creadoEn', 'DESC')
+      // ⭐ Tope: los 300 más recientes (antes se cargaba el historial entero en cada visita)
+      .take(300)
       .getMany();
 
     // ⭐ Expiración "al vuelo": ningún cron marcaba como EXPIRADO los retos

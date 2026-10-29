@@ -114,6 +114,16 @@ if (tipo === 'pdf') {
       console.error('Error también en parser legacy:', e2);
     }
   }
+
+  // ⭐ Antes, si no se podía leer el PDF, el apunte se guardaba igual y el alumno veía un lector
+  // vacío. Ahora se avisa al admin y no se guarda (también se borra el archivo ya subido).
+  if (!textoCompleto || textoCompleto.replace(/\s+/g, ' ').trim().length < 100) {
+    await this.supabase.storage.from('apuntes-oplora').remove([path]).catch(() => undefined);
+    throw new BadRequestException(
+      'No se ha podido leer el texto de este PDF (o casi no tiene texto). Si es un PDF escaneado como imagen, ' +
+      'pásalo por un OCR o expórtalo de nuevo con texto seleccionable y vuelve a subirlo.',
+    );
+  }
 }
 
   const apunte = this.repo.create({

@@ -1095,6 +1095,17 @@ return {
   };
 }
 
+/** Vincula una pregunta existente a un tema o artículo si aún no lo está. Devuelve si la ha vinculado. */
+private async vincularSiFalta(preguntaId: string, relacion: 'temas' | 'articulos', destinoId: string): Promise<boolean> {
+  const tabla = relacion === 'temas' ? 'preguntas_test_temas_temas' : 'preguntas_test_articulos_articulos';
+  const col = relacion === 'temas' ? 'temasId' : 'articulosId';
+  const [fila] = await this.preguntaRepo.query(
+    `SELECT 1 FROM ${tabla} WHERE "preguntasTestId" = $1 AND "${col}" = $2 LIMIT 1`, [preguntaId, destinoId]);
+  if (fila) return false;
+  await this.preguntaRepo.createQueryBuilder().relation(PreguntaTest, relacion).of(preguntaId).add(destinoId);
+  return true;
+}
+
 async importarPorConvocatoria(
   convocatoriaId: string,
   preguntas: {
@@ -1108,13 +1119,15 @@ async importarPorConvocatoria(
     temaNumero: number;
   }[],
   examenAnteriorId?: string, // ⭐ nuevo parámetro
-): Promise<{ importadas: number; errores: string[] }> {
+): Promise<{ importadas: number; vinculadas: number; yaEstaban: number; errores: string[] }> {
 
   const temas = await this.temaRepo.find({
     where: { convocatoria: { id: convocatoriaId } },
   });
 
   let importadas = 0;
+  let vinculadas = 0; // ya existían y se han vinculado ahora
+  let yaEstaban = 0; // ya existían y ya estaban vinculadas
   const errores: string[] = [];
   const enunciadosDeEsteLote = new Set<string>();
 
@@ -1144,8 +1157,13 @@ async importarPorConvocatoria(
       continue;
     }
     const mismoEnunciado = await this.preguntaRepo.find({ where: { enunciado: enunciadoNormalizado }, select: ['id', 'enunciado', 'opciones'] });
-    if (mismoEnunciado.some((e) => claveDuplicado(e.enunciado, e.opciones) === claveLote)) {
-      errores.push(`${etiqueta}: pregunta ya existente en el banco — "${enunciadoNormalizado.slice(0, 60)}..."`);
+    const existente = mismoEnunciado.find((e) => claveDuplicado(e.enunciado, e.opciones) === claveLote);
+    if (existente) {
+      // ⭐ Antes se rechazaba como "ya existente" y al reimportar un banco en otra convocatoria las
+      // preguntas no llegaban a sus temas. Ahora la pregunta que ya existe se vincula a este tema.
+      enunciadosDeEsteLote.add(claveLote);
+      if (await this.vincularSiFalta(existente.id, 'temas', tema.id)) vinculadas++;
+      else yaEstaban++;
       continue;
     }
     enunciadosDeEsteLote.add(claveLote);
@@ -1173,7 +1191,7 @@ async importarPorConvocatoria(
     importadas++;
   }
 
-  return { importadas, errores };
+  return { importadas, vinculadas, yaEstaban, errores };
 }
 
 
@@ -1189,7 +1207,7 @@ async importarPorVersionLey(
     anyo?: number;
     articuloNumero: string;
   }[],
-): Promise<{ importadas: number; errores: string[] }> {
+): Promise<{ importadas: number; vinculadas: number; yaEstaban: number; errores: string[] }> {
 
   // Obtener artículos de la versión de ley.
   // ⭐ Un artículo puede colgar de un Capítulo (capitulo → tituloRef → versionLey),
@@ -1216,6 +1234,8 @@ async importarPorVersionLey(
     .getMany();
 
   let importadas = 0;
+  let vinculadas = 0; // ya existían y se han vinculado ahora
+  let yaEstaban = 0; // ya existían y ya estaban vinculadas
   const errores: string[] = [];
   const enunciadosDeEsteLote = new Set<string>();
 
@@ -1248,8 +1268,12 @@ async importarPorVersionLey(
       continue;
     }
     const mismoEnunciado = await this.preguntaRepo.find({ where: { enunciado: enunciadoNormalizado }, select: ['id', 'enunciado', 'opciones'] });
-    if (mismoEnunciado.some((e) => claveDuplicado(e.enunciado, e.opciones) === claveLote)) {
-      errores.push(`${etiqueta}: pregunta ya existente en el banco — "${enunciadoNormalizado.slice(0, 60)}..."`);
+    const existente = mismoEnunciado.find((e) => claveDuplicado(e.enunciado, e.opciones) === claveLote);
+    if (existente) {
+      // ⭐ La pregunta ya existe: se vincula a este artículo en vez de rechazarla
+      enunciadosDeEsteLote.add(claveLote);
+      if (await this.vincularSiFalta(existente.id, 'articulos', articulo.id)) vinculadas++;
+      else yaEstaban++;
       continue;
     }
     enunciadosDeEsteLote.add(claveLote);
@@ -1277,7 +1301,7 @@ async importarPorVersionLey(
     importadas++;
   }
 
-  return { importadas, errores };
+  return { importadas, vinculadas, yaEstaban, errores };
 }
 
 /* =========================================================
