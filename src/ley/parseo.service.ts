@@ -399,8 +399,16 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
 
     // ⭐ Los títulos sin libro van primero: en los códigos el Título Preliminar
     // precede al Libro I (antes quedaba el último).
+    // ⭐ Salvo los anexos (y las ITC), que van detrás de los libros: en la Ley 9/2017
+    // de Contratos el título "Anexos" quedaba delante del Libro I.
     if (estructura.titulos && estructura.titulos.length > 0) {
-      gruposDeTitulos.unshift({ titulos: estructura.titulos });
+      const esFinal = (t: any) =>
+        gruposDeTitulos.length > 0 && t?.numero == null &&
+        /^(anexos?|instrucciones t[ée]cnicas complementarias)$/i.test(String(t?.nombre ?? '').trim());
+      const iniciales = estructura.titulos.filter((t: any) => !esFinal(t));
+      const finales = estructura.titulos.filter((t: any) => esFinal(t));
+      if (iniciales.length > 0) gruposDeTitulos.unshift({ titulos: iniciales });
+      if (finales.length > 0) gruposDeTitulos.push({ titulos: finales });
     }
 
     let ordenTituloGlobal = 0;
