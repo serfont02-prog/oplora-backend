@@ -3,7 +3,7 @@ import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common
 import { InicioDueloService } from '../duelo/inicio-duelo.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Brackets, In } from 'typeorm';
-import { Flashcard, TipoFlashcard, NivelFlashcard } from './flashcard.entity';
+import { Flashcard, TipoFlashcard, NivelFlashcard, EstadoFlashcard } from './flashcard.entity';
 import { RepasoFC, EstadoFC } from './repaso-fc.entity';
 import { RetoFC, TipoRetoFC, EstadoRetoFC } from './reto-fc.entity';
 import { ResultadoRetoFC } from './resultado-reto-fc.entity';
@@ -18,6 +18,20 @@ import { resetearConsumosSiEsNuevoDia, registrarDiaDeEstudio } from '../common/h
 // ⭐ Tipos corregibles en servidor (respuesta true/false). Los de respuesta libre (hueco,
 // artículo) no pueden usarse en duelos porque exigirían autoevaluación.
 const TIPOS_DUELO = [TipoFlashcard.VF, TipoFlashcard.TRAMPA];
+
+// ─── Qué flashcards ve un usuario (criterio ÚNICO, nov 2026) ─────────────────────────────
+// Una flashcard se muestra en el entrenamiento si está activa, VALIDADA, es oficial (no personal)
+// y pertenece a la oposición: por su oposicionId o por su tema (tema → convocatoria → oposición).
+// El artículo enlazado ya NO decide la oposición (antes una FC de una oposición aparecía en otra
+// que compartiera ese artículo). `op` es una expresión SQL: ':param', '$1' o una columna.
+function sqlVisible(a: string, op: string): string {
+  return `(${a}.activa = true AND ${a}.estado = 'validada' AND ${a}."usuarioId" IS NULL AND (${a}."oposicionId" = ${op} OR EXISTS (SELECT 1 FROM temas vt JOIN convocatorias vc ON vc.id = vt."convocatoriaId" WHERE vt.id = ${a}."temaId" AND vc."oposicionId" = ${op})))`;
+}
+// Una flashcard es de un tema si lo tiene asignado. Las que no tienen tema (solo oposición y
+// artículo) cuentan en los temas que incluyen ese artículo. `tema`: expresión SQL.
+function sqlDeTema(a: string, tema: string): string {
+  return `(${a}."temaId" = ${tema} OR (${a}."temaId" IS NULL AND ${a}."articuloId" IS NOT NULL AND EXISTS (SELECT 1 FROM temas_normativa tn WHERE tn."temaId" = ${tema} AND tn."articuloId" = ${a}."articuloId")))`;
+}
 
 @Injectable()
 export class FlashcardService {
@@ -50,6 +64,10 @@ export class FlashcardService {
   // importación de preguntas de test (TestService.importarPorConvocatoria/validarPreguntaImportada).
   // Se replica aquí el mismo patrón: validar fila a fila, seguir con las demás si una falla,
   // y devolver un desglose de qué se importó y qué no (y por qué).
+  private static readonly FECHA = /^\d{4}-\d{2}-\d{2}$/;
+  private static readonly ESTADOS = Object.values(EstadoFlashcard) as string[];
+
+  // ⭐ Validación por fila (estándar nov 2026). Devuelve el error o null.
   private validarFlashcardImportada(fc: any): string | null {
     if (!fc || typeof fc !== 'object') return 'la flashcard no es un objeto válido';
     const tiposValidos = Object.values(TipoFlashcard) as string[];
@@ -62,110 +80,340 @@ export class FlashcardService {
     }
     if (typeof fc.pregunta !== 'string' || !fc.pregunta.trim()) return 'falta "pregunta" o está vacía';
     if (typeof fc.respuesta !== 'string' || !fc.respuesta.trim()) return 'falta "respuesta" o está vacía';
+    if (fc.pregunta.length > 4000 || fc.respuesta.length > 4000 || (fc.explicacion ?? '').length > 6000) return 'texto demasiado largo';
     if ((fc.tipo === TipoFlashcard.VF || fc.tipo === TipoFlashcard.TRAMPA) && !['true', 'false'].includes(fc.respuesta.trim().toLowerCase())) {
       return `"respuesta" debe ser "true" o "false" para el tipo "${fc.tipo}" (recibido: ${JSON.stringify(fc.respuesta)})`;
     }
+    if (fc.tipo === TipoFlashcard.HUECO && !fc.pregunta.includes('___')) {
+      return 'en el tipo "hueco" la pregunta tiene que llevar el hueco marcado con ___';
+    }
+    if (fc.tipo === TipoFlashcard.COMPARATIVA) {
+      const c = fc.comparativa ?? fc.estructura;
+      const texto = (v: any) => typeof v === 'string' && v.trim().length > 0;
+      if (!c || typeof c !== 'object' || !texto(c.conceptoA) || !texto(c.conceptoB)) {
+        return 'una "comparativa" tiene que traer "comparativa": { conceptoA, conceptoB, diferencias }';
+      }
+      if (!Array.isArray(c.diferencias) || !c.diferencias.length || c.diferencias.some((d: any) => !d || !texto(d.aspecto) || !texto(d.a) || !texto(d.b))) {
+        return '"comparativa.diferencias" tiene que ser una lista de { aspecto, a, b } con texto en los tres';
+      }
+    }
+    if (fc.estado !== undefined && !FlashcardService.ESTADOS.includes(fc.estado)) {
+      return `"estado" inválido (recibido: ${JSON.stringify(fc.estado)}); debe ser uno de: ${FlashcardService.ESTADOS.join(', ')}`;
+    }
+    for (const campo of ['fechaReferencia', 'fechaRevision']) {
+      if (fc[campo] !== undefined && fc[campo] !== null && !(typeof fc[campo] === 'string' && FlashcardService.FECHA.test(fc[campo]))) {
+        return `"${campo}" tiene que ser una fecha AAAA-MM-DD (recibido: ${JSON.stringify(fc[campo])})`;
+      }
+    }
+    if (!fc.oposicionId && !fc.temaId) {
+      return 'falta la oposición: indica "oposicionId" (o elígela arriba) o "temaId"';
+    }
+    if (fc.tema !== undefined && !(Number.isInteger(Number(fc.tema)) && Number(fc.tema) > 0)) {
+      return `"tema" tiene que ser el número del tema (recibido: ${JSON.stringify(fc.tema)})`;
+    }
+    for (const campo of ['norma', 'articulo', 'apartado', 'referencia', 'bloque', 'fuenteValidacion']) {
+      if (fc[campo] !== undefined && fc[campo] !== null && typeof fc[campo] !== 'string' && typeof fc[campo] !== 'number') return `"${campo}" tiene que ser texto`;
+    }
+    if (String(fc.norma ?? '').length > 40 || String(fc.articulo ?? '').length > 40) return '"norma" o "articulo" demasiado largos';
     return null;
   }
 
-  async importar(flashcards: {
-    tipo: TipoFlashcard;
-    nivel: NivelFlashcard;
-    pregunta: string;
-    respuesta: string;
-    explicacion?: string;
-    esParaDuelo?: boolean;
-    articuloId?: string;
-    temaId?: string;
-    oposicionId?: string;
-  }[]): Promise<{ importadas: number; errores: string[]; sinVincular: number }> {
-    const errores: string[] = [];
-    const preguntasDeEsteLote = new Set<string>();
-    let importadas = 0;
-    let sinVincular = 0;
+  /** "Art. 22 bis." → "22 bis" (para comparar números de artículo). */
+  private static normalizarNumeroArticulo(n: any): string {
+    return String(n ?? '')
+      .toLowerCase()
+      .replace(/^\s*(art[íi]culo|art\.?)\s*/i, '')
+      .replace(/[º°ª]/g, '')
+      .replace(/\.\s*$/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
 
-    // ⭐ Antes se hacía un findOne por cada fila del lote (N+1 queries) y la comparación era
-    // sensible a mayúsculas/tildes de espacios, así que "¿Qué es...?" y "¿qué es...? " (con un
-    // espacio final) se consideraban distintas y colaban duplicados reales. Se trae una sola vez
-    // el conjunto de preguntas existentes, normalizado, y se compara en memoria.
-    const existentes = await this.fcRepo.find({ select: ['pregunta'] });
-    const preguntasExistentes = new Set(
-      existentes.map((e) => e.pregunta.trim().toLowerCase()),
-    );
+  /**
+   * Resuelve siglas + número de artículo al artículo de la versión VIGENTE de la ley
+   * (versiones_ley.activa). Usa una caché por importación para no repetir consultas.
+   */
+  private async resolverArticulo(
+    siglas: string,
+    numero: string,
+    cache: Map<string, Map<string, string> | null>,
+  ): Promise<string | null> {
+    const clave = siglas.trim().toLowerCase();
+    if (!cache.has(clave)) {
+      const [version] = await this.fcRepo.query(
+        `SELECT v.id FROM versiones_ley v JOIN leyes l ON l.id = v."leyId"
+          WHERE lower(trim(l.siglas)) = $1 AND v.activa = true
+          ORDER BY v."creadoEn" DESC LIMIT 1`,
+        [clave],
+      );
+      if (!version) {
+        cache.set(clave, null);
+      } else {
+        // Artículos de esa versión: por capítulo, por sección (→ capítulo) o colgando del título;
+        // y el título puede estar en la versión directamente o dentro de un libro (p. ej. el CC).
+        const filas: { id: string; numero: string }[] = await this.fcRepo.query(
+          `SELECT a.id, a.numero FROM articulos a
+             LEFT JOIN secciones s ON s.id = a."seccionId"
+             LEFT JOIN capitulos c ON c.id = COALESCE(a."capituloId", s."capituloId")
+             LEFT JOIN titulos t ON t.id = COALESCE(c."tituloRefId", a."tituloRefId")
+             LEFT JOIN libros lb ON lb.id = t."libroId"
+            WHERE COALESCE(t."versionLeyId", lb."versionLeyId") = $1
+            ORDER BY a.orden ASC`,
+          [version.id],
+        );
+        const mapa = new Map<string, string>();
+        for (const f of filas) {
+          const n = FlashcardService.normalizarNumeroArticulo(f.numero);
+          if (n && !mapa.has(n)) mapa.set(n, f.id);
+        }
+        cache.set(clave, mapa);
+      }
+    }
+    const mapa = cache.get(clave);
+    return mapa?.get(FlashcardService.normalizarNumeroArticulo(numero)) ?? null;
+  }
+
+  /**
+   * Importación (estándar nov 2026). Cada fila:
+   *   tipo, nivel, pregunta, respuesta, explicacion,
+   *   oposicionId | temaId | tema (número, con oposicionId),
+   *   bloque?, norma? (siglas), articulo? (número), apartado?, referencia?, fechaReferencia?,
+   *   comparativa? { conceptoA, conceptoB, diferencias:[{aspecto,a,b}] }, estado?, fuenteValidacion?,
+   *   fechaRevision?, esParaDuelo?   (articuloId sigue aceptándose)
+   * Si norma+articulo no se resuelven, se guarda la referencia y la FC queda "pendiente_revision".
+   * Duplicados: misma pregunta en la misma oposición.
+   */
+  async importar(flashcards: any[]): Promise<{
+    importadas: number;
+    enlazadas: number;
+    noEnlazadas: { fila: number; pregunta: string; referencia: string }[];
+    duplicadas: { fila: number; pregunta: string }[];
+    pendientesRevision: number;
+    errores: string[];
+    sinVincular: number;
+  }> {
+    const errores: string[] = [];
+    const noEnlazadas: { fila: number; pregunta: string; referencia: string }[] = [];
+    const duplicadas: { fila: number; pregunta: string }[] = [];
+    let importadas = 0;
+    let enlazadas = 0;
+    let pendientesRevision = 0;
+    if (!Array.isArray(flashcards)) throw new BadRequestException('"flashcards" tiene que ser una lista');
+    if (flashcards.length > 5000) throw new BadRequestException('Como mucho 5.000 flashcards por importación');
+
+    const cacheLeyes = new Map<string, Map<string, string> | null>();
+    const preguntasPorOposicion = new Map<string, Set<string>>();
+    const temasPorOposicion = new Map<string, Map<number, string>>();
+    const oposicionDeTema = new Map<string, string | null>();
+    const norm = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
+    const recorte = (t: string) => (t.length > 80 ? t.slice(0, 80) + '…' : t);
+
+    const preguntasDe = async (oposicionId: string) => {
+      if (!preguntasPorOposicion.has(oposicionId)) {
+        const filas: { p: string }[] = await this.fcRepo.query(
+          `SELECT f.pregunta AS p FROM flashcards f
+            WHERE f."usuarioId" IS NULL AND (f."oposicionId" = $1 OR EXISTS (
+              SELECT 1 FROM temas t JOIN convocatorias c ON c.id = t."convocatoriaId" WHERE t.id = f."temaId" AND c."oposicionId" = $1))`,
+          [oposicionId],
+        );
+        preguntasPorOposicion.set(oposicionId, new Set(filas.map((f) => norm(f.p))));
+      }
+      return preguntasPorOposicion.get(oposicionId)!;
+    };
+    // Temas (número → id) de la convocatoria activa de la oposición (o la más reciente)
+    const temasDe = async (oposicionId: string) => {
+      if (!temasPorOposicion.has(oposicionId)) {
+        const filas: { id: string; numero: number }[] = await this.fcRepo.query(
+          `SELECT t.id, t.numero FROM temas t
+            WHERE t."convocatoriaId" = (
+              SELECT c.id FROM convocatorias c WHERE c."oposicionId" = $1
+               ORDER BY (c.estado::text = 'activa') DESC, c.anyo DESC NULLS LAST LIMIT 1)`,
+          [oposicionId],
+        );
+        temasPorOposicion.set(oposicionId, new Map(filas.map((f) => [Number(f.numero), f.id])));
+      }
+      return temasPorOposicion.get(oposicionId)!;
+    };
+    const oposicionDelTema = async (temaId: string) => {
+      if (!oposicionDeTema.has(temaId)) {
+        const [f] = FlashcardService.UUID.test(temaId)
+          ? await this.fcRepo.query(`SELECT c."oposicionId" AS o FROM temas t JOIN convocatorias c ON c.id = t."convocatoriaId" WHERE t.id = $1`, [temaId])
+          : [];
+        oposicionDeTema.set(temaId, f?.o ?? null);
+      }
+      return oposicionDeTema.get(temaId)!;
+    };
 
     for (const [i, fc] of flashcards.entries()) {
-      const etiqueta = `Fila ${i + 1}`;
+      const fila = i + 1;
+      const etiqueta = `Fila ${fila}`;
       const errorValidacion = this.validarFlashcardImportada(fc);
       if (errorValidacion) {
         errores.push(`${etiqueta}: ${errorValidacion}`);
         continue;
       }
 
-      const preguntaNormalizada = fc.pregunta.trim().toLowerCase();
-      if (preguntasDeEsteLote.has(preguntaNormalizada)) {
-        errores.push(`${etiqueta}: flashcard duplicada dentro del propio lote — "${fc.pregunta.trim().slice(0, 60)}..."`);
+      // ── Oposición y tema
+      let oposicionId: string | null = fc.oposicionId ?? null;
+      let temaId: string | null = fc.temaId ?? null;
+      if (oposicionId && !FlashcardService.UUID.test(oposicionId)) { errores.push(`${etiqueta}: "oposicionId" no válido`); continue; }
+      if (temaId) {
+        const opoTema = await oposicionDelTema(temaId);
+        if (!opoTema) { errores.push(`${etiqueta}: el tema indicado no existe`); continue; }
+        if (oposicionId && oposicionId !== opoTema) { errores.push(`${etiqueta}: el tema no es de la oposición indicada`); continue; }
+        oposicionId = opoTema;
+      } else if (fc.tema !== undefined) {
+        if (!oposicionId) { errores.push(`${etiqueta}: para usar "tema" (número) hay que indicar la oposición`); continue; }
+        temaId = (await temasDe(oposicionId)).get(Number(fc.tema)) ?? null;
+        if (!temaId) { errores.push(`${etiqueta}: la oposición no tiene un tema ${fc.tema} en su convocatoria activa`); continue; }
+      }
+      if (!oposicionId) { errores.push(`${etiqueta}: falta la oposición`); continue; }
+
+      // ── Duplicados dentro de la oposición (incluye las de este mismo lote)
+      const preguntas = await preguntasDe(oposicionId);
+      const clave = norm(fc.pregunta);
+      if (preguntas.has(clave)) {
+        duplicadas.push({ fila, pregunta: recorte(fc.pregunta.trim()) });
         continue;
       }
-      if (preguntasExistentes.has(preguntaNormalizada)) {
-        errores.push(`${etiqueta}: ya existe una flashcard con esa pregunta en el banco — "${fc.pregunta.trim().slice(0, 60)}..."`);
-        continue;
+
+      // ── Norma y artículo → artículo de la versión vigente
+      const siglas = fc.norma !== undefined && fc.norma !== null ? String(fc.norma).trim().toUpperCase() : '';
+      // "Art. 14" → "14" (se guarda limpio para mostrarlo y para volver a enlazar)
+      const numArt = fc.articulo !== undefined && fc.articulo !== null
+        ? String(fc.articulo).trim().replace(/^(art[íi]culo|art\.?)\s*/i, '').trim()
+        : '';
+      const apartado = fc.apartado !== undefined && fc.apartado !== null ? String(fc.apartado).trim() : '';
+      let articuloId: string | null = fc.articuloId && FlashcardService.UUID.test(fc.articuloId) ? fc.articuloId : null;
+      const pideArticulo = !!(siglas || numArt);
+      if (!articuloId && siglas && numArt) {
+        articuloId = await this.resolverArticulo(siglas, numArt, cacheLeyes);
       }
-      preguntasDeEsteLote.add(preguntaNormalizada);
+      const referencia = (fc.referencia ? String(fc.referencia).trim() : '')
+        || (numArt ? `art. ${numArt}${apartado ? '.' + apartado : ''}${siglas ? ' ' + siglas : ''}` : '')
+        || null;
+
+      let estado: EstadoFlashcard = (fc.estado as EstadoFlashcard) ?? EstadoFlashcard.VALIDADA;
+      const sinEnlazar = pideArticulo && !articuloId;
+      if (sinEnlazar && estado === EstadoFlashcard.VALIDADA) estado = EstadoFlashcard.PENDIENTE_REVISION;
+
+      const sinDuelo = fc.tipo === TipoFlashcard.SUPUESTO || fc.tipo === TipoFlashcard.COMPARATIVA;
+      const c = fc.comparativa ?? fc.estructura;
+      const respuesta = fc.tipo === TipoFlashcard.VF || fc.tipo === TipoFlashcard.TRAMPA
+        ? fc.respuesta.trim().toLowerCase()
+        : fc.respuesta.trim();
 
       try {
         await this.fcRepo.save(this.fcRepo.create({
           tipo: fc.tipo,
           nivel: fc.nivel ?? NivelFlashcard.BASICO,
           pregunta: fc.pregunta.trim(),
-          respuesta: fc.respuesta.trim(),
-          explicacion: fc.explicacion,
-          esParaDuelo: fc.esParaDuelo ?? (fc.tipo === TipoFlashcard.VF || fc.tipo === TipoFlashcard.ARTICULO),
-          articulo: fc.articuloId ? { id: fc.articuloId } as any : undefined,
-          tema: fc.temaId ? { id: fc.temaId } as any : undefined,
-          oposicion: fc.oposicionId ? { id: fc.oposicionId } as any : undefined,
+          respuesta,
+          explicacion: fc.explicacion?.trim() || null,
+          esParaDuelo: sinDuelo ? false : (fc.esParaDuelo ?? (fc.tipo === TipoFlashcard.VF || fc.tipo === TipoFlashcard.TRAMPA)),
+          articulo: articuloId ? ({ id: articuloId } as any) : undefined,
+          tema: temaId ? ({ id: temaId } as any) : undefined,
+          oposicion: { id: oposicionId } as any,
           creadaPor: 'admin',
-        }));
+          estado,
+          bloque: fc.bloque ? String(fc.bloque).trim() : null,
+          referencia,
+          normaSiglas: siglas || null,
+          articuloNumero: numArt || null,
+          apartado: apartado || null,
+          fechaReferencia: fc.fechaReferencia ?? null,
+          estructura: fc.tipo === TipoFlashcard.COMPARATIVA
+            ? {
+                conceptoA: String(c.conceptoA).trim(),
+                conceptoB: String(c.conceptoB).trim(),
+                diferencias: c.diferencias.map((d: any) => ({ aspecto: String(d.aspecto).trim(), a: String(d.a).trim(), b: String(d.b).trim() })),
+              }
+            : null,
+          fuenteValidacion: fc.fuenteValidacion ? String(fc.fuenteValidacion).trim() : null,
+          fechaRevision: fc.fechaRevision ?? null,
+        } as Partial<Flashcard>));
+        preguntas.add(clave);
         importadas++;
-        if (!fc.temaId && !fc.articuloId) sinVincular++;
+        if (articuloId) enlazadas++;
+        if (sinEnlazar) noEnlazadas.push({ fila, pregunta: recorte(fc.pregunta.trim()), referencia: referencia ?? `${siglas} ${numArt}`.trim() });
+        if (estado === EstadoFlashcard.PENDIENTE_REVISION) pendientesRevision++;
       } catch (e: any) {
-        // ⭐ Lo más habitual aquí es un temaId/articuloId/oposicionId con un UUID que no existe
-        // (violación de FK) — antes esto tiraba abajo el resto del lote entero sin guardar nada.
+        // Lo habitual: un id (tema/oposición/artículo) que no existe
         errores.push(`${etiqueta}: error al guardar — ${e?.message ?? 'error desconocido'}`);
       }
     }
 
-    return { importadas, errores, sinVincular };
+    return { importadas, enlazadas, noEnlazadas, duplicadas, pendientesRevision, errores, sinVincular: 0 };
   }
 
-  async findByArticulo(articuloId: string): Promise<Flashcard[]> {
-    return this.fcRepo.find({
-      where: { articulo: { id: articuloId }, activa: true },
-      relations: ['articulo', 'tema'],
-    });
+  /**
+   * Vuelve a enlazar con su artículo las flashcards que tienen norma y número guardados pero
+   * se quedaron sin artículo (no se encontró al importar, o se reimportó la ley y se perdió el
+   * enlace). No cambia su estado: si estaban pendientes de revisión, siguen así.
+   */
+  async reenlazarArticulos(oposicionId?: string): Promise<{ revisadas: number; enlazadas: number }> {
+    const usarOpo = !!oposicionId && FlashcardService.UUID.test(oposicionId);
+    const filas: { id: string; s: string; n: string }[] = await this.fcRepo.query(
+      `SELECT f.id, f."normaSiglas" AS s, f."articuloNumero" AS n FROM flashcards f
+        WHERE f."articuloId" IS NULL AND f."normaSiglas" IS NOT NULL AND f."articuloNumero" IS NOT NULL
+          ${usarOpo ? `AND (f."oposicionId" = $1 OR EXISTS (SELECT 1 FROM temas t JOIN convocatorias c ON c.id = t."convocatoriaId" WHERE t.id = f."temaId" AND c."oposicionId" = $1))` : ''}`,
+      usarOpo ? [oposicionId] : [],
+    );
+    const cache = new Map<string, Map<string, string> | null>();
+    let enlazadas = 0;
+    for (const f of filas) {
+      const articuloId = await this.resolverArticulo(f.s, f.n, cache);
+      if (articuloId) {
+        await this.fcRepo.query(`UPDATE flashcards SET "articuloId" = $1 WHERE id = $2`, [articuloId, f.id]);
+        enlazadas++;
+      }
+    }
+    return { revisadas: filas.length, enlazadas };
   }
 
+  /** Flashcards de un artículo, solo de la oposición indicada (sin oposición no devuelve nada). */
+  async findByArticulo(articuloId: string, oposicionId?: string): Promise<Flashcard[]> {
+    if (!oposicionId || !FlashcardService.UUID.test(oposicionId) || !FlashcardService.UUID.test(articuloId)) return [];
+    return this.fcRepo
+      .createQueryBuilder('fc')
+      .leftJoinAndSelect('fc.articulo', 'art')
+      .leftJoinAndSelect('fc.tema', 'tema')
+      .where('fc."articuloId" = :articuloId', { articuloId })
+      .andWhere(sqlVisible('fc', ':opoId'), { opoId: oposicionId })
+      .orderBy('fc."creadoEn"', 'ASC')
+      .getMany();
+  }
+
+  /** Todas las flashcards visibles de un tema (de la oposición de ese tema), en orden de subida. */
   async findByTema(temaId: string): Promise<Flashcard[]> {
-  return this.fcRepo
-    .createQueryBuilder('fc')
-    .leftJoin('fc.articulo', 'art')
-    .leftJoin('fc.tema', 'tema')
-    .where('fc.activa = true')
-    .andWhere(
-      `(tema.id = :temaId OR EXISTS (
-        SELECT 1 FROM temas_normativa tn 
-        WHERE tn."articuloId" = art.id 
-        AND tn."temaId" = :temaId
-      ))`,
-      { temaId }
-    )
-    .getMany();
-}
+    if (!FlashcardService.UUID.test(temaId)) return [];
+    const filas: { id: string }[] = await this.fcRepo.query(
+      `SELECT f.id FROM flashcards f
+         JOIN temas t ON t.id = $1
+         JOIN convocatorias c ON c.id = t."convocatoriaId"
+        WHERE ${sqlDeTema('f', '$1')} AND ${sqlVisible('f', 'c."oposicionId"')}
+        ORDER BY f."creadoEn" ASC, f.id ASC`,
+      [temaId],
+    );
+    return this.cargarEnOrden(filas.map((f) => f.id));
+  }
 
   async findByOposicion(oposicionId: string): Promise<Flashcard[]> {
-    return this.fcRepo.find({
-      where: { oposicion: { id: oposicionId }, activa: true },
-      relations: ['articulo', 'tema'],
-    });
+    if (!FlashcardService.UUID.test(oposicionId)) return [];
+    return this.fcRepo
+      .createQueryBuilder('fc')
+      .leftJoinAndSelect('fc.articulo', 'art')
+      .leftJoinAndSelect('fc.tema', 'tema')
+      .where(sqlVisible('fc', ':opoId'), { opoId: oposicionId })
+      .getMany();
+  }
+
+  /** Carga flashcards por id (con tema y artículo) respetando el orden recibido. */
+  private async cargarEnOrden(ids: string[]): Promise<Flashcard[]> {
+    if (!ids.length) return [];
+    const fcs = await this.fcRepo.find({ where: { id: In(ids) }, relations: ['tema', 'articulo'] });
+    const porId = new Map(fcs.map((f) => [f.id, f]));
+    return ids.map((id) => porId.get(id)!).filter(Boolean);
   }
 
   async findParaDuelo(
@@ -179,24 +427,18 @@ export class FlashcardService {
     // y ahora también por versionLeyId, replicando el join
     // articulo→capitulo→tituloRef→versionLey (o vía sección, o vía título directo) con Brackets
     // tal como en test.service.ts#construirQueryPreguntas.
+    // ⭐ Solo validadas y de la oposición del duelo (antes, sin tema, solo entraban las que tenían
+    // oposicionId directo; con tema, podían colarse las de otra oposición por el artículo).
     if (temaId || versionLeyId) {
       let query = this.fcRepo
         .createQueryBuilder('fc')
         .leftJoin('fc.articulo', 'art')
-        .leftJoin('fc.tema', 'tema')
-        .where('fc.activa = true')
+        .where(sqlVisible('fc', ':opoDuelo'), { opoDuelo: oposicionId })
         .andWhere('fc.esParaDuelo = true')
         .andWhere('fc.tipo IN (:...tiposDuelo)', { tiposDuelo: TIPOS_DUELO });
 
       if (temaId) {
-        query = query.andWhere(
-          `(tema.id = :temaId OR EXISTS (
-            SELECT 1 FROM temas_normativa tn
-            WHERE tn."articuloId" = art.id
-            AND tn."temaId" = :temaId
-          ))`,
-          { temaId },
-        );
+        query = query.andWhere(sqlDeTema('fc', ':temaId'), { temaId });
       }
 
       if (versionLeyId) {
@@ -219,11 +461,14 @@ export class FlashcardService {
       const filas = await query.select('fc.id', 'id').getRawMany();
       return this.cargarAlAzar(filas.map((f: any) => f.id), limite);
     }
-    const todas = await this.fcRepo.find({
-      where: { oposicion: { id: oposicionId }, activa: true, esParaDuelo: true, tipo: In(TIPOS_DUELO) },
-      select: ['id'],
-    });
-    return this.cargarAlAzar(todas.map((f) => f.id), limite);
+    const todas = await this.fcRepo
+      .createQueryBuilder('fc')
+      .select('fc.id', 'id')
+      .where(sqlVisible('fc', ':opoDuelo'), { opoDuelo: oposicionId })
+      .andWhere('fc.esParaDuelo = true')
+      .andWhere('fc.tipo IN (:...tiposDuelo)', { tiposDuelo: TIPOS_DUELO })
+      .getRawMany();
+    return this.cargarAlAzar(todas.map((f: any) => f.id), limite);
   }
 
   // ⭐ Antes los duelos salían siempre con las mismas tarjetas (las más antiguas). Ahora se eligen
@@ -250,7 +495,7 @@ export class FlashcardService {
   async getPendientesRepaso(usuarioId: string, oposicionId: string, limite = 10, temaId?: string): Promise<Flashcard[]> {
   const ahora = new Date();
   const tope = Math.max(1, Math.min(200, Math.trunc(limite) || 10));
-  const sub = this.flashcardsDeOposicionQB(oposicionId, 'sfc').select('sfc.id');
+  if (!FlashcardService.UUID.test(oposicionId)) return [];
   const qb = this.repasoRepo
     .createQueryBuilder('r')
     .innerJoinAndSelect('r.flashcard', 'fc')
@@ -258,15 +503,9 @@ export class FlashcardService {
     .leftJoinAndSelect('fc.articulo', 'art')
     .where('r."usuarioId" = :usuarioId', { usuarioId })
     .andWhere('r."proximoRepaso" <= :ahora', { ahora })
-    .andWhere('fc.activa = true')
-    // Por oposición, tema o ley (también los de artículo, que antes no volvían nunca a repaso)
-    .andWhere(`(fc.id IN (${sub.getQuery()}) OR fc."usuarioId" = :usuarioId)`)
-    .setParameters(sub.getParameters());
+    .andWhere(sqlVisible('fc', ':opoId'), { opoId: oposicionId });
   if (temaId && FlashcardService.UUID.test(temaId)) {
-    qb.andWhere(
-      `(tema.id = :temaId OR EXISTS (SELECT 1 FROM temas_normativa tn WHERE tn."articuloId" = art.id AND tn."temaId" = :temaId))`,
-      { temaId },
-    );
+    qb.andWhere(sqlDeTema('fc', ':temaId'), { temaId });
   }
   // Primero las que llevan más tiempo esperando
   const repasos = await qb.orderBy('r."proximoRepaso"', 'ASC').addOrderBy('r.id', 'ASC').limit(tope).getMany();
@@ -277,14 +516,17 @@ export class FlashcardService {
   // oficiales o personales del propio usuario.
   private get sqlFlashcardsPorTema() { return `
     SELECT t.id AS "temaId", fc.id AS "fcId"
-      FROM temas t JOIN flashcards fc ON fc."temaId" = t.id
-     WHERE t."convocatoriaId" = $1 AND fc.activa = true AND (fc."usuarioId" IS NULL OR fc."usuarioId" = $2)
+      FROM temas t
+      JOIN convocatorias c ON c.id = t."convocatoriaId"
+      JOIN flashcards fc ON fc."temaId" = t.id
+     WHERE t."convocatoriaId" = $1 AND ${sqlVisible('fc', 'c."oposicionId"')}
     UNION
     SELECT tn."temaId", fc.id
       FROM temas_normativa tn
       JOIN temas t ON t.id = tn."temaId"
-      JOIN flashcards fc ON fc."articuloId" = tn."articuloId"
-     WHERE t."convocatoriaId" = $1 AND fc.activa = true AND (fc."usuarioId" IS NULL OR fc."usuarioId" = $2)`; }
+      JOIN convocatorias c ON c.id = t."convocatoriaId"
+      JOIN flashcards fc ON fc."articuloId" = tn."articuloId" AND fc."temaId" IS NULL
+     WHERE t."convocatoriaId" = $1 AND ${sqlVisible('fc', 'c."oposicionId"')}`; }
 
   /** Por cada tema: cuántas tiene, cuántas ha visto, dominadas y por repasar hoy. Y las nuevas de hoy. */
   async resumenTemas(usuarioId: string, convocatoriaId: string) {
@@ -321,21 +563,15 @@ export class FlashcardService {
     const filas: { id: string }[] = await this.fcRepo.query(
       `SELECT f.id
          FROM flashcards f
-        WHERE f.id IN (
-                SELECT fc.id FROM flashcards fc WHERE fc."temaId" = $1
-                UNION
-                SELECT fc.id FROM flashcards fc JOIN temas_normativa tn ON tn."articuloId" = fc."articuloId" WHERE tn."temaId" = $1)
-          AND f.activa = true
-          AND (f."usuarioId" IS NULL OR f."usuarioId" = $2)
+         JOIN temas t ON t.id = $1
+         JOIN convocatorias c ON c.id = t."convocatoriaId"
+        WHERE ${sqlDeTema('f', '$1')} AND ${sqlVisible('f', 'c."oposicionId"')}
           AND NOT EXISTS (SELECT 1 FROM repasos_fc r WHERE r."flashcardId" = f.id AND r."usuarioId" = $2)
         ORDER BY f."creadoEn" ASC, f.id ASC
         LIMIT $3`,
       [temaId, usuarioId, tope],
     );
-    if (!filas.length) return [];
-    const fcs = await this.fcRepo.find({ where: { id: In(filas.map((f) => f.id)) }, relations: ['tema', 'articulo'] });
-    const porId = new Map(fcs.map((f) => [f.id, f]));
-    return filas.map((f) => porId.get(f.id)!).filter(Boolean);
+    return this.cargarEnOrden(filas.map((f) => f.id));
   }
 
 async registrarRespuesta(
@@ -543,7 +779,7 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
     articuloId: string,
     oposicionId: string,
   ): Promise<{ sugerir: boolean; totalFC: number }> {
-    const flashcards = await this.findByArticulo(articuloId);
+    const flashcards = await this.findByArticulo(articuloId, oposicionId);
     return {
       sugerir: flashcards.length > 0,
       totalFC: flashcards.length,
@@ -554,8 +790,9 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
     usuarioId: string,
     articuloId: string,
     cuando: 'manana' | 'finde' | Date,
+    oposicionId?: string,
   ): Promise<void> {
-    const flashcards = await this.findByArticulo(articuloId);
+    const flashcards = await this.findByArticulo(articuloId, oposicionId);
     if (flashcards.length === 0) return;
 
     let fecha: Date;
@@ -606,8 +843,8 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
   // ─── RETOS FC ────────────────────────────────────────────
 
   async crearRetoDiarioFC(oposicionId: string): Promise<RetoFC> {
-    const todas = await this.fcRepo.find({ where: { oposicion: { id: oposicionId }, activa: true }, select: ['id'] });
-    const flashcards = await this.cargarAlAzar(todas.map((f) => f.id), 10);
+    // ⭐ Mismo criterio que los duelos: validadas, de la oposición y corregibles (vf/trampa)
+    const flashcards = await this.findParaDuelo(oposicionId, 10);
 
     const fechaFin = new Date();
     fechaFin.setHours(23, 59, 59, 999);
@@ -733,25 +970,23 @@ async getEstadisticasFCTema(
   temaId: string,
 ): Promise<any> {
 
-  const existsSubquery = `EXISTS (SELECT 1 FROM temas_normativa tn WHERE tn."articuloId" = art.id AND tn."temaId" = :temaId)`;
-
-  // Total flashcards del tema
+  if (!FlashcardService.UUID.test(temaId) || !FlashcardService.UUID.test(oposicionId)) {
+    return { total: 0, dominadas: 0, dudosas: 0, noDominadas: 0, sinVer: 0 };
+  }
+  // Total de flashcards visibles del tema (validadas y de la oposición)
   const total = await this.fcRepo
     .createQueryBuilder('fc')
-    .leftJoin('fc.articulo', 'art')
-    .leftJoin('fc.tema', 'tema')
-    .where('fc.activa = true')
-    .andWhere(`(tema.id = :temaId OR ${existsSubquery})`, { temaId })
+    .where(sqlVisible('fc', ':opoId'), { opoId: oposicionId })
+    .andWhere(sqlDeTema('fc', ':temaId'), { temaId })
     .getCount();
 
-  // Stats del usuario para esas flashcards
+  // Stats del usuario para esas mismas flashcards
   const repasos = await this.repasoRepo
     .createQueryBuilder('r')
-    .leftJoin('r.flashcard', 'fc')
-    .leftJoin('fc.tema', 'tema')
-    .leftJoin('fc.articulo', 'art')
-    .where('r.usuario = :usuarioId', { usuarioId })
-    .andWhere(`(tema.id = :temaId OR ${existsSubquery})`, { temaId })
+    .innerJoin('r.flashcard', 'fc')
+    .where('r."usuarioId" = :usuarioId', { usuarioId })
+    .andWhere(sqlVisible('fc', ':opoId'), { opoId: oposicionId })
+    .andWhere(sqlDeTema('fc', ':temaId'), { temaId })
     .getMany();
 
   const dominadas = repasos.filter(r => r.estado === EstadoFC.DOMINADA).length;
@@ -1100,26 +1335,10 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
    * total y como subconsulta para contar solo los repasos de ESA oposición.
    */
   private flashcardsDeOposicionQB(oposicionId: string, alias = 'fc') {
-    const a = alias;
+    // ⭐ Mismo criterio único que el resto (validadas y de la oposición, no por ley compartida)
     return this.fcRepo
-      .createQueryBuilder(a)
-      .leftJoin(`${a}.articulo`, `${a}_art`)
-      .leftJoin(`${a}_art.capitulo`, `${a}_cap`)
-      .leftJoin(`${a}_cap.tituloRef`, `${a}_tit`)
-      .leftJoin(`${a}_tit.versionLey`, `${a}_vl`)
-      .leftJoin(`${a}_vl.oposicionLeyes`, `${a}_ol`)
-      .leftJoin(`${a}_art.seccion`, `${a}_secc`)
-      .leftJoin(`${a}_secc.capitulo`, `${a}_capS`)
-      .leftJoin(`${a}_capS.tituloRef`, `${a}_titS`)
-      .leftJoin(`${a}_titS.versionLey`, `${a}_vlS`)
-      .leftJoin(`${a}_vlS.oposicionLeyes`, `${a}_olS`)
-      .leftJoin(`${a}.tema`, `${a}_tema`)
-      .leftJoin(`${a}.oposicion`, `${a}_opo`)
-      .where(`${a}.activa = true`)
-      .andWhere(
-        `(${a}_opo.id = :fcOpoId OR EXISTS (SELECT 1 FROM convocatorias conv JOIN oposiciones op ON op.id = conv."oposicionId" WHERE conv.id = ${a}_tema."convocatoriaId" AND op.id = :fcOpoId) OR ${a}_ol.oposicion = :fcOpoId OR ${a}_olS.oposicion = :fcOpoId)`,
-        { fcOpoId: oposicionId },
-      );
+      .createQueryBuilder(alias)
+      .where(sqlVisible(alias, ':fcOpoId'), { fcOpoId: FlashcardService.UUID.test(oposicionId) ? oposicionId : '00000000-0000-0000-0000-000000000000' });
   }
 
   async getEstadisticasFC(usuarioId: string, oposicionId: string): Promise<any> {
@@ -1158,7 +1377,7 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
   private static readonly UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   /** Listado para el panel: 50 por página, con búsqueda, tipo, estado y oposición (directa o por tema). */
-  async listarAdmin(f: { oposicionId?: string; temaId?: string; q?: string; tipo?: string; estado?: string; pagina: number }) {
+  async listarAdmin(f: { oposicionId?: string; temaId?: string; q?: string; tipo?: string; estado?: string; revision?: string; pagina: number }) {
     const POR_PAGINA = 50;
     const qb = this.fcRepo
       .createQueryBuilder('fc')
@@ -1176,6 +1395,13 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     if (f.estado === 'activas') qb.andWhere('fc.activa = true');
     if (f.estado === 'inactivas') qb.andWhere('fc.activa = false');
     if (f.estado === 'duelo') qb.andWhere('fc.esParaDuelo = true');
+    // Recuento por estado editorial con los filtros de oposición/tema (para las pestañas del panel)
+    const porEstadoFilas: { estado: string; n: number }[] = await qb.clone()
+      .select('fc.estado', 'estado').addSelect('COUNT(*)::int', 'n')
+      .groupBy('fc.estado').orderBy().skip(undefined).take(undefined)
+      .getRawMany();
+    const porEstado = Object.fromEntries(porEstadoFilas.map((r) => [r.estado, Number(r.n)]));
+    if (f.revision && FlashcardService.ESTADOS.includes(f.revision)) qb.andWhere('fc.estado = :revision', { revision: f.revision });
     const pagina = Math.max(1, Math.min(10_000, Math.trunc(f.pagina) || 1));
     const [items, total] = await qb
       .orderBy('fc.creadoEn', 'DESC')
@@ -1192,6 +1418,9 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
       items: items.map((i) => ({
         id: i.id, tipo: i.tipo, nivel: i.nivel, pregunta: i.pregunta, respuesta: i.respuesta,
         explicacion: i.explicacion, esParaDuelo: i.esParaDuelo, activa: i.activa, creadoEn: i.creadoEn,
+        estado: i.estado, bloque: i.bloque, referencia: i.referencia, normaSiglas: i.normaSiglas, articuloNumero: i.articuloNumero,
+        apartado: i.apartado, fechaReferencia: i.fechaReferencia, estructura: i.estructura, fechaRevision: i.fechaRevision,
+        fuenteValidacion: i.fuenteValidacion, motivoObsolescencia: i.motivoObsolescencia,
         tema: i.tema ? { id: i.tema.id, numero: (i.tema as any).numero, titulo: (i.tema as any).titulo } : null,
         articulo: i.articulo ? { id: i.articulo.id, numero: (i.articulo as any).numero } : null,
         oposicion: i.oposicion ? { id: i.oposicion.id, nombre: (i.oposicion as any).nombre } : null,
@@ -1200,6 +1429,7 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
       total,
       pagina,
       paginas: Math.max(1, Math.ceil(total / POR_PAGINA)),
+      porEstado,
     };
   }
 
@@ -1230,6 +1460,20 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
       cambios.nivel = body.nivel;
     }
     if (typeof body.activa === 'boolean') cambios.activa = body.activa;
+    // ⭐ Estado editorial: validar (queda con fecha de revisión de hoy) u obsoleta (con motivo)
+    if (body.estado !== undefined) {
+      if (!FlashcardService.ESTADOS.includes(body.estado)) throw new BadRequestException('Estado no válido');
+      cambios.estado = body.estado;
+      if (body.estado === EstadoFlashcard.OBSOLETA) {
+        const motivo = String(body.motivoObsolescencia ?? '').trim();
+        if (!motivo) throw new BadRequestException('Indica el motivo por el que queda obsoleta');
+        if (motivo.length > 1000) throw new BadRequestException('El motivo es demasiado largo');
+        cambios.motivoObsolescencia = motivo;
+      } else {
+        cambios.motivoObsolescencia = null;
+      }
+      if (body.estado === EstadoFlashcard.VALIDADA) cambios.fechaRevision = diaMadrid();
+    }
     if (typeof body.esParaDuelo === 'boolean') cambios.esParaDuelo = body.esParaDuelo;
     const tipoFinal = cambios.tipo ?? fc.tipo;
     const respFinal = String(cambios.respuesta ?? fc.respuesta).trim().toLowerCase();

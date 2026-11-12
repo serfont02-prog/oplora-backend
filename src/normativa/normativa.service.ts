@@ -173,10 +173,11 @@ export class NormativaService {
     pregunta: string;
     respuesta: string;
   }[];
-}[]): Promise<{ actualizados: number; preguntas: number; flashcards: number; preguntasCortas: number }> {
+}[]): Promise<{ actualizados: number; preguntas: number; flashcards: number; flashcardsIgnoradas: number; preguntasCortas: number }> {
   let actualizados = 0;
   let totalPreguntas = 0;
-  let totalFlashcards = 0;
+  const totalFlashcards = 0;
+  let flashcardsIgnoradas = 0;
   let totalPreguntasCortas = 0;
 
   for (const item of contenido) {
@@ -216,23 +217,11 @@ export class NormativaService {
       }
     }
 
-    // Importar flashcards
+    // ⭐ Las flashcards ya no se importan por aquí: sin oposición ni tema no se mostrarían a nadie
+    // (cada flashcard pertenece a una oposición). Se suben en Admin → Flashcards → Importar, con
+    // "norma" y "articulo" para enlazarlas. Si vienen, se ignoran y se cuentan aparte.
     if (item.flashcards?.length) {
-      for (const fc of item.flashcards) {
-        await this.flashcardRepo.save(
-          this.flashcardRepo.create({
-            tipo: fc.tipo as any,
-            nivel: fc.nivel as any,
-            pregunta: fc.pregunta,
-            respuesta: fc.respuesta,
-            explicacion: fc.explicacion,
-            esParaDuelo: fc.tipo === 'vf' || fc.tipo === 'articulo',
-            articulo: { id: articulo.id } as any,
-            creadaPor: 'admin',
-          })
-        );
-        totalFlashcards++;
-      }
+      flashcardsIgnoradas += item.flashcards.length;
     }
 
     // Importar preguntas cortas
@@ -250,7 +239,7 @@ export class NormativaService {
     }
   }
 
-  return { actualizados, preguntas: totalPreguntas, flashcards: totalFlashcards, preguntasCortas: totalPreguntasCortas };
+  return { actualizados, preguntas: totalPreguntas, flashcards: totalFlashcards, flashcardsIgnoradas, preguntasCortas: totalPreguntasCortas };
 }
 
   async importarArticulosEnTitulo(

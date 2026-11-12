@@ -353,8 +353,14 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
       }
 
     // Copiar Flashcards del tema
-    const flashcardsOrigen = await this.flashcardRepo.find({ where: { tema: { id: tema.id } as any } });
+    // ⭐ Se cargan artículo y oposición (antes no se cargaban y la copia perdía el enlace al
+    // artículo) y se copian también los campos del estándar de nov 2026.
+    const flashcardsOrigen = await this.flashcardRepo.find({
+      where: { tema: { id: tema.id } as any },
+      relations: ['articulo', 'oposicion', 'usuario'],
+    });
     for (const fc of flashcardsOrigen) {
+      if ((fc as any).usuario) continue; // las personales no se copian
       await this.flashcardRepo.save(this.flashcardRepo.create({
         tipo: fc.tipo,
         nivel: fc.nivel,
@@ -365,6 +371,18 @@ async copiarConvocatoria(id: string): Promise<Convocatoria> {
         activa: fc.activa,
         tema: { id: nuevoTema.id } as any,
         articulo: fc.articulo ? { id: (fc.articulo as any).id } as any : undefined,
+        oposicion: fc.oposicion ? { id: (fc.oposicion as any).id } as any : undefined,
+        estado: fc.estado,
+        bloque: fc.bloque,
+        referencia: fc.referencia,
+        normaSiglas: fc.normaSiglas,
+        articuloNumero: fc.articuloNumero,
+        apartado: fc.apartado,
+        fechaReferencia: fc.fechaReferencia,
+        estructura: fc.estructura,
+        fechaRevision: fc.fechaRevision,
+        fuenteValidacion: fc.fuenteValidacion,
+        motivoObsolescencia: fc.motivoObsolescencia,
       } as any));
     }
 

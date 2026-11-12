@@ -13,6 +13,7 @@ export class FlashcardController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   importar(@Body('flashcards') flashcards: any[]) {
+    // Formato: { "flashcards": [ ... ] } (ver FlashcardService.importar)
     return this.service.importar(flashcards);
   }
 
@@ -27,8 +28,17 @@ export class FlashcardController {
     @Query('estado') estado?: string,
     @Query('pagina') pagina?: string,
     @Query('temaId') temaId?: string,
+    @Query('revision') revision?: string,
   ) {
-    return this.service.listarAdmin({ oposicionId, temaId, q, tipo, estado, pagina: Number(pagina) || 1 });
+    return this.service.listarAdmin({ oposicionId, temaId, q, tipo, estado, revision, pagina: Number(pagina) || 1 });
+  }
+
+  /** Vuelve a enlazar con su artículo las FC que guardan norma y número pero no tienen artículo. */
+  @Post('admin/reenlazar')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  reenlazar(@Body('oposicionId') oposicionId?: string) {
+    return this.service.reenlazarArticulos(oposicionId);
   }
 
   /** Temas de una oposición que tienen flashcards oficiales, con cuántas tiene cada uno. */
@@ -76,8 +86,8 @@ export class FlashcardController {
 }
 
   @Get('articulo/:articuloId')
-  findByArticulo(@Param('articuloId') articuloId: string) {
-    return this.service.findByArticulo(articuloId);
+  findByArticulo(@Param('articuloId') articuloId: string, @Query('oposicionId') oposicionId: string) {
+    return this.service.findByArticulo(articuloId, oposicionId);
   }
 
   @Get('tema/:temaId')
@@ -135,7 +145,7 @@ getPendientes(
     @Body('oposicionId') oposicionId: string,
     @Request() req: any,
   ) {
-    return this.service.programarRepasoArticulo(req.user.id, articuloId, cuando as any);
+    return this.service.programarRepasoArticulo(req.user.id, articuloId, cuando as any, oposicionId);
   }
 
   @Post('sugerir-repaso')
