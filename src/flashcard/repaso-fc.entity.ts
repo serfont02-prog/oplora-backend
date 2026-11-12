@@ -53,6 +53,11 @@ export class RepasoFC {
   @UpdateDateColumn()
   actualizadoEn!: Date;
 
+  // ⭐ Cuándo se vio la tarjeta por primera vez: sirve para contar las "nuevas de hoy" y avisar
+  // si se empiezan demasiadas en un día. Los repasos anteriores a este cambio quedan en null.
+  @Column({ type: 'timestamptz', nullable: true })
+  primeraVez!: Date | null;
+
   // ⭐ synchronize=true: estas relaciones no son nullable (no tiene sentido un repaso sin
   // flashcard o sin usuario), así que al borrar el padre debe borrarse en cascada el repaso en
   // vez de dejar una FK apuntando a una fila inexistente.

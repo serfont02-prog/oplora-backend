@@ -243,89 +243,100 @@ export class FlashcardService {
 
   // ─── REPASO ──────────────────────────────────────────────
 
-  async getPendientesRepaso(usuarioId: string, oposicionId: string, limite = 10): Promise<Flashcard[]> {
+  // ⭐ Solo los REPASOS que tocan (tarjetas ya vistas cuyo día ha llegado). Antes se rellenaba con
+  // tarjetas nuevas de toda la oposición, y al subir un temario entero el botón de Inicio
+  // mostraba miles de "pendientes" sin saber de qué tema eran. Las nuevas se empiezan ahora
+  // desde cada tema, eligiendo cuántas (ver nuevasDeTema).
+  async getPendientesRepaso(usuarioId: string, oposicionId: string, limite = 10, temaId?: string): Promise<Flashcard[]> {
   const ahora = new Date();
-
-  // FC con repaso pendiente — busca por oposicion, tema o articulo vinculado
-  // ⭐ Antes solo se unía art.capitulo→tituloRef→versionLey, así que las flashcards ligadas a un
-  // artículo colgado de una Sección (en vez de directamente de un Capítulo) quedaban invisibles
-  // para el repaso. Se añade también el camino art.seccion→capitulo→tituloRef, igual que en
-  // test.service.ts#construirQueryPreguntas.
-  const conRepaso = await this.repasoRepo
+  const tope = Math.max(1, Math.min(200, Math.trunc(limite) || 10));
+  const sub = this.flashcardsDeOposicionQB(oposicionId, 'sfc').select('sfc.id');
+  const qb = this.repasoRepo
     .createQueryBuilder('r')
-    .leftJoinAndSelect('r.flashcard', 'fc')
-    .leftJoin('fc.articulo', 'art')
-    .leftJoin('art.capitulo', 'cap')
-    .leftJoin('cap.tituloRef', 'tit')
-    .leftJoin('tit.versionLey', 'vl')
-    .leftJoin('art.seccion', 'secc')
-    .leftJoin('secc.capitulo', 'capViaSecc')
-    .leftJoin('capViaSecc.tituloRef', 'titViaSecc')
-    .leftJoin('fc.tema', 'tema')
-    .leftJoin('fc.oposicion', 'opo')
-    .where('r.usuario = :usuarioId', { usuarioId })
-    .andWhere('r.proximoRepaso <= :ahora', { ahora })
-    .andWhere(
-      '(opo.id = :oposicionId OR EXISTS (SELECT 1 FROM convocatorias conv JOIN oposiciones op ON op.id = conv."oposicionId" WHERE conv.id = tema."convocatoriaId" AND op.id = :oposicionId))',
-      { oposicionId }
-    )
-    .orderBy('r.intervalo', 'DESC')
-    .limit(limite)
-    .getMany();
-
-  const ids = conRepaso.map((r) => r.flashcard.id);
-
-  // FC nuevas que el usuario no ha visto — busca por las tres vías
-  const nuevas = await this.fcRepo
-    .createQueryBuilder('fc')
-    .leftJoin('fc.repasos', 'r', 'r.usuario = :usuarioId', { usuarioId })
-    .leftJoin('fc.articulo', 'art')
-    .leftJoin('art.capitulo', 'cap')
-    .leftJoin('cap.tituloRef', 'tit')
-    .leftJoin('tit.versionLey', 'vl')
-    .leftJoin('vl.oposicionLeyes', 'ol')
-    // ⭐ Camino "vía sección": el artículo puede colgar de una Sección dentro de un Capítulo
-    // (art.seccion → seccion.capitulo → capitulo.tituloRef → tituloRef.versionLey) en vez de
-    // colgar directamente de un Capítulo. Sin este segundo camino, las flashcards de artículos
-    // dentro de una Sección quedaban invisibles aquí, igual que ya se corrigió en
-    // test.service.ts#construirQueryPreguntas.
-    .leftJoin('art.seccion', 'secc')
-    .leftJoin('secc.capitulo', 'capViaSecc')
-    .leftJoin('capViaSecc.tituloRef', 'titViaSecc')
-    .leftJoin('titViaSecc.versionLey', 'vlViaSecc')
-    .leftJoin('vlViaSecc.oposicionLeyes', 'olViaSecc')
-    .leftJoin('fc.tema', 'tema')
-    .leftJoin('fc.oposicion', 'opo')
-    .where('fc.activa = true')
-    .andWhere('r.id IS NULL')
-    .andWhere(
-      `(opo.id = :oposicionId
-        OR EXISTS (
-          SELECT 1 FROM convocatorias conv
-          JOIN oposiciones op ON op.id = conv."oposicionId"
-          WHERE conv.id = tema."convocatoriaId"
-          AND op.id = :oposicionId
-        )
-        OR ol.oposicion = :oposicionId
-        OR olViaSecc.oposicion = :oposicionId
-        OR EXISTS (
-          SELECT 1 FROM temas_normativa tn
-          JOIN temas t ON t.id = tn."temaId"
-          JOIN convocatorias conv ON conv.id = t."convocatoriaId"
-          JOIN oposiciones op ON op.id = conv."oposicionId"
-          WHERE tn."articuloId" = art.id
-          AND op.id = :oposicionId
-        ))`,
-      { oposicionId }
-    )
-    .limit(Math.max(0, limite - ids.length))
-    .getMany();
-
-  return [
-    ...conRepaso.map((r) => r.flashcard),
-    ...nuevas.filter((fc) => !ids.includes(fc.id)),
-  ].slice(0, limite);
+    .innerJoinAndSelect('r.flashcard', 'fc')
+    .leftJoinAndSelect('fc.tema', 'tema')
+    .leftJoinAndSelect('fc.articulo', 'art')
+    .where('r."usuarioId" = :usuarioId', { usuarioId })
+    .andWhere('r."proximoRepaso" <= :ahora', { ahora })
+    .andWhere('fc.activa = true')
+    // Por oposición, tema o ley (también los de artículo, que antes no volvían nunca a repaso)
+    .andWhere(`(fc.id IN (${sub.getQuery()}) OR fc."usuarioId" = :usuarioId)`)
+    .setParameters(sub.getParameters());
+  if (temaId && FlashcardService.UUID.test(temaId)) {
+    qb.andWhere(
+      `(tema.id = :temaId OR EXISTS (SELECT 1 FROM temas_normativa tn WHERE tn."articuloId" = art.id AND tn."temaId" = :temaId))`,
+      { temaId },
+    );
+  }
+  // Primero las que llevan más tiempo esperando
+  const repasos = await qb.orderBy('r."proximoRepaso"', 'ASC').addOrderBy('r.id', 'ASC').limit(tope).getMany();
+  return repasos.map((r) => r.flashcard);
 }
+
+  // Flashcards de cada tema de una convocatoria (directas o por artículo vinculado al tema),
+  // oficiales o personales del propio usuario.
+  private get sqlFlashcardsPorTema() { return `
+    SELECT t.id AS "temaId", fc.id AS "fcId"
+      FROM temas t JOIN flashcards fc ON fc."temaId" = t.id
+     WHERE t."convocatoriaId" = $1 AND fc.activa = true AND (fc."usuarioId" IS NULL OR fc."usuarioId" = $2)
+    UNION
+    SELECT tn."temaId", fc.id
+      FROM temas_normativa tn
+      JOIN temas t ON t.id = tn."temaId"
+      JOIN flashcards fc ON fc."articuloId" = tn."articuloId"
+     WHERE t."convocatoriaId" = $1 AND fc.activa = true AND (fc."usuarioId" IS NULL OR fc."usuarioId" = $2)`; }
+
+  /** Por cada tema: cuántas tiene, cuántas ha visto, dominadas y por repasar hoy. Y las nuevas de hoy. */
+  async resumenTemas(usuarioId: string, convocatoriaId: string) {
+    if (!FlashcardService.UUID.test(convocatoriaId)) throw new BadRequestException('Convocatoria no válida');
+    const temas: { temaId: string; total: number; vistas: number; dominadas: number; porRepasar: number }[] =
+      await this.repasoRepo.query(
+        `WITH tfc AS (${this.sqlFlashcardsPorTema})
+         SELECT tfc."temaId",
+                COUNT(*)::int AS total,
+                COUNT(r.id)::int AS vistas,
+                (COUNT(*) FILTER (WHERE r.estado = 'dominada'))::int AS dominadas,
+                (COUNT(*) FILTER (WHERE r."proximoRepaso" <= $3))::int AS "porRepasar"
+           FROM tfc
+           LEFT JOIN repasos_fc r ON r."flashcardId" = tfc."fcId" AND r."usuarioId" = $2
+          GROUP BY tfc."temaId"`,
+        [convocatoriaId, usuarioId, new Date()],
+      );
+    return { temas, nuevasHoy: await this.nuevasHoy(usuarioId) };
+  }
+
+  /** Tarjetas que el usuario ha empezado hoy (hora de Madrid). */
+  async nuevasHoy(usuarioId: string): Promise<number> {
+    const [{ n }] = await this.repasoRepo.query(
+      `SELECT COUNT(*)::int AS n FROM repasos_fc WHERE "usuarioId" = $1 AND "primeraVez" >= $2`,
+      [usuarioId, inicioDiaMadrid()],
+    );
+    return n;
+  }
+
+  /** Las primeras N tarjetas sin ver de un tema, en el orden en que se subieron (el del temario). */
+  async nuevasDeTema(usuarioId: string, temaId: string, limite = 10): Promise<Flashcard[]> {
+    if (!FlashcardService.UUID.test(temaId)) throw new BadRequestException('Tema no válido');
+    const tope = Math.max(1, Math.min(200, Math.trunc(limite) || 10));
+    const filas: { id: string }[] = await this.fcRepo.query(
+      `SELECT f.id
+         FROM flashcards f
+        WHERE f.id IN (
+                SELECT fc.id FROM flashcards fc WHERE fc."temaId" = $1
+                UNION
+                SELECT fc.id FROM flashcards fc JOIN temas_normativa tn ON tn."articuloId" = fc."articuloId" WHERE tn."temaId" = $1)
+          AND f.activa = true
+          AND (f."usuarioId" IS NULL OR f."usuarioId" = $2)
+          AND NOT EXISTS (SELECT 1 FROM repasos_fc r WHERE r."flashcardId" = f.id AND r."usuarioId" = $2)
+        ORDER BY f."creadoEn" ASC, f.id ASC
+        LIMIT $3`,
+      [temaId, usuarioId, tope],
+    );
+    if (!filas.length) return [];
+    const fcs = await this.fcRepo.find({ where: { id: In(filas.map((f) => f.id)) }, relations: ['tema', 'articulo'] });
+    const porId = new Map(fcs.map((f) => [f.id, f]));
+    return filas.map((f) => porId.get(f.id)!).filter(Boolean);
+  }
 
 async registrarRespuesta(
   usuarioId: string,
@@ -366,6 +377,7 @@ async registrarRespuesta(
       factorFacilidad: 2.5,
       intervalo: 0,
       repeticiones: 0,
+      primeraVez: ahora,
     });
   }
 
@@ -1146,7 +1158,7 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
   private static readonly UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   /** Listado para el panel: 50 por página, con búsqueda, tipo, estado y oposición (directa o por tema). */
-  async listarAdmin(f: { oposicionId?: string; q?: string; tipo?: string; estado?: string; pagina: number }) {
+  async listarAdmin(f: { oposicionId?: string; temaId?: string; q?: string; tipo?: string; estado?: string; pagina: number }) {
     const POR_PAGINA = 50;
     const qb = this.fcRepo
       .createQueryBuilder('fc')
@@ -1157,6 +1169,7 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     if (f.oposicionId && FlashcardService.UUID.test(f.oposicionId)) {
       qb.andWhere('(opo.id = :o OR conv."oposicionId" = :o)', { o: f.oposicionId });
     }
+    if (f.temaId && FlashcardService.UUID.test(f.temaId)) qb.andWhere('tema.id = :t', { t: f.temaId });
     const q = (f.q ?? '').trim();
     if (q) qb.andWhere('(fc.pregunta ILIKE :q OR fc.respuesta ILIKE :q OR fc.explicacion ILIKE :q)', { q: `%${q.replace(/[%_\\]/g, (c) => '\\' + c)}%` });
     if (f.tipo && (Object.values(TipoFlashcard) as string[]).includes(f.tipo)) qb.andWhere('fc.tipo = :tipo', { tipo: f.tipo });
@@ -1225,6 +1238,54 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     }
     if (Object.keys(cambios).length) await this.fcRepo.update(id, cambios);
     return this.fcRepo.findOne({ where: { id }, relations: ['tema', 'articulo', 'oposicion'] });
+  }
+
+  // Flashcards oficiales (no las personales de los usuarios) de una oposición: vinculadas a ella
+  // directamente o a un tema de una de sus convocatorias. Opcionalmente, solo las de un tema.
+  private async idsOficiales(oposicionId: string, temaId?: string): Promise<string[]> {
+    const filas: { id: string }[] = await this.fcRepo.query(
+      `SELECT fc.id FROM flashcards fc
+         LEFT JOIN temas t ON t.id = fc."temaId"
+         LEFT JOIN convocatorias c ON c.id = t."convocatoriaId"
+        WHERE fc."usuarioId" IS NULL
+          AND (fc."oposicionId" = $1 OR c."oposicionId" = $1)
+          AND ($2::uuid IS NULL OR fc."temaId" = $2::uuid)`,
+      [oposicionId, temaId ?? null],
+    );
+    return filas.map((f) => f.id);
+  }
+
+  async temasConFlashcards(oposicionId: string) {
+    if (!oposicionId || !FlashcardService.UUID.test(oposicionId)) return { temas: [], sinTema: 0 };
+    const temas: { id: string; numero: number; titulo: string; n: number }[] = await this.fcRepo.query(
+      `SELECT t.id, t.numero, t.titulo, COUNT(*)::int AS n
+         FROM flashcards fc
+         JOIN temas t ON t.id = fc."temaId"
+         LEFT JOIN convocatorias c ON c.id = t."convocatoriaId"
+        WHERE fc."usuarioId" IS NULL AND (fc."oposicionId" = $1 OR c."oposicionId" = $1)
+        GROUP BY t.id, t.numero, t.titulo
+        ORDER BY t.numero`,
+      [oposicionId],
+    );
+    const [{ n: sinTema }] = await this.fcRepo.query(
+      `SELECT COUNT(*)::int AS n FROM flashcards fc WHERE fc."usuarioId" IS NULL AND fc."temaId" IS NULL AND fc."oposicionId" = $1`,
+      [oposicionId],
+    );
+    return { temas, sinTema };
+  }
+
+  /** Borrado masivo (con la misma limpieza que el borrado de una sola tarjeta). */
+  async borrarMasivo(oposicionId: string, temaId?: string) {
+    if (!oposicionId || !FlashcardService.UUID.test(oposicionId)) throw new BadRequestException('Elige una oposición');
+    if (temaId && !FlashcardService.UUID.test(temaId)) throw new BadRequestException('Tema no válido');
+    const ids = await this.idsOficiales(oposicionId, temaId || undefined);
+    if (!ids.length) return { borradas: 0 };
+    await this.fcRepo.manager.transaction(async (m) => {
+      await m.query(`UPDATE resultados_reto_fc SET "flashcardId" = NULL WHERE "flashcardId" = ANY($1)`, [ids]);
+      await m.query(`DELETE FROM repasos_fc WHERE "flashcardId" = ANY($1)`, [ids]);
+      await m.query(`DELETE FROM flashcards WHERE id = ANY($1)`, [ids]);
+    });
+    return { borradas: ids.length };
   }
 
   /** Borrar una tarjeta: se borran sus repasos; los resultados de duelos ya jugados se conservan. */

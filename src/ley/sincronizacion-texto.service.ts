@@ -7,7 +7,9 @@ import { Disposicion } from '../normativa/disposicion.entity';
 import { SubrayadoArticulo } from '../normativa/subrayado-articulo.entity';
 import { claveArticulo, normalizarContenido, relocalizarFragmento } from './texto-legal.util';
 
-interface ArticuloJson { numero: string; titulo?: string | null; contenido: string }
+interface ArticuloJson { numero: string; titulo?: string | null; contenido: string; ruta?: string }
+/** Dónde cuelga un artículo de la app: exactamente uno de los tres. */
+type Contenedor = { campo: 'seccion' | 'capitulo' | 'tituloRef'; id: string };
 interface DisposicionJson { categoria: string; etiqueta?: string | null; contenido: string }
 export interface EstructuraJson { libros?: any[]; titulos?: any[]; disposiciones?: DisposicionJson[] }
 
@@ -20,7 +22,8 @@ export interface ResultadoActualizacion {
     sinCambios: number;
     rubricasCambiadas: number;
     soloEnApp: string[];   // no vienen en el JSON: no se tocan
-    soloEnJson: string[];  // no existen en la app: no se crean (usar Importar JSON)
+    soloEnJson: string[];  // no existen en la app y no se pueden colocar: no se crean
+    creados: string[];     // no existían: se crean junto a su vecino del JSON (mismo título/capítulo/sección)
   };
   disposiciones: { aCambiar: number; sinCambios: number; nuevas: number; soloEnApp: string[] };
   subrayados: { recolocados: number; noEncontrados: number };
@@ -69,7 +72,7 @@ export class SincronizacionTextoService {
 
     const r: ResultadoActualizacion = {
       aplicado: aplicar,
-      articulos: { enApp: articulosBd.length, enJson: articulosJson.length, aCambiar: 0, sinCambios: 0, rubricasCambiadas: 0, soloEnApp: [], soloEnJson: [] },
+      articulos: { enApp: articulosBd.length, enJson: articulosJson.length, aCambiar: 0, sinCambios: 0, rubricasCambiadas: 0, soloEnApp: [], soloEnJson: [], creados: [] },
       disposiciones: { aCambiar: 0, sinCambios: 0, nuevas: 0, soloEnApp: [] },
       subrayados: { recolocados: 0, noEncontrados: 0 },
       muestras: [],
@@ -100,7 +103,11 @@ export class SincronizacionTextoService {
         r.muestras.push({ numero: art.numero, antes: art.contenido, despues: contenido });
       }
     }
-    for (const a of articulosJson) if (!clavesBd.has(claveArticulo(a.numero))) r.articulos.soloEnJson.push(a.numero);
+    // ⭐ Artículos que vienen en el JSON y no existen en la app (p. ej. LO 2/1979, arts. 100-102,
+    // que en la primera carga iban pegados al 99): se crean en el mismo título/capítulo/sección
+    // que su vecino del JSON, justo detrás del anterior (o delante del siguiente). Solo si el vecino
+    // está en el mismo sitio de la estructura en el JSON; si no, se avisa y no se crean.
+    const nuevosArt = this.planificarNuevos(articulosJson, articulosBd, clavesBd, r);
 
     const claveDisp = (categoria: string, etiqueta?: string | null) =>
       `${(categoria ?? '').toLowerCase().trim()}|${(etiqueta ?? '').toLowerCase().trim()}`;
@@ -131,6 +138,24 @@ export class SincronizacionTextoService {
         await m.update(Articulo, id, datos);
         if (datos.contenido !== undefined) await this.recolocarSubrayados(m, id, datos.contenido, r);
       }
+      // Nuevos artículos: se abre hueco en el orden del contenedor y se insertan
+      for (const n of nuevosArt) {
+        const pos = n.ancla.tipo === 'despues' ? n.ancla.ref.orden + 1 : n.ancla.ref.orden;
+        const { campo, id } = n.ancla.ref.contenedor;
+        await m.createQueryBuilder().update(Articulo).set({ orden: () => 'orden + 1' })
+          .where(`"${campo}Id" = :id AND orden >= :pos`, { id, pos }).execute();
+        for (const ref of n.vecinos) if (ref.contenedor.campo === campo && ref.contenedor.id === id && ref.orden >= pos) ref.orden++;
+        await m.save(m.create(Articulo, {
+          orden: pos,
+          numero: n.json.numero,
+          titulo: (n.json.titulo ?? '').trim() || undefined,
+          contenido: normalizarContenido(n.json.contenido),
+          vigente: true,
+          pesoExamen: 1,
+          [campo]: { id } as any,
+        } as any));
+        n.propio.orden = pos;
+      }
       for (const c of cambiosDisp) await m.update(Disposicion, c.id, { contenido: c.contenido });
       let orden = disposicionesBd.reduce((max, d) => Math.max(max, d.orden ?? 0), 0);
       for (const d of nuevasDisp) {
@@ -146,27 +171,61 @@ export class SincronizacionTextoService {
 
     this.logger.log(
       `Actualizar desde JSON ${version.ley?.nombre ?? ''} v${version.version}: ` +
-        `${r.articulos.aCambiar} artículos y ${r.disposiciones.aCambiar + r.disposiciones.nuevas} disposiciones`,
+        `${r.articulos.aCambiar} artículos (${r.articulos.creados.length} nuevos) y ${r.disposiciones.aCambiar + r.disposiciones.nuevas} disposiciones`,
     );
     return r;
   }
 
   // ─── helpers ─────────────────────────────────────────────
 
-  /** Recorre libros/títulos/capítulos/secciones del JSON y devuelve todos los artículos. */
+  /** Recorre libros/títulos/capítulos/secciones del JSON y devuelve todos los artículos,
+   *  cada uno con su `ruta` (dónde cuelga) para saber si dos vecinos van en el mismo sitio. */
   private aplanarArticulos(e: EstructuraJson): ArticuloJson[] {
     const out: ArticuloJson[] = [];
-    const deCapitulo = (c: any) => {
-      out.push(...(c?.articulos ?? []));
-      for (const s of c?.secciones ?? []) out.push(...(s?.articulos ?? []));
+    const n = (x: any, i: number) => `${x?.numero ?? ''}~${x?.nombre ?? ''}~${i}`;
+    const add = (arts: any[], ruta: string) => { for (const a of arts ?? []) out.push({ ...a, ruta }); };
+    const deTitulo = (t: any, rt: string) => {
+      add(t?.articulos, rt);
+      (t?.capitulos ?? []).forEach((c: any, ci: number) => {
+        const rc = `${rt}|C${n(c, ci)}`;
+        add(c?.articulos, rc);
+        (c?.secciones ?? []).forEach((s: any, si: number) => add(s?.articulos, `${rc}|S${n(s, si)}`));
+      });
     };
-    const deTitulo = (t: any) => {
-      out.push(...(t?.articulos ?? []));
-      for (const c of t?.capitulos ?? []) deCapitulo(c);
-    };
-    for (const l of e.libros ?? []) for (const t of l?.titulos ?? []) deTitulo(t);
-    for (const t of e.titulos ?? []) deTitulo(t);
+    (e.libros ?? []).forEach((l: any, li: number) => (l?.titulos ?? []).forEach((t: any, ti: number) => deTitulo(t, `L${li}|T${n(t, ti)}`)));
+    (e.titulos ?? []).forEach((t: any, ti: number) => deTitulo(t, `L-|T${n(t, ti)}`));
     return out.filter((a) => a && a.numero != null);
+  }
+
+  /** Decide dónde va cada artículo del JSON que no existe en la app. */
+  private planificarNuevos(articulosJson: ArticuloJson[], articulosBd: Articulo[], clavesBd: Set<string>, r: ResultadoActualizacion) {
+    type Ref = { orden: number; contenedor: Contenedor };
+    const contenedorDe = (a: any): Contenedor | null =>
+      a.seccion ? { campo: 'seccion', id: a.seccion } : a.capitulo ? { campo: 'capitulo', id: a.capitulo } : a.tituloRef ? { campo: 'tituloRef', id: a.tituloRef } : null;
+    const refs = new Map<string, Ref>();
+    for (const a of articulosBd) {
+      const c = contenedorDe(a);
+      if (c) refs.set(claveArticulo(a.numero), { orden: a.orden, contenedor: c });
+    }
+    const vecinos = [...refs.values()];
+    const nuevos: { json: ArticuloJson; ancla: { tipo: 'despues' | 'antes'; ref: Ref }; propio: Ref; vecinos: Ref[] }[] = [];
+    articulosJson.forEach((a, i) => {
+      const clave = claveArticulo(a.numero);
+      if (clavesBd.has(clave) || refs.has(clave)) return;
+      const prev = articulosJson[i - 1];
+      const next = articulosJson[i + 1];
+      let ancla: { tipo: 'despues' | 'antes'; ref: Ref } | null = null;
+      if (prev && prev.ruta === a.ruta && refs.has(claveArticulo(prev.numero))) ancla = { tipo: 'despues', ref: refs.get(claveArticulo(prev.numero))! };
+      else if (next && next.ruta === a.ruta && clavesBd.has(claveArticulo(next.numero))) ancla = { tipo: 'antes', ref: refs.get(claveArticulo(next.numero))! };
+      if (!ancla) { r.articulos.soloEnJson.push(a.numero); return; }
+      // Su propia referencia (el orden real se fija al insertar) para que el siguiente nuevo vaya detrás
+      const propio: Ref = { orden: ancla.tipo === 'despues' ? ancla.ref.orden + 1 : ancla.ref.orden, contenedor: ancla.ref.contenedor };
+      refs.set(clave, propio);
+      vecinos.push(propio);
+      nuevos.push({ json: a, ancla, propio, vecinos });
+      r.articulos.creados.push(a.numero);
+    });
+    return nuevos;
   }
 
   private async articulosDeVersion(versionId: string): Promise<Articulo[]> {
@@ -181,6 +240,8 @@ export class SincronizacionTextoService {
       .leftJoin('sc.tituloRef', 'st')
       .where('(t.versionLey = :vId OR tr.versionLey = :vId OR st.versionLey = :vId)', { vId: versionId })
       .orderBy('a.orden', 'ASC')
+      // ⭐ Con los IDs de su sección/capítulo/título, para colocar los artículos nuevos
+      .loadAllRelationIds({ relations: ['capitulo', 'seccion', 'tituloRef'] })
       .getMany();
   }
 

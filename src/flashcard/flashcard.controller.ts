@@ -26,8 +26,25 @@ export class FlashcardController {
     @Query('tipo') tipo?: string,
     @Query('estado') estado?: string,
     @Query('pagina') pagina?: string,
+    @Query('temaId') temaId?: string,
   ) {
-    return this.service.listarAdmin({ oposicionId, q, tipo, estado, pagina: Number(pagina) || 1 });
+    return this.service.listarAdmin({ oposicionId, temaId, q, tipo, estado, pagina: Number(pagina) || 1 });
+  }
+
+  /** Temas de una oposición que tienen flashcards oficiales, con cuántas tiene cada uno. */
+  @Get('admin/temas')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  temasAdmin(@Query('oposicionId') oposicionId: string) {
+    return this.service.temasConFlashcards(oposicionId);
+  }
+
+  /** Borrar de golpe las flashcards oficiales de una oposición (o solo de uno de sus temas). */
+  @Delete('admin/masivo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  borrarMasivo(@Query('oposicionId') oposicionId: string, @Query('temaId') temaId?: string) {
+    return this.service.borrarMasivo(oposicionId, temaId);
   }
 
   @Patch('admin/:id')
@@ -78,14 +95,28 @@ export class FlashcardController {
   return this.service.getEstadisticasFCPorPeriodo(req.user.id, oposicionId);
 }
 
+  // ⭐ Solo repasos que tocan hoy (opcionalmente de un tema). Las nuevas van por tema.
   @Get('pendientes/:oposicionId')
 getPendientes(
   @Param('oposicionId') oposicionId: string,
   @Query('limite') limite: string,
+  @Query('temaId') temaId: string,
   @Request() req: any
 ) {
-  return this.service.getPendientesRepaso(req.user.id, oposicionId, limite ? Number(limite) : 10);
+  return this.service.getPendientesRepaso(req.user.id, oposicionId, limite ? Number(limite) : 10, temaId || undefined);
 }
+
+  /** Resumen por tema de la convocatoria: total, vistas, dominadas, por repasar; y nuevas de hoy. */
+  @Get('resumen-temas/:convocatoriaId')
+  resumenTemas(@Param('convocatoriaId') convocatoriaId: string, @Request() req: any) {
+    return this.service.resumenTemas(req.user.id, convocatoriaId);
+  }
+
+  /** Las N primeras tarjetas sin ver de un tema. */
+  @Get('tema/:temaId/nuevas')
+  nuevasDeTema(@Param('temaId') temaId: string, @Query('limite') limite: string, @Request() req: any) {
+    return this.service.nuevasDeTema(req.user.id, temaId, limite ? Number(limite) : 10);
+  }
 
   @Post('respuesta')
   registrarRespuesta(
