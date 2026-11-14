@@ -1,3 +1,4 @@
+import { DIAS_PRUEBA, estadoAcceso } from '../common/helpers/acceso.helper';
 import { invalidarCacheUsuario } from '../auth/jwt.strategy';
 import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
 import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
@@ -349,8 +350,8 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
       email: emailNormalizado,
       nick: nickNormalizado,
       password: hash,
-
-
+      // ⭐ Prueba gratuita de 5 días con acceso completo, sin tarjeta
+      pruebaHasta: new Date(Date.now() + DIAS_PRUEBA * 24 * 60 * 60 * 1000),
     });
 
     return this.repo.save(usuario);
@@ -442,13 +443,18 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
   async eliminarCuenta(usuarioId: string, password: string): Promise<{ ok: true }> {
     const u = await this.repo.findOne({
       where: { id: usuarioId },
-      select: { id: true, rol: true, password: true, activo: true },
+      select: { id: true, rol: true, password: true, activo: true, renovacionAutomatica: true, stripeSubscriptionId: true },
     });
     if (!u) throw new NotFoundException('Usuario no encontrado');
     if (u.rol === 'admin') throw new BadRequestException('Una cuenta de administrador no se puede borrar desde la app');
     const valida = typeof password === 'string' && password.length > 0 && (await bcrypt.compare(password, u.password));
     // 400 y no 401: un 401 hace que la app cierre la sesión.
     if (!valida) throw new BadRequestException('La contraseña no es correcta');
+    // ⭐ Con la renovación automática activa, Stripe seguiría cobrando a una cuenta que ya no existe.
+    // Primero hay que cancelarla (Suscripciones → Gestionar); después se puede borrar la cuenta.
+    if (u.renovacionAutomatica && u.stripeSubscriptionId) {
+      throw new BadRequestException('Tienes la renovación automática activa. Cancélala en Suscripciones antes de borrar la cuenta.');
+    }
 
     const PERSONALES = new Set([
       'notas_articulo', 'subrayados_articulo', 'subrayados_apunte', 'apuntes_usuario', 'progreso_lectura',
@@ -469,6 +475,12 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
         if (!PERSONALES.has(tabla)) continue;
         await m.query(`DELETE FROM "${tabla}" WHERE "${columna}" = $1`, [usuarioId]);
       }
+
+      // ⭐ Auditoría A9: la cuenta borrada seguía inscrita en sus oposiciones y en la Liga (aparecía
+      // en las divisiones y se le seguían creando avisos). Sus resultados ya jugados se conservan,
+      // anónimos, para no descuadrar las clasificaciones de los demás.
+      await m.query(`UPDATE usuario_oposiciones SET activa = false WHERE usuario_id = $1`, [usuarioId]);
+      await m.query(`DELETE FROM miembros_liga WHERE "usuarioId" = $1`, [usuarioId]);
 
       await m.update(Usuario, usuarioId, {
         email: `eliminado-${usuarioId}@oplora.invalid`,
@@ -492,14 +504,24 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
     });
     invalidarCacheUsuario(usuarioId);
 
-    // Fotos de perfil (fuera de la transacción: si Supabase falla, la cuenta ya está borrada).
-    try {
-      const carpeta = `usuarios/${usuarioId}`;
-      const { data } = await this.supabase.storage.from('avatares').list(carpeta, { limit: 1000 });
-      const rutas = (data ?? []).map((f) => `${carpeta}/${f.name}`);
-      if (rutas.length) await this.supabase.storage.from('avatares').remove(rutas);
-    } catch (e: any) {
-      console.error(`No se pudieron borrar las fotos de la cuenta ${usuarioId}:`, e?.message ?? e);
+    // Archivos del usuario (fuera de la transacción: si Supabase falla, la cuenta ya está borrada).
+    // ⭐ Auditoría A9: además de las fotos de perfil se borran los apuntes que subió (antes sus PDF
+    // se quedaban en el almacenamiento para siempre).
+    for (const bucket of ['avatares', 'apuntes-usuario']) {
+      try {
+        const carpeta = `usuarios/${usuarioId}`;
+        for (let vuelta = 0; vuelta < 50; vuelta++) {
+          const { data, error } = await this.supabase.storage.from(bucket).list(carpeta, { limit: 1000 });
+          if (error) throw error;
+          const rutas = (data ?? []).map((f) => `${carpeta}/${f.name}`);
+          if (!rutas.length) break;
+          const borrado = await this.supabase.storage.from(bucket).remove(rutas);
+          if (borrado.error) throw borrado.error;
+          if (rutas.length < 1000) break;
+        }
+      } catch (e: any) {
+        console.error(`No se pudieron borrar los archivos (${bucket}) de la cuenta ${usuarioId}:`, e?.message ?? e);
+      }
     }
 
     return { ok: true };
@@ -579,6 +601,7 @@ async findMe(id: string) {
   return {
     ...usuarioSeguro,
     rachaActual: rachaVigente(usuario), // ⭐ 0 si ya no estudió ni hoy ni ayer
+    acceso: estadoAcceso(usuario), // ⭐ prueba, pago o solo el Tema 1
     oposicionActiva: activa
       ? {
           ...activa.oposicion,

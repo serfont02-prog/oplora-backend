@@ -134,6 +134,25 @@ export class Usuario {
   })
   suscripcion: SuscripcionUsuario;
 
+  // ─── Acceso (planes de nov 2026). Ver common/helpers/acceso.helper.ts
+  /** Fin de la prueba gratuita (se fija al registrarse: 5 días, sin tarjeta). */
+  @Column({ type: 'timestamptz', nullable: true })
+  pruebaHasta: Date | null;
+
+  /** Hasta cuándo tiene pagado el acceso completo (pagos únicos o suscripción mensual). */
+  @Column({ type: 'timestamptz', nullable: true })
+  accesoHasta: Date | null;
+
+  /** Tiene la suscripción mensual con renovación automática activa. */
+  @Column({ default: false })
+  renovacionAutomatica: boolean;
+
+  @Column({ type: 'varchar', nullable: true })
+  stripeCustomerId: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  stripeSubscriptionId: string | null;
+
 
   @Column({ type: 'varchar', nullable: true })
   objetivo: string;

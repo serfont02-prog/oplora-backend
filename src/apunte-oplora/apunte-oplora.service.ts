@@ -1,3 +1,4 @@
+import { accesoDeUsuario, errorSuscripcion, TEMA_GRATIS } from '../common/helpers/acceso.helper';
 import { Injectable, NotFoundException, BadRequestException, forwardRef  } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -215,6 +216,18 @@ if (tipo === 'pdf') {
   if (!apunte) throw new NotFoundException('Apunte no encontrado');
   return apunte;
 }
+
+  /**
+   * ⭐ Sin acceso completo solo se puede abrir el apunte del Tema 1 (los generales de la
+   * oposición y los de otros temas quedan para OPLORA). La lista de apuntes sí se ve.
+   */
+  async exigirAccesoApunte(usuarioId: string, apunte: ApunteOplora): Promise<void> {
+    const acceso = await accesoDeUsuario(this.repo.manager, usuarioId);
+    if (acceso.completo) return;
+    const numero = (apunte as any).tema?.numero;
+    if (numero === TEMA_GRATIS) return;
+    throw errorSuscripcion(numero ? 'tema_bloqueado' : 'requiere_suscripcion');
+  }
 
   async findByOposicion(oposicionId: string): Promise<ApunteOplora[]> {
   return this.repo.find({

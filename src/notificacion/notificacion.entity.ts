@@ -16,6 +16,7 @@ export enum TipoNotificacion {
   NUEVA_NOTICIA = 'nueva_noticia',
   RESPUESTA_SOPORTE = 'respuesta_soporte',
   LIGA = 'liga', // ⭐ Liga Oplora: avisos de jornada, ascensos y copas
+  SUSCRIPCION = 'suscripcion', // ⭐ Avisos de fin de prueba o de pago (llegan siempre)
 }
 
 export enum PrioridadNotificacion {

@@ -50,6 +50,9 @@ export class NoticiaService {
       .leftJoinAndSelect('n.oposicion', 'oposicion')
       .leftJoinAndSelect('n.ley', 'ley')
       .leftJoinAndSelect('n.versionLey', 'versionLey')
+      // ⭐ Fecha del documento de origen (sin su texto completo), para saber de cuándo es la noticia
+      .leftJoin('n.documentoConvocatoria', 'doc')
+      .addSelect(['doc.id', 'doc.fechaPublicacion', 'doc.fechaPublicacionTexto'])
       .orderBy('n.destacada', 'DESC')
       .addOrderBy('n.creadoEn', 'DESC');
 
@@ -69,14 +72,18 @@ export class NoticiaService {
   }
 
   async findPendientesRevision(): Promise<Noticia[]> {
-    return this.noticiaRepo.find({
-      where: {
-        publicada: false,
-        origen: In([OrigenNoticia.SCRAPER_BOE, OrigenNoticia.CAMBIO_NORMATIVA]),
-      },
-      relations: ['convocatoria', 'oposicion', 'ley', 'versionLey'],
-      order: { creadoEn: 'DESC' },
-    });
+    return this.noticiaRepo
+      .createQueryBuilder('n')
+      .leftJoinAndSelect('n.convocatoria', 'convocatoria')
+      .leftJoinAndSelect('n.oposicion', 'oposicion')
+      .leftJoinAndSelect('n.ley', 'ley')
+      .leftJoinAndSelect('n.versionLey', 'versionLey')
+      .leftJoin('n.documentoConvocatoria', 'doc')
+      .addSelect(['doc.id', 'doc.fechaPublicacion', 'doc.fechaPublicacionTexto'])
+      .where('n.publicada = false')
+      .andWhere('n.origen IN (:...origenes)', { origenes: [OrigenNoticia.SCRAPER_BOE, OrigenNoticia.CAMBIO_NORMATIVA] })
+      .orderBy('n.creadoEn', 'DESC')
+      .getMany();
   }
 
   async findOne(id: string): Promise<Noticia> {

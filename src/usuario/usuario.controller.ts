@@ -1,3 +1,5 @@
+import { estadoAcceso } from '../common/helpers/acceso.helper';
+import { MAX_PREGUNTAS_POR_TEST } from '../config/plan-limits';
 import { UsuarioService } from './usuario.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -53,21 +55,22 @@ async getLimites(@Request() req: any) {
   await this.service.guardarConsumo(usuarioActualizado);
 }
 
-  const limitesPlanes = await this.configuracionService.getLimitesPlanes();
-  const limits = limitesPlanes[usuarioActualizado.suscripcion ?? 'gratuito'];
-
+  // ⭐ Planes de nov 2026: sin cupos diarios. Lo que cambia es el acceso (completo o solo el
+  // Tema 1). Se mantiene la forma de la respuesta para las pantallas que ya la leen.
+  const acceso = estadoAcceso(usuarioActualizado);
   return {
     suscripcion: usuarioActualizado.suscripcion,
+    acceso,
     consumo: {
       preguntasTestHoy: usuarioActualizado.preguntasTestHoy,
       flashcardsHoy: usuarioActualizado.flashcardsHoy,
     },
     limites: {
-      preguntasPorTest: limits.preguntasPorTest,
-      preguntasPorTema: limits.preguntasPorTema,
-      preguntasTestDia: limits.preguntasTestDia,
-      flashcardsDia: limits.flashcardsDia,
-      simulacros: limits.simulacros,
+      preguntasPorTest: MAX_PREGUNTAS_POR_TEST,
+      preguntasPorTema: MAX_PREGUNTAS_POR_TEST,
+      preguntasTestDia: null,
+      flashcardsDia: null,
+      simulacros: acceso.completo,
     },
   };
 }

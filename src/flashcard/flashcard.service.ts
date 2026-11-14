@@ -1,8 +1,10 @@
+import { accesoDeUsuario, errorSuscripcion, estaInscrito, exigirTemaPermitido, temaGratisDe, datosTema } from '../common/helpers/acceso.helper';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
 import { InicioDueloService } from '../duelo/inicio-duelo.service';
+import { partesMadrid, diaSemanaDe } from '../liga/liga-fechas.util';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Brackets, In } from 'typeorm';
+import { Repository, Brackets, In, EntityManager } from 'typeorm';
 import { Flashcard, TipoFlashcard, NivelFlashcard, EstadoFlashcard } from './flashcard.entity';
 import { RepasoFC, EstadoFC } from './repaso-fc.entity';
 import { RetoFC, TipoRetoFC, EstadoRetoFC } from './reto-fc.entity';
@@ -32,6 +34,9 @@ function sqlVisible(a: string, op: string): string {
 function sqlDeTema(a: string, tema: string): string {
   return `(${a}."temaId" = ${tema} OR (${a}."temaId" IS NULL AND ${a}."articuloId" IS NOT NULL AND EXISTS (SELECT 1 FROM temas_normativa tn WHERE tn."temaId" = ${tema} AND tn."articuloId" = ${a}."articuloId")))`;
 }
+
+const esUuid = (v: unknown): v is string =>
+  typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 
 @Injectable()
 export class FlashcardService {
@@ -372,21 +377,43 @@ export class FlashcardService {
   }
 
   /** Flashcards de un artículo, solo de la oposición indicada (sin oposición no devuelve nada). */
-  async findByArticulo(articuloId: string, oposicionId?: string): Promise<Flashcard[]> {
+  async findByArticulo(articuloId: string, oposicionId?: string, usuarioId?: string): Promise<Flashcard[]> {
     if (!oposicionId || !FlashcardService.UUID.test(oposicionId) || !FlashcardService.UUID.test(articuloId)) return [];
-    return this.fcRepo
+    const qb = this.fcRepo
       .createQueryBuilder('fc')
       .leftJoinAndSelect('fc.articulo', 'art')
       .leftJoinAndSelect('fc.tema', 'tema')
       .where('fc."articuloId" = :articuloId', { articuloId })
-      .andWhere(sqlVisible('fc', ':opoId'), { opoId: oposicionId })
-      .orderBy('fc."creadoEn"', 'ASC')
-      .getMany();
+      .andWhere(sqlVisible('fc', ':opoId'), { opoId: oposicionId });
+    if (usuarioId) {
+      // ⭐ Solo de una oposición en la que está inscrito y, sin acceso completo, solo del Tema 1
+      if (!(await estaInscrito(this.fcRepo.manager, usuarioId, oposicionId))) return [];
+      if (!(await accesoDeUsuario(this.fcRepo.manager, usuarioId)).completo) {
+        const temaGratis = await temaGratisDe(this.fcRepo.manager, usuarioId, oposicionId);
+        if (!temaGratis) return [];
+        qb.andWhere('fc."temaId" = :temaGratis', { temaGratis });
+      }
+    }
+    return qb.orderBy('fc."creadoEn"', 'ASC').getMany();
+  }
+
+  /**
+   * ⭐ Comprueba que el usuario puede ver ese tema: inscrito en su oposición y, sin acceso
+   * completo, solo el Tema 1. (Antes cualquier cuenta descargaba las tarjetas con sus
+   * respuestas de cualquier tema u oposición — auditoría C1.)
+   */
+  async exigirTemaDelUsuario(usuarioId: string, temaId: string): Promise<void> {
+    if ((await accesoDeUsuario(this.fcRepo.manager, usuarioId)).motivo === 'admin') return;
+    const t = await datosTema(this.fcRepo.manager, temaId);
+    if (!t) throw new NotFoundException('Tema no encontrado');
+    if (!(await estaInscrito(this.fcRepo.manager, usuarioId, t.oposicionId))) throw new ForbiddenException('No estás inscrito en esta oposición');
+    await exigirTemaPermitido(this.fcRepo.manager, usuarioId, temaId);
   }
 
   /** Todas las flashcards visibles de un tema (de la oposición de ese tema), en orden de subida. */
-  async findByTema(temaId: string): Promise<Flashcard[]> {
+  async findByTema(temaId: string, usuarioId?: string): Promise<Flashcard[]> {
     if (!FlashcardService.UUID.test(temaId)) return [];
+    if (usuarioId) await this.exigirTemaDelUsuario(usuarioId, temaId);
     const filas: { id: string }[] = await this.fcRepo.query(
       `SELECT f.id FROM flashcards f
          JOIN temas t ON t.id = $1
@@ -496,6 +523,12 @@ export class FlashcardService {
   const ahora = new Date();
   const tope = Math.max(1, Math.min(200, Math.trunc(limite) || 10));
   if (!FlashcardService.UUID.test(oposicionId)) return [];
+  // ⭐ Sin acceso completo, solo los repasos del Tema 1
+  if (!(await accesoDeUsuario(this.repasoRepo.manager, usuarioId)).completo) {
+    const temaGratis = await temaGratisDe(this.repasoRepo.manager, usuarioId, oposicionId);
+    if (!temaGratis || (temaId && temaId !== temaGratis)) return [];
+    temaId = temaGratis;
+  }
   const qb = this.repasoRepo
     .createQueryBuilder('r')
     .innerJoinAndSelect('r.flashcard', 'fc')
@@ -559,6 +592,7 @@ export class FlashcardService {
   /** Las primeras N tarjetas sin ver de un tema, en el orden en que se subieron (el del temario). */
   async nuevasDeTema(usuarioId: string, temaId: string, limite = 10): Promise<Flashcard[]> {
     if (!FlashcardService.UUID.test(temaId)) throw new BadRequestException('Tema no válido');
+    await this.exigirTemaDelUsuario(usuarioId, temaId);
     const tope = Math.max(1, Math.min(200, Math.trunc(limite) || 10));
     const filas: { id: string }[] = await this.fcRepo.query(
       `SELECT f.id
@@ -574,11 +608,19 @@ export class FlashcardService {
     return this.cargarEnOrden(filas.map((f) => f.id));
   }
 
+// ⭐ Auditoría A2/A3/A4/M5. Registrar una respuesta ahora es una sola transacción:
+//  - bloqueo por (usuario, tarjeta): dos respuestas a la vez ya no crean dos repasos;
+//  - el próximo repaso toca a las 00:00 de España del día que corresponde (antes, 12:00 UTC:
+//    no aparecía hasta las 13:00/14:00, y una tarjeta respondida de madrugada tocaba ese mismo día);
+//  - si se responde bien una tarjeta que todavía NO tocaba, cuenta como práctica: no adelanta el
+//    calendario ni la deja «dominada» (antes, tres pasadas seguidas la mandaban a 15 días);
+//  - los duelos pasan su propio `manager` para que todo se guarde o se deshaga junto.
 async registrarRespuesta(
   usuarioId: string,
   flashcardId: string,
   calificacion: number,
   tiempoMs: number,
+  managerExterno?: EntityManager,
 ): Promise<RepasoFC> {
   // ⭐ calificacion debe estar en el rango 0-5 que usa el algoritmo SM2; sin esta validación
   // un valor fuera de rango (p.ej. negativo o 100) desestabilizaba el cálculo de factorFacilidad
@@ -591,96 +633,108 @@ async registrarRespuesta(
   ) {
     throw new BadRequestException('"calificacion" debe ser un número entre 0 y 5');
   }
+  if (!esUuid(flashcardId)) throw new BadRequestException('Flashcard no válida');
+  // Un tiempo vacío o absurdo no debe romper el guardado (antes daba un error 500)
+  const tiempo = Math.min(Math.max(0, Math.round(Number(tiempoMs) || 0)), 3_600_000);
 
-  // ⭐ Límite diario de flashcards del plan (antes solo se mostraba, no se aplicaba).
+  // Contadores del día (ya no hay límite diario)
   await this.comprobarLimiteFlashcards(usuarioId);
 
-  let repaso = await this.repasoRepo.findOne({
-    where: { usuario: { id: usuarioId }, flashcard: { id: flashcardId } },
-  });
+  const trabajo = async (manager: EntityManager): Promise<RepasoFC> => {
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`repasofc:${usuarioId}:${flashcardId}`]);
 
-  const ahora = new Date();
-  const estadoAnterior = repaso?.estado; // ⭐ guardar estado anterior
+    const existe = await manager.query('SELECT 1 FROM flashcards WHERE id = $1', [flashcardId]);
+    if (!existe.length) throw new NotFoundException('Flashcard no encontrada');
 
-  if (!repaso) {
-    repaso = this.repasoRepo.create({
-      usuario: { id: usuarioId } as any,
-      flashcard: { id: flashcardId } as any,
-      aciertos: 0,
-      fallos: 0,
-      fallosConsecutivos: 0,
-      tiempoMedioRespuesta: tiempoMs,
-      factorFacilidad: 2.5,
-      intervalo: 0,
-      repeticiones: 0,
-      primeraVez: ahora,
+    let repaso = await manager.findOne(RepasoFC, {
+      where: { usuario: { id: usuarioId }, flashcard: { id: flashcardId } },
+      order: { actualizadoEn: 'DESC' },
     });
-  }
 
-  const correcta = calificacion >= 3;
-  if (correcta) {
-    repaso.aciertos++;
-    repaso.fallosConsecutivos = 0;
-  } else {
-    repaso.fallos++;
-    repaso.fallosConsecutivos++;
-  }
+    const ahora = new Date();
+    const estadoAnterior = repaso?.estado; // ⭐ guardar estado anterior
 
-  repaso.tiempoMedioRespuesta = Math.round(
-    (repaso.tiempoMedioRespuesta + tiempoMs) / 2
-  );
-
-  const { nuevoIntervalo, nuevasRepeticiones, nuevoEF } = this.calcularSM2(
-    calificacion,
-    repaso.repeticiones,
-    repaso.intervalo,
-    repaso.factorFacilidad,
-  );
-
-  repaso.intervalo = nuevoIntervalo;
-  repaso.repeticiones = nuevasRepeticiones;
-  repaso.factorFacilidad = nuevoEF;
-
-  if (nuevoEF >= 2.3 && nuevasRepeticiones >= 2) {
-    repaso.estado = EstadoFC.DOMINADA;
-  } else if (nuevoEF >= 1.8 && nuevasRepeticiones >= 1) {
-    repaso.estado = EstadoFC.DUDOSA;
-  } else {
-    repaso.estado = EstadoFC.NO_DOMINADA;
-  }
-
-  repaso.ultimaVista = ahora;
-  // ⭐ Antes proximoRepaso se calculaba sumando milisegundos directamente a "ahora", así que una
-  // tarjeta repasada a las 23:58 quedaba "pendiente" casi de inmediato en vez de al día siguiente.
-  // Se normaliza al mediodía del día objetivo para que el intervalo en días sea consistente
-  // independientemente de la hora en la que se responda.
-  const proximoRepaso = new Date(ahora);
-  proximoRepaso.setDate(proximoRepaso.getDate() + nuevoIntervalo);
-  proximoRepaso.setHours(12, 0, 0, 0);
-  repaso.proximoRepaso = proximoRepaso;
-
-  const repasoGuardado = await this.repasoRepo.save(repaso);
-  await this.usuarioRepo.increment({ id: usuarioId }, 'flashcardsHoy', 1);
-  await registrarDiaDeEstudio(this.usuarioRepo.manager, usuarioId); // ⭐ cuenta para la racha
-
-  if (
-    repasoGuardado.estado === EstadoFC.DOMINADA &&
-    estadoAnterior !== EstadoFC.DOMINADA
-  ) {
-    // Marca atómica: solo la primera vez que se domina esta tarjeta da puntos
-    const marcado = await this.repasoRepo
-      .createQueryBuilder()
-      .update(RepasoFC)
-      .set({ puntosDados: true })
-      .where('id = :id AND "puntosDados" = false', { id: repasoGuardado.id })
-      .execute();
-    if (marcado.affected) {
-      repasoGuardado.puntosDados = true;
-      await this.darPuntosPorDominar(usuarioId, flashcardId);
+    if (!repaso) {
+      repaso = manager.create(RepasoFC, {
+        usuario: { id: usuarioId } as any,
+        flashcard: { id: flashcardId } as any,
+        aciertos: 0,
+        fallos: 0,
+        fallosConsecutivos: 0,
+        tiempoMedioRespuesta: tiempo,
+        factorFacilidad: 2.5,
+        intervalo: 0,
+        repeticiones: 0,
+        primeraVez: ahora,
+      });
     }
-  }
 
-  return repasoGuardado;
+    const correcta = calificacion >= 3;
+    // Ya la había respondido y su próximo repaso aún no ha llegado
+    const adelantada =
+      !!repaso.ultimaVista && !!repaso.proximoRepaso && new Date(repaso.proximoRepaso).getTime() > ahora.getTime();
+
+    if (correcta) {
+      repaso.aciertos++;
+      repaso.fallosConsecutivos = 0;
+    } else {
+      repaso.fallos++;
+      repaso.fallosConsecutivos++;
+    }
+
+    repaso.tiempoMedioRespuesta = Math.round(((Number(repaso.tiempoMedioRespuesta) || 0) + tiempo) / 2);
+    repaso.ultimaVista = ahora;
+    if (!repaso.primeraVez && !estadoAnterior) repaso.primeraVez = ahora;
+
+    if (!(adelantada && correcta)) {
+      const { nuevoIntervalo, nuevasRepeticiones, nuevoEF } = this.calcularSM2(
+        calificacion,
+        repaso.repeticiones,
+        repaso.intervalo,
+        repaso.factorFacilidad,
+      );
+
+      repaso.intervalo = nuevoIntervalo;
+      repaso.repeticiones = nuevasRepeticiones;
+      repaso.factorFacilidad = nuevoEF;
+
+      if (nuevoEF >= 2.3 && nuevasRepeticiones >= 2) {
+        repaso.estado = EstadoFC.DOMINADA;
+      } else if (nuevoEF >= 1.8 && nuevasRepeticiones >= 1) {
+        repaso.estado = EstadoFC.DUDOSA;
+      } else {
+        repaso.estado = EstadoFC.NO_DOMINADA;
+      }
+
+      // 00:00 (hora de España) del día que toca
+      repaso.proximoRepaso = inicioDiaMadridDesplazado(nuevoIntervalo, ahora);
+    }
+
+    const repasoGuardado = await manager.save(RepasoFC, repaso);
+    await manager.increment(Usuario, { id: usuarioId }, 'flashcardsHoy', 1);
+    await registrarDiaDeEstudio(manager, usuarioId); // ⭐ cuenta para la racha
+
+    if (
+      repasoGuardado.estado === EstadoFC.DOMINADA &&
+      estadoAnterior !== EstadoFC.DOMINADA
+    ) {
+      // Marca atómica: solo la primera vez que se domina esta tarjeta da puntos
+      const marcado = await manager
+        .createQueryBuilder()
+        .update(RepasoFC)
+        .set({ puntosDados: true })
+        .where('id = :id AND "puntosDados" = false', { id: repasoGuardado.id })
+        .execute();
+      if (marcado.affected) {
+        repasoGuardado.puntosDados = true;
+        await this.darPuntosPorDominar(usuarioId, flashcardId, manager);
+      }
+    }
+
+    return repasoGuardado;
+  };
+
+  return managerExterno ? trabajo(managerExterno) : this.repasoRepo.manager.transaction(trabajo);
 }
 
 private async comprobarLimiteFlashcards(usuarioId: string): Promise<void> {
@@ -696,17 +750,12 @@ private async comprobarLimiteFlashcards(usuarioId: string): Promise<void> {
       fechaResetConsumo: usuario.fechaResetConsumo,
     });
   }
-  const limites = await this.configuracionService.getLimitesPlanes();
-  const limite = limites?.[usuario.suscripcion ?? 'gratuito']?.flashcardsDia;
-  if (typeof limite === 'number' && Number.isFinite(limite) && (usuario.flashcardsHoy ?? 0) >= limite) {
-    throw new ForbiddenException(
-      `Has llegado al límite de ${limite} flashcards al día de tu plan. Vuelve mañana o mejora tu plan para seguir repasando.`,
-    );
-  }
+  // ⭐ Planes de nov 2026: ya no hay límite diario de flashcards (y así los duelos de
+  // flashcards ya no se quedan sin poder terminar al llegar al tope, auditoría A2).
 }
 
-private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promise<void> {
-  const flashcard = await this.flashcardRepo.findOne({
+private async darPuntosPorDominar(usuarioId: string, flashcardId: string, manager: EntityManager): Promise<void> {
+  const flashcard = await manager.findOne(Flashcard, {
     where: { id: flashcardId },
     relations: ['oposicion', 'tema', 'tema.convocatoria', 'tema.convocatoria.oposicion'],
   });
@@ -716,21 +765,20 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
     ?? (flashcard.tema as any)?.convocatoria?.oposicion?.id;
   if (!oposicionId) return;
 
-  const usuarioOposicion = await this.usuarioOposicionRepo.findOne({
-    where: { usuario: { id: usuarioId } as any, oposicion: { id: oposicionId } as any },
-  });
-  if (!usuarioOposicion) return;
-
   const puntosAcciones = await this.configuracionService.getPuntosAcciones();
   const puntosPorDominar = puntosAcciones.flashcardDominada ?? 5;
 
-  const nuevosPuntos = usuarioOposicion.puntos + puntosPorDominar;
-  const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(nuevosPuntos);
-
-  await this.usuarioOposicionRepo.update(usuarioOposicion.id, {
-    puntos: nuevosPuntos,
-    nivel: nuevoNivel,
-  });
+  // ⭐ Suma en la base de datos (antes se leía, se sumaba en memoria y se guardaba: dos tarjetas
+  // dominadas a la vez podían perder puntos).
+  const filas: { id: string; puntos: number }[] = await manager.query(
+    `UPDATE usuario_oposiciones SET puntos = COALESCE(puntos, 0) + $1
+      WHERE usuario_id = $2 AND oposicion_id = $3 RETURNING id, puntos`,
+    [puntosPorDominar, usuarioId, oposicionId],
+  ).then((r: any) => (Array.isArray(r?.[0]) ? r[0] : r));
+  const fila = filas?.[0];
+  if (!fila) return;
+  const nuevoNivel = await this.configuracionService.calcularNivelPorPuntos(Number(fila.puntos));
+  await manager.update(UsuarioOposicion, fila.id, { nivel: nuevoNivel });
 }
 
   private calcularSM2(
@@ -795,22 +843,20 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
     const flashcards = await this.findByArticulo(articuloId, oposicionId);
     if (flashcards.length === 0) return;
 
+    // ⭐ Fechas en hora de España (antes, en la del servidor): «mañana» y «el sábado» empiezan a
+    // las 00:00 de aquí. Cualquier otro valor tiene que ser una fecha válida (antes daba error 500).
     let fecha: Date;
     const ahora = new Date();
 
     if (cuando === 'manana') {
-      fecha = new Date(ahora);
-      fecha.setDate(fecha.getDate() + 1);
-      fecha.setHours(9, 0, 0, 0);
+      fecha = inicioDiaMadridDesplazado(1, ahora);
     } else if (cuando === 'finde') {
-      fecha = new Date(ahora);
-      // ⭐ 'finde' (fin de semana) debe apuntar al sábado (índice 6), no al viernes (índice 5)
-      // como hacía el cálculo anterior.
-      const diasHastaSabado = (6 - fecha.getDay() + 7) % 7 || 7;
-      fecha.setDate(fecha.getDate() + diasHastaSabado);
-      fecha.setHours(10, 0, 0, 0);
+      const p = partesMadrid(ahora);
+      const diasHastaSabado = (6 - diaSemanaDe(p) + 7) % 7 || 7;
+      fecha = inicioDiaMadridDesplazado(diasHastaSabado, ahora);
     } else {
-      fecha = cuando;
+      fecha = new Date(cuando as any);
+      if (Number.isNaN(fecha.getTime())) throw new BadRequestException('Fecha de repaso no válida');
     }
 
     for (const fc of flashcards) {
@@ -833,7 +879,7 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
     await this.notificacionService.crear({
       usuarioId,
       tipo: TipoNotificacion.RETO_DIARIO,
-      titulo: '📚 Repaso programado',
+      titulo: 'Repaso programado',
       mensaje: `Tienes ${flashcards.length} flashcards programadas para repasar`,
       prioridad: PrioridadNotificacion.BAJA,
       urlAccion: '/app/flashcards',
@@ -874,6 +920,14 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string): Promi
     // y comprobar que ambos usuarios están vinculados a la oposición en la misma convocatoria.
     const retador = await this.usuarioRepo.findOne({ where: { id: retadorId } });
     if (!retador) throw new NotFoundException('Retador no encontrado');
+
+    // ⭐ Sin acceso completo, los duelos que crea son del Tema 1
+    if (!(await accesoDeUsuario(this.usuarioRepo.manager, retadorId)).completo) {
+      if (versionLeyId) throw errorSuscripcion();
+      const temaGratis = await temaGratisDe(this.usuarioRepo.manager, retadorId, oposicionId);
+      if (!temaGratis || (temaId && temaId !== temaGratis)) throw errorSuscripcion('tema_bloqueado');
+      temaId = temaGratis;
+    }
 
     const busqueda = retadoNickOEmail.toLowerCase().trim();
     let retado = await this.usuarioRepo.findOne({ where: { nick: busqueda } });
@@ -1047,7 +1101,9 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
   ): Promise<ResultadoRetoFC> {
     const reto = await this.retoFcRepo.findOne({
       where: { id: retoId },
-      relations: ['resultados', 'resultados.usuario', 'flashcards', 'retador', 'retado'],
+      // ⭐ `flashcards` es una columna (jsonb), no una relación: pedirla aquí hacía fallar la consulta
+      // y el duelo no se podía completar.
+      relations: ['resultados', 'resultados.usuario', 'retador', 'retado'],
     });
     if (!reto) throw new NotFoundException('Reto FC no encontrado');
 
@@ -1137,7 +1193,13 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
       if (previo) throw new BadRequestException('Ya completaste este reto');
 
       for (const r of respuestas) {
-        await this.registrarRespuesta(usuarioId, r.flashcardId, r.correcta ? 4 : 1, r.tiempoRespuesta);
+        // ⭐ Con el mismo manager: si algo falla, no queda ningún repaso a medias (auditoría A2)
+        try {
+          await this.registrarRespuesta(usuarioId, r.flashcardId, r.correcta ? 4 : 1, r.tiempoRespuesta, manager);
+        } catch (e) {
+          // Una tarjeta del duelo que el admin ha borrado después no impide terminarlo
+          if (!(e instanceof NotFoundException)) throw e;
+        }
       }
 
       return manager.save(

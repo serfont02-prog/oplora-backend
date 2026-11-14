@@ -6,7 +6,7 @@ import { json } from 'express';
 import { SanitizarRespuestaInterceptor } from './common/interceptors/sanitizar-respuesta.interceptor';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
 
   // ⭐ Railway pone un proxy delante: sin esto todas las peticiones parecían venir de la misma IP
   // (la del proxy) y el límite de intentos de login/registro se compartía entre todos los usuarios.
@@ -34,7 +34,9 @@ async function bootstrap() {
   }));
   // ⭐ Quita de todas las respuestas los secretos y los datos privados de otros usuarios.
   app.useGlobalInterceptors(new SanitizarRespuestaInterceptor());
-  app.use(json({ limit: '5mb' })); // ⭐ aumenta el límite de payload JSON
+  // ⭐ Aumenta el límite de payload JSON y guarda el cuerpo tal cual llegó (req.rawBody): el
+  // webhook de Stripe necesita el texto original para comprobar la firma.
+  app.use(json({ limit: '5mb', verify: (req: any, _res: any, buf: Buffer) => { req.rawBody = buf; } }));
 
   app.enableCors({
     origin: [

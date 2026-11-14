@@ -86,19 +86,17 @@ export class FlashcardController {
 }
 
   @Get('articulo/:articuloId')
-  findByArticulo(@Param('articuloId') articuloId: string, @Query('oposicionId') oposicionId: string) {
-    return this.service.findByArticulo(articuloId, oposicionId);
+  findByArticulo(@Param('articuloId') articuloId: string, @Query('oposicionId') oposicionId: string, @Request() req: any) {
+    return this.service.findByArticulo(articuloId, oposicionId, req.user.id);
   }
 
   @Get('tema/:temaId')
-  findByTema(@Param('temaId') temaId: string) {
-    return this.service.findByTema(temaId);
+  findByTema(@Param('temaId') temaId: string, @Request() req: any) {
+    return this.service.findByTema(temaId, req.user.id);
   }
 
-  @Get('oposicion/:oposicionId')
-  findByOposicion(@Param('oposicionId') oposicionId: string) {
-    return this.service.findByOposicion(oposicionId);
-  }
+  // ⭐ Quitado GET /flashcards/oposicion/:id: devolvía el banco entero con respuestas a
+  // cualquier cuenta (auditoría C1) y ninguna pantalla lo usaba.
 
   @Get('stats-periodo/:oposicionId')
   getStatsPeriodo(@Param('oposicionId') oposicionId: string, @Request() req: any) {

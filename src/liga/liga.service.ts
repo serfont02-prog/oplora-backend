@@ -1,3 +1,4 @@
+import { exigirAccesoCompleto } from '../common/helpers/acceso.helper';
 import { registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
 import {
   Injectable,
@@ -192,6 +193,7 @@ export class LigaService {
       `INSERT INTO miembros_liga ("ligaId", "usuarioId")
        SELECT $1, uo.usuario_id
        FROM usuario_oposiciones uo
+       JOIN usuarios u ON u.id = uo.usuario_id AND u.activo = true
        WHERE uo."convocatoriaActivaId" = $2 AND uo.activa = true
        ON CONFLICT ("ligaId", "usuarioId") DO NOTHING`,
       [liga.id, liga.convocatoria.id],
@@ -647,6 +649,14 @@ export class LigaService {
       .where('m."ligaId" = :ligaId', { ligaId: liga.id })
       .andWhere('m.division = :division', { division })
       .andWhere(`m."${campo}" = true`)
+      // ⭐ Solo a cuentas activas que siguen en la convocatoria de esta liga (antes se avisaba también
+      // a quien había cambiado de convocatoria o había borrado la cuenta).
+      .andWhere('u.activo = true')
+      .andWhere(
+        `EXISTS (SELECT 1 FROM usuario_oposiciones uo
+                  WHERE uo.usuario_id = u.id
+                    AND uo."convocatoriaActivaId" = (SELECT l."convocatoriaId" FROM ligas l WHERE l.id = m."ligaId"))`,
+      )
       .getRawMany();
     let ids: string[] = miembros.map((m: any) => m.usuarioId);
     if (soloSinJugarJornadaId && ids.length) {
@@ -794,6 +804,8 @@ export class LigaService {
 
   /** Empieza (o retoma) la jornada: el reloj lo lleva el servidor. */
   async empezar(usuarioId: string, jornadaId: string) {
+    // ⭐ La Liga es de OPLORA (acceso completo); sin suscripción se ve, pero no se juega
+    await exigirAccesoCompleto(this.ligaRepo.manager, usuarioId);
     const { jornada, miembro } = await this.jornadaParaJugar(usuarioId, jornadaId);
     const ahora = new Date();
     if (jornada.estado !== EstadoJornada.ABIERTA || ahora >= new Date(jornada.fechaCierre)) {

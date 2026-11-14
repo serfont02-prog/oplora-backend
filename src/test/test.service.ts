@@ -1,3 +1,5 @@
+import { MAX_PREGUNTAS_POR_TEST } from '../config/plan-limits';
+import { accesoDeUsuario, estadoAcceso, errorSuscripcion, temaGratisDe } from '../common/helpers/acceso.helper';
 import { InjectRepository } from '@nestjs/typeorm';
 import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
 import { Repository, In, Brackets } from 'typeorm';
@@ -401,6 +403,24 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
           motivo: verificacion.motivo,
           limite: verificacion.limite,
         }));
+      }
+    }
+
+    // ⭐ Sin acceso completo (acabada la prueba y sin pagar) solo se sirve el Tema 1 de la
+    // oposición: un test general pasa a ser del Tema 1, y no hay simulacros ni tests por ley.
+    // Se aplica también al crear duelos (sinLimite), que pasan por aquí con el retador.
+    if (usuarioId) {
+      const acceso = await accesoDeUsuario(this.usuarioRepo.manager, usuarioId);
+      if (!acceso.completo) {
+        if (modo === 'simulacro' || versionLeyId || capituloId || tituloId) throw errorSuscripcion();
+        const temaGratis = await temaGratisDe(this.usuarioRepo.manager, usuarioId, oposicionId);
+        if (!temaGratis) throw errorSuscripcion('tema_bloqueado');
+        if (temaId && temaId !== temaGratis) throw errorSuscripcion('tema_bloqueado');
+        if (temasIds?.length) {
+          if (!temasIds.includes(temaGratis)) throw errorSuscripcion('tema_bloqueado');
+          temasIds = [temaGratis];
+        }
+        if (!temaId && !temasIds?.length) temaId = temaGratis;
       }
     }
 
@@ -1646,30 +1666,16 @@ async verificarLimiteTest(
     });
   }
 
-  // ⭐ Leer límites desde configuración dinámica
-  const limitesPlanes = await this.configuracionService.getLimitesPlanes();
-  const limits = limitesPlanes[usuario.suscripcion ?? 'gratuito'];
-
-  if (tipoTest === 'simulacro') {
-    // ⭐ El simulacro lo controla el interruptor del plan, no el tope por test ni el diario
-    // (antes un simulacro de 100 preguntas quedaba bloqueado incluso en el plan Esencial).
-    return limits.simulacros ? { permitido: true } : { permitido: false, motivo: 'simulacro_bloqueado', limite: 0 };
+  // ⭐ Planes de nov 2026: ya no hay cupos diarios ni topes por plan. Simulacros y repaso
+  // inteligente son de OPLORA (acceso completo); el resto, con el tamaño máximo común.
+  // El Tema 1 gratis se aplica en generarTest.
+  const acceso = estadoAcceso(usuario);
+  if (tipoTest === 'simulacro' || tipoTest === 'repaso') {
+    return acceso.completo ? { permitido: true } : { permitido: false, motivo: 'requiere_suscripcion', limite: 0 };
   }
-
-  const limitePorTest = tipoTest === 'tema'
-    ? limits.preguntasPorTema
-    : limits.preguntasPorTest;
-
-  if (numPreguntas > limitePorTest) {
-    return { permitido: false, motivo: 'limite_por_test', limite: limitePorTest };
+  if (numPreguntas > MAX_PREGUNTAS_POR_TEST) {
+    return { permitido: false, motivo: 'limite_por_test', limite: MAX_PREGUNTAS_POR_TEST };
   }
-
-  const limiteDiario = limits.preguntasTestDia;
-  if (limiteDiario !== null && usuario.preguntasTestHoy + numPreguntas > limiteDiario) {
-    const restantes = limiteDiario - usuario.preguntasTestHoy;
-    return { permitido: false, motivo: 'limite_diario', limite: Math.max(0, restantes) };
-  }
-
   return { permitido: true };
 }
 }

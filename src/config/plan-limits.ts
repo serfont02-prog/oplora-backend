@@ -1,5 +1,11 @@
 import { SuscripcionUsuario } from '../usuario/usuario.entity';
 
+// ⭐ Planes de nov 2026: ya no hay cupos diarios (ver common/helpers/acceso.helper.ts).
+// Solo queda el tamaño máximo de un test, que es igual para todos.
+export const MAX_PREGUNTAS_POR_TEST = 100;
+
+// (Antiguo, ya no se usa para limitar)
+
 export const SUSCRIPCION_LIMITS = {
   [SuscripcionUsuario.GRATUITO]: {
     // Tests

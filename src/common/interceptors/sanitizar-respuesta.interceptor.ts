@@ -24,7 +24,7 @@ import { map } from 'rxjs/operators';
  *  Los administradores (rol 'admin') siguen viendo los datos privados de otros
  *  (panel de usuarios, soporte), pero nunca los secretos.
  */
-const CAMPOS_SECRETOS = new Set(['password', 'resetPasswordToken', 'resetPasswordExpira']);
+const CAMPOS_SECRETOS = new Set(['password', 'resetPasswordToken', 'resetPasswordExpira', 'stripeCustomerId', 'stripeSubscriptionId']);
 
 const CAMPOS_PRIVADOS_DE_OTROS = new Set([
   'email',
@@ -34,6 +34,10 @@ const CAMPOS_PRIVADOS_DE_OTROS = new Set([
   'objetivo',
   'compromiso',
   'suscripcion',
+  'pruebaHasta',
+  'accesoHasta',
+  'renovacionAutomatica',
+  'acceso',
   'fechaResetConsumo',
   'simulacrosHoy',
   'preguntasTestHoy',

@@ -1,3 +1,4 @@
+import { exigirAccesoCompleto } from '../common/helpers/acceso.helper';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
 import { registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
@@ -224,6 +225,8 @@ export class PsicotecnicoService {
     dificultad?: PsicotecnicoDificultad;
     numPreguntas?: number;
   }) {
+    // ⭐ Los psicotécnicos son de OPLORA (acceso completo)
+    await exigirAccesoCompleto(this.preguntaRepo.manager, datos.usuarioId);
     const numPreguntas = Math.min(Math.max(datos.numPreguntas ?? 10, 1), 50);
     const convocatoriaResuelta = await this.resolverConvocatoria(datos.usuarioId, datos.oposicionId, datos.convocatoriaId);
 
@@ -730,6 +733,8 @@ export class PsicotecnicoService {
     mensaje?: string,
     horasPlazo?: number,
   ): Promise<RetoPsicotecnico> {
+    // ⭐ Crear duelos de psicotécnicos es de OPLORA (a quien reta sin suscripción sí se le deja jugar)
+    await exigirAccesoCompleto(this.preguntaRepo.manager, retadorId);
     const retador = await this.usuarioRepo.findOne({ where: { id: retadorId } });
     if (!retador) throw new NotFoundException('Retador no encontrado');
 

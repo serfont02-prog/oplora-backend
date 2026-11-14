@@ -41,7 +41,9 @@ export class ApunteOploraController {
 
   @Get(':id')
   async findOne(@Param('id') id: string, @Request() req: any) {
-    return sinArchivo(await this.service.findOne(id), req);
+    const apunte = await this.service.findOne(id);
+    await this.service.exigirAccesoApunte(req.user.id, apunte); // ⭐ Tema 1 gratis
+    return sinArchivo(apunte, req);
   }
 
  @Post('oposicion/:oposicionId')
