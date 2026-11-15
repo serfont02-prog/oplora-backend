@@ -22,6 +22,8 @@ import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import { forwardRef, Inject } from '@nestjs/common';
 import { sanitizarNombreArchivo } from '../common/helpers/sanitizar-nombre-archivo.helper';
+import { parseFraccion } from '../common/helpers/penalizacion.helper';
+import { registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
 
 
 
@@ -250,36 +252,9 @@ async getExamenesByOposicionUsuario(usuarioId: string, oposicionId: string) {
     });
   }
 
-  async programarRepasoArticulo(
-    usuarioId: string,
-    articuloId: string,
-    cuando: 'hoy' | 'manana' | 'semana',
-  ) {
-    const dias = cuando === 'hoy' ? 0 : cuando === 'manana' ? 1 : 7;
-    const fecha = new Date();
-    fecha.setDate(fecha.getDate() + dias);
+  // ⭐ Quitados programarRepasoArticulo y sugerirRepasoArticulo: no hacían nada y no se usaban
+  // (la ruta usa los de flashcard.service).
 
-    return {
-      programado: true,
-      fecha,
-      articuloId,
-      usuarioId,
-    };
-  }
-
-  async sugerirRepasoArticulo(
-    usuarioId: string,
-    articuloId: string,
-    oposicionId: string,
-  ) {
-    return {
-      sugerencia: 'manana',
-      articuloId,
-      usuarioId,
-      oposicionId,
-    };
-  }
-  
     async vincularNormativa(temaId: string, datos: {
     nivel: string;
     articuloId?: string;
@@ -686,6 +661,8 @@ async corregirSimulacroGenerado(
   const notaMinima = convocatoria?.notaMinimaAprobado ?? 5;
   const aprobarias = notaSobreDiez >= notaMinima;
 
+  // ⭐ Auditoría M4: un simulacro contestado cuenta para la racha (antes no contaba)
+  if (correctas + incorrectas > 0) await registrarDiaDeEstudio(this.resultadoTestRepo.manager, usuarioId);
   await this.resultadoTestRepo.save(this.resultadoTestRepo.create({
     usuario: { id: usuarioId } as any,
     oposicion: { id: oposicionId } as any,
@@ -821,6 +798,8 @@ async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { pregu
   const notaMinima = examen.convocatoria.notaMinimaAprobado ?? 5;
   const aprobarias = notaSobreDiez >= notaMinima;
 
+  // ⭐ Auditoría M4: un simulacro contestado cuenta para la racha (antes no contaba)
+  if (correctas + incorrectas > 0) await registrarDiaDeEstudio(this.resultadoTestRepo.manager, usuarioId);
   // Guardar resultado histórico
   await this.resultadoTestRepo.save(this.resultadoTestRepo.create({
     usuario: { id: usuarioId } as any,
@@ -862,15 +841,5 @@ async corregirSimulacro(usuarioId: string, examenId: string, respuestas: { pregu
   };
 }
 
-}
-
-function parseFraccion(fraccion: string | null | undefined): number {
-  if (!fraccion) return 0;
-  const partes = fraccion.split('/');
-  if (partes.length !== 2) return 0;
-  const numerador = parseFloat(partes[0]);
-  const denominador = parseFloat(partes[1]);
-  if (!denominador) return 0;
-  return numerador / denominador;
 }
 

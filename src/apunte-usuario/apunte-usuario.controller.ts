@@ -1,8 +1,9 @@
-import { Controller, Get, Post, Delete, Param, Body, UseGuards, UseInterceptors, UploadedFile, Request, ParseFilePipeBuilder, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Param, Body, UseGuards, UseInterceptors, UploadedFile, Request, ParseFilePipeBuilder, HttpStatus, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { ApunteUsuarioService } from './apunte-usuario.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { Throttle } from '@nestjs/throttler';
 
 // ⭐ Límite de tamaño por archivo subido. Al usar memoryStorage() el archivo
 // entero se carga en RAM antes de llegar aquí; sin este límite, varios
@@ -31,6 +32,8 @@ export class ApunteUsuarioController {
     return this.service.getApuntesPorOposicion(req.user.id, oposicionId);
   }
 
+  // ⭐ 10 subidas por minuto (auditoría A10)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('tema/:temaId')
   @UseInterceptors(FileInterceptor('archivo', { storage: memoryStorage(), limits: { fileSize: MAX_TAMANIO_APUNTE } }))
   async subir(
@@ -39,6 +42,7 @@ export class ApunteUsuarioController {
     @Body('oposicionId') oposicionId: string,
     @Request() req: any,
   ) {
+    if (!archivo) throw new BadRequestException('No se ha recibido ningún archivo');
     return this.service.subirApunte(
       req.user.id,
       oposicionId,
@@ -49,6 +53,8 @@ export class ApunteUsuarioController {
     );
   }
 
+    // ⭐ 10 subidas por minuto (auditoría A10)
+    @Throttle({ default: { limit: 10, ttl: 60000 } })
     @Post('oposicion/:oposicionId')
     @UseInterceptors(FileInterceptor('archivo', { storage: memoryStorage(), limits: { fileSize: MAX_TAMANIO_APUNTE } }))
     async subirPorOposicion(
@@ -56,6 +62,7 @@ export class ApunteUsuarioController {
       @UploadedFile(construirValidadorTamanio()) archivo: Express.Multer.File,
       @Request() req: any,
     ) {
+      if (!archivo) throw new BadRequestException('No se ha recibido ningún archivo');
       return this.service.subirApunte(
         req.user.id,
         oposicionId,

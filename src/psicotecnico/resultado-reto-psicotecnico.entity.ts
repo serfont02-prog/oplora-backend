@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, Index } from 'typeorm';
 import { RetoPsicotecnico } from './reto-psicotecnico.entity';
 import { Usuario } from '../usuario/usuario.entity';
 
@@ -6,6 +6,8 @@ import { Usuario } from '../usuario/usuario.entity';
 // una única Flashcard) que tiene ResultadoRetoFC: ese campo no participa en
 // ninguna consulta de flashcard.service.ts (el detalle por pregunta ya vive
 // en `respuestas`), así que aquí no se arrastra ese campo sin uso claro.
+// ⭐ Auditoría M9: índices para las consultas de cada usuario (Postgres no los crea solo por las claves foráneas)
+@Index(['retoPsicotecnico', 'usuario'])
 @Entity('resultados_reto_psicotecnico')
 export class ResultadoRetoPsicotecnico {
   @PrimaryGeneratedColumn('uuid')

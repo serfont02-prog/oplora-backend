@@ -1,8 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, Index } from 'typeorm';
 import { RetoFC } from './reto-fc.entity';
 import { Usuario } from '../usuario/usuario.entity';
 import { Flashcard } from './flashcard.entity';
 
+// ⭐ Auditoría M9: índices para las consultas de cada usuario (Postgres no los crea solo por las claves foráneas)
+@Index(['retoFc', 'usuario'])
 @Entity('resultados_reto_fc')
 export class ResultadoRetoFC {
   @PrimaryGeneratedColumn('uuid')

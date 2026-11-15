@@ -78,7 +78,17 @@ export class TestController {
       req?.user?.id,
       temasIds,
     );
-    return this.testService.registrarSesion(req.user.id, oposicionId, modo ?? null, preguntas);
+    // ⭐ El tipo de test lo fija el servidor a partir de lo que se ha pedido (auditoría A1): es el
+    // que se guardará con el resultado, diga lo que diga la app al terminar.
+    const TIPOS = ['rapido', 'general', 'tema', 'ley', 'simulacro', 'primer_reto'];
+    const tipo = typeof modo === 'string' && TIPOS.includes(modo)
+      ? modo
+      : temaId || temasIds?.length
+        ? 'tema'
+        : versionLeyId || capituloId || tituloId
+          ? 'ley'
+          : 'rapido';
+    return this.testService.registrarSesion(req.user.id, oposicionId, tipo, preguntas);
   }
 
   /* =========================================================

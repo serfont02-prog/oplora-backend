@@ -91,23 +91,48 @@ export class ParseoService {
     }
   }
 
+  // ⭐ Auditoría A7: «Parsear» borraba la estructura título a título, sin transacción. Con notas o
+  // subrayados de usuarios se cortaba a medias y la ley quedaba con títulos sin artículos.
+  // Ahora: primero se analiza el texto (si no sale nada, no se toca la ley), se niega si la versión
+  // tiene contenido vinculado, y el borrado y el guardado van en una sola transacción.
   async parsearVersion(versionId: string): Promise<{ ok: boolean; resumen: any }> {
     const version = await this.versionRepo.findOne({
       where: { id: versionId },
       relations: ['ley'],
     });
     if (!version) throw new NotFoundException(`Versión ${versionId} no encontrada`);
-    if (!version.textoCompleto) throw new Error('La versión no tiene texto extraído');
+    if (!version.textoCompleto) throw new BadRequestException('La versión no tiene texto extraído');
 
     this.logger.log(`Iniciando parseo (sin IA) de ${version.ley.nombre} v${version.version}`);
 
-    // Limpiar estructura previa por si se reparsea
-    await this.limpiarEstructuraAnterior(versionId);
-
     const nodos = this.parsearTextoARegex(version.textoCompleto);
     this.logger.log(`Detectados ${nodos.length} nodos estructurales`);
+    if (!nodos.some((n) => n.tipo === 'articulo')) {
+      throw new BadRequestException('No se ha detectado ningún artículo en el texto. La ley no se ha modificado.');
+    }
 
-    const resumen = await this.guardarNodos(versionId, nodos);
+    const { total, detalle } = await this.contarDependencias(versionId);
+    if (total > 0) {
+      const texto = Object.entries(detalle).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(', ');
+      throw new BadRequestException(
+        `Esta versión tiene contenido vinculado a sus artículos (${texto}) y no se puede volver a parsear. Usa «Importar JSON», que avisa y lo gestiona.`,
+      );
+    }
+
+    let resumen: any;
+    try {
+      resumen = await this.dataSource.transaction(async (m) => {
+        const r = this.repos(m);
+        await this.limpiarEstructuraAnterior(versionId, r);
+        return this.guardarNodos(versionId, nodos, r);
+      });
+    } catch (e: any) {
+      // 23503: algo sigue enlazado a un título o capítulo (por ejemplo, un tema). No se ha cambiado nada.
+      if (e?.code === '23503' || e?.driverError?.code === '23503') {
+        throw new BadRequestException('Esta versión tiene temas u otro contenido enlazado a sus títulos o capítulos. No se ha modificado nada.');
+      }
+      throw e;
+    }
 
     this.logger.log(`Parseo completado: ${JSON.stringify(resumen)}`);
     return { ok: true, resumen };
@@ -210,7 +235,7 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
    * Recorre la lista lineal de nodos y va creando la jerarquía en BD,
    * manteniendo referencias al libro/título/capítulo/sección "actuales".
    */
-  private async guardarNodos(versionId: string, nodos: NodoParseado[]): Promise<any> {
+  private async guardarNodos(versionId: string, nodos: NodoParseado[], r = this.repos()): Promise<any> {
     let totalLibros = 0, totalTitulos = 0, totalCapitulos = 0, totalSecciones = 0, totalArticulos = 0;
 
     let libroActualId: string | null = null;
@@ -222,13 +247,13 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
 
     for (const nodo of nodos) {
       if (nodo.tipo === 'libro') {
-        const libro = this.libroRepo.create({
+        const libro = r.libro.create({
           orden: ++ordenLibro,
           numero: nodo.numero,
           nombre: nodo.nombre || `Libro ${nodo.numero}`,
           versionLey: { id: versionId } as any,
         } as any);
-        const guardado = await this.libroRepo.save(libro);
+        const guardado = await r.libro.save(libro);
         libroActualId = (guardado as any).id;
         tituloActualId = null;
         capituloActualId = null;
@@ -238,14 +263,14 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
       }
 
       if (nodo.tipo === 'titulo') {
-        const titulo = this.tituloRepo.create({
+        const titulo = r.titulo.create({
           orden: ++ordenTitulo,
           numero: nodo.numero,
           nombre: nodo.nombre || `Título ${nodo.numero}`,
           versionLey: { id: versionId } as any,
           libro: libroActualId ? ({ id: libroActualId } as any) : undefined,
         });
-        const guardado = await this.tituloRepo.save(titulo);
+        const guardado = await r.titulo.save(titulo);
         tituloActualId = guardado.id;
         capituloActualId = null;
         seccionActualId = null;
@@ -254,13 +279,13 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
       }
 
       if (nodo.tipo === 'capitulo') {
-        const capitulo = this.capituloRepo.create({
+        const capitulo = r.capitulo.create({
           orden: ++ordenCapitulo,
           numero: nodo.numero,
           nombre: nodo.nombre || `Capítulo ${nodo.numero}`,
           tituloRef: tituloActualId ? ({ id: tituloActualId } as any) : undefined,
         });
-        const guardado = await this.capituloRepo.save(capitulo);
+        const guardado = await r.capitulo.save(capitulo);
         capituloActualId = guardado.id;
         seccionActualId = null;
         totalCapitulos++;
@@ -268,20 +293,20 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
       }
 
       if (nodo.tipo === 'seccion') {
-        const seccion = this.seccionRepo.create({
+        const seccion = r.seccion.create({
           orden: ++ordenSeccion,
           numero: nodo.numero,
           nombre: nodo.nombre || `Sección ${nodo.numero}`,
           capitulo: capituloActualId ? ({ id: capituloActualId } as any) : undefined,
         });
-        const guardado = await this.seccionRepo.save(seccion);
+        const guardado = await r.seccion.save(seccion);
         seccionActualId = guardado.id;
         totalSecciones++;
         continue;
       }
 
       if (nodo.tipo === 'articulo') {
-        const articulo = this.articuloRepo.create({
+        const articulo = r.articulo.create({
           orden: ++ordenArticulo,
           numero: nodo.numeroArticulo,
           titulo: nodo.tituloArticulo || undefined,
@@ -292,7 +317,7 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
           capitulo: !seccionActualId && capituloActualId ? ({ id: capituloActualId } as any) : undefined,
           tituloRef: !seccionActualId && !capituloActualId && tituloActualId ? ({ id: tituloActualId } as any) : undefined,
         } as any);
-        await this.articuloRepo.save(articulo);
+        await r.articulo.save(articulo);
         totalArticulos++;
         continue;
       }
@@ -317,6 +342,74 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
     return filas.map((f) => f.id);
   }
 
+  // ⭐ Auditoría M6: vuelve a enganchar al artículo nuevo (mismo número, dentro de la misma versión)
+  // lo que se apuntó en reenlace_articulos. Los subrayados se recolocan si el texto cambió de sitio
+  // y se quitan si el texto subrayado ya no está. Lo que no encuentra su artículo: notas, subrayados
+  // y vínculos con temas se borran (como antes); preguntas y flashcards se quedan sin artículo.
+  private async reenlazarTrasImportar(m: EntityManager, versionId: string): Promise<{ reenlazados: number; perdidos: number }> {
+    const nuevos = `
+      SELECT lower(trim(a.numero)) AS num, (array_agg(a.id))[1] AS id
+        FROM articulos a
+        LEFT JOIN secciones s ON s.id = a."seccionId"
+        LEFT JOIN capitulos c ON c.id = COALESCE(a."capituloId", s."capituloId")
+        LEFT JOIN titulos t ON t.id = COALESCE(c."tituloRefId", a."tituloRefId")
+        LEFT JOIN libros lb ON lb.id = t."libroId"
+       WHERE COALESCE(t."versionLeyId", lb."versionLeyId") = $1
+       GROUP BY 1 HAVING count(*) = 1`;
+    let reenlazados = 0;
+    for (const tabla of ['subrayados_articulo', 'notas_articulo', 'temas_normativa', 'preguntas_cortas', 'preguntas_banco', 'flashcards']) {
+      const res = await m.query(
+        `UPDATE ${tabla} x SET "articuloId" = n.id
+           FROM reenlace_articulos r JOIN (${nuevos}) n ON n.num = lower(trim(r.numero))
+          WHERE r.tabla = '${tabla}' AND x.id = r.fila`,
+        [versionId],
+      );
+      reenlazados += Number(res?.[1] ?? 0);
+    }
+    const ins = await m.query(
+      `INSERT INTO preguntas_test_articulos_articulos ("preguntasTestId", "articulosId")
+       SELECT r.fila, n.id FROM reenlace_articulos r JOIN (${nuevos}) n ON n.num = lower(trim(r.numero))
+        WHERE r.tabla = 'preguntas_test'
+       ON CONFLICT DO NOTHING RETURNING 1`,
+      [versionId],
+    );
+    reenlazados += ins.length;
+
+    // Subrayados: si el texto ya no está en su sitio, se busca en el artículo nuevo.
+    await m.query(
+      `UPDATE subrayados_articulo x
+          SET inicio = position(x."textoSeleccionado" IN a.contenido) - 1,
+              fin = position(x."textoSeleccionado" IN a.contenido) - 1 + char_length(x."textoSeleccionado")
+         FROM reenlace_articulos r, articulos a
+        WHERE r.tabla = 'subrayados_articulo' AND x.id = r.fila AND a.id = x."articuloId"
+          AND substring(a.contenido FROM x.inicio + 1 FOR x.fin - x.inicio) IS DISTINCT FROM x."textoSeleccionado"
+          AND position(x."textoSeleccionado" IN a.contenido) > 0`,
+    );
+    const quitados = await m.query(
+      `DELETE FROM subrayados_articulo x USING reenlace_articulos r, articulos a
+        WHERE r.tabla = 'subrayados_articulo' AND x.id = r.fila AND a.id = x."articuloId"
+          AND substring(a.contenido FROM x.inicio + 1 FOR x.fin - x.inicio) IS DISTINCT FROM x."textoSeleccionado"
+       RETURNING 1`,
+    );
+
+    // (en UPDATE y DELETE, query() devuelve [filas, número de filas])
+    let perdidos = Number(quitados?.[1] ?? 0);
+    for (const tabla of ['subrayados_articulo', 'notas_articulo', 'temas_normativa']) {
+      const borrados = await m.query(
+        `DELETE FROM ${tabla} x USING reenlace_articulos r WHERE r.tabla = '${tabla}' AND x.id = r.fila AND x."articuloId" IS NULL RETURNING 1`,
+      );
+      perdidos += Number(borrados?.[1] ?? 0);
+    }
+    const [{ n }] = await m.query(
+      `SELECT count(*)::int AS n FROM reenlace_articulos r
+        WHERE r.tabla IN ('preguntas_cortas', 'preguntas_banco', 'flashcards', 'preguntas_test')
+          AND NOT EXISTS (SELECT 1 FROM (${nuevos}) q WHERE q.num = lower(trim(r.numero)))`,
+      [versionId],
+    );
+    perdidos += n;
+    return { reenlazados, perdidos: perdidos };
+  }
+
   /**
    * Cuenta lo que cuelga de los artículos de una versión. Es lo que se pierde
    * si se reimporta con "Importar JSON" (que borra y recrea los artículos).
@@ -331,6 +424,8 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
       subrayados: await contar(`SELECT COUNT(*) AS n FROM subrayados_articulo WHERE "articuloId" = ANY($1)`),
       notas: await contar(`SELECT COUNT(*) AS n FROM notas_articulo WHERE "articuloId" = ANY($1)`),
       'preguntas cortas': await contar(`SELECT COUNT(*) AS n FROM preguntas_cortas WHERE "articuloId" = ANY($1)`),
+      // ⭐ Faltaba: con preguntas del banco enlazadas, la importación fallaba al borrar los artículos
+      'preguntas del banco': await contar(`SELECT COUNT(*) AS n FROM preguntas_banco WHERE "articuloId" = ANY($1)`),
       'vínculos con temas': await contar(`SELECT COUNT(*) AS n FROM temas_normativa WHERE "articuloId" = ANY($1)`),
     };
     return { total: Object.values(detalle).reduce((x, y) => x + y, 0), detalle };
@@ -351,7 +446,7 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
     if (total > 0 && !forzar) {
       const texto = Object.entries(detalle).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(', ');
       throw new BadRequestException(
-        `Esta versión tiene contenido vinculado a sus artículos (${texto}). Confirma la importación para continuar.`,
+        `Esta versión tiene contenido vinculado a sus artículos (${texto}). Se volverá a enlazar con el artículo del mismo número; lo que apunte a un artículo que ya no exista se perderá. Confirma la importación para continuar.`,
       );
     }
 
@@ -360,16 +455,27 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
     const r = this.repos(m);
 
     if (total > 0) {
-      // Primero se quita lo que impediría borrar los artículos. Las preguntas
-      // de test, flashcards y preguntas cortas NO se borran: solo pierden el
-      // vínculo con el artículo. Subrayados, notas y vínculos con temas sí.
+      // ⭐ Auditoría M6: antes se borraban las notas y subrayados de los usuarios y los vínculos con
+      // temas y preguntas. Ahora se apunta a qué número de artículo iba cada cosa, se desengancha
+      // para poder borrar los artículos y, al final, se vuelve a enganchar al artículo nuevo con
+      // el mismo número. Solo se pierde lo que apuntaba a un artículo que ya no existe.
       const ids = await this.idsArticulosDeVersion(versionId);
-      await m.query(`DELETE FROM subrayados_articulo WHERE "articuloId" = ANY($1)`, [ids]);
-      await m.query(`DELETE FROM notas_articulo WHERE "articuloId" = ANY($1)`, [ids]);
-      await m.query(`DELETE FROM temas_normativa WHERE "articuloId" = ANY($1)`, [ids]);
+      await m.query(`CREATE TEMP TABLE reenlace_articulos (tabla text, fila uuid, numero text) ON COMMIT DROP`);
+      for (const [tabla, sql] of [
+        ['subrayados_articulo', `SELECT x.id, a.numero FROM subrayados_articulo x JOIN articulos a ON a.id = x."articuloId" WHERE a.id = ANY($1)`],
+        ['notas_articulo', `SELECT x.id, a.numero FROM notas_articulo x JOIN articulos a ON a.id = x."articuloId" WHERE a.id = ANY($1)`],
+        ['temas_normativa', `SELECT x.id, a.numero FROM temas_normativa x JOIN articulos a ON a.id = x."articuloId" WHERE a.id = ANY($1)`],
+        ['preguntas_cortas', `SELECT x.id, a.numero FROM preguntas_cortas x JOIN articulos a ON a.id = x."articuloId" WHERE a.id = ANY($1)`],
+        ['preguntas_banco', `SELECT x.id, a.numero FROM preguntas_banco x JOIN articulos a ON a.id = x."articuloId" WHERE a.id = ANY($1)`],
+        ['flashcards', `SELECT x.id, a.numero FROM flashcards x JOIN articulos a ON a.id = x."articuloId" WHERE a.id = ANY($1)`],
+        ['preguntas_test', `SELECT x."preguntasTestId" AS id, a.numero FROM preguntas_test_articulos_articulos x JOIN articulos a ON a.id = x."articulosId" WHERE a.id = ANY($1)`],
+      ] as const) {
+        await m.query(`INSERT INTO reenlace_articulos (tabla, fila, numero) SELECT '${tabla}', q.id, q.numero FROM (${sql}) q`, [ids]);
+      }
+      for (const tabla of ['subrayados_articulo', 'notas_articulo', 'temas_normativa', 'preguntas_cortas', 'preguntas_banco', 'flashcards']) {
+        await m.query(`UPDATE ${tabla} SET "articuloId" = NULL WHERE "articuloId" = ANY($1)`, [ids]);
+      }
       await m.query(`DELETE FROM preguntas_test_articulos_articulos WHERE "articulosId" = ANY($1)`, [ids]);
-      await m.query(`UPDATE preguntas_cortas SET "articuloId" = NULL WHERE "articuloId" = ANY($1)`, [ids]);
-      await m.query(`UPDATE flashcards SET "articuloId" = NULL WHERE "articuloId" = ANY($1)`, [ids]);
     }
 
     await this.limpiarEstructuraAnterior(versionId, r);
@@ -504,7 +610,12 @@ private async limpiarEstructuraAnterior(versionId: string, r = this.repos()): Pr
             }));
             totalDisposiciones++;
           }
-    return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos, totalDisposiciones, vinculosPerdidos: total };
+    let vinculosPerdidos = 0;
+    if (total > 0) {
+      const r6 = await this.reenlazarTrasImportar(m, versionId);
+      vinculosPerdidos = r6.perdidos;
+    }
+    return { totalLibros, totalTitulos, totalCapitulos, totalSecciones, totalArticulos, totalDisposiciones, vinculosPerdidos };
     });
   }
 

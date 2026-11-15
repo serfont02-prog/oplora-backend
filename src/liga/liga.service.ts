@@ -1,4 +1,5 @@
 import { exigirAccesoCompleto } from '../common/helpers/acceso.helper';
+import { parseFraccion } from '../common/helpers/penalizacion.helper';
 import { registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
 import {
   Injectable,
@@ -77,15 +78,6 @@ function barajar<T>(lista: T[]): T[] {
     [copia[i], copia[j]] = [copia[j], copia[i]];
   }
   return copia;
-}
-
-function parseFraccion(fraccion: string | null | undefined): number {
-  if (!fraccion) return 0;
-  const partes = String(fraccion).split('/');
-  if (partes.length !== 2) return Number(fraccion) || 0;
-  const num = parseFloat(partes[0]);
-  const den = parseFloat(partes[1]);
-  return den ? num / den : 0;
 }
 
 function redondear(valor: number, decimales: number): number {

@@ -11,8 +11,7 @@ import * as bcrypt from 'bcrypt';
 import { UsuarioOposicion } from './usuario-oposicion.entity';
 import { Oposicion } from '../oposicion/oposicion.entity';
 import { EstadoUsuario, SuscripcionUsuario } from './usuario.entity';
-import { resetearConsumosSiEsNuevoDia, rachaVigente } from '../common/helpers/consumo.helper';
-import { getSuscripcionLimits, haSuperadoLimite } from '../common/helpers/plan.helper';
+import { rachaVigente } from '../common/helpers/consumo.helper';
 import { createClient } from '@supabase/supabase-js';
 import { TipoAvatar } from './usuario.entity';
 import { Convocatoria } from 'src/convocatoria/convocatoria.entity';
@@ -358,24 +357,8 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
   }
 
   // ---------------------------------------------------------
-  // VALIDAR PASSWORD (opcional)
-  // ---------------------------------------------------------
-
-  async validarPassword(email: string, password: string): Promise<Usuario | null> {
-    const usuario = await this.findByEmail(email?.toLowerCase().trim());
-    if (!usuario) return null;
-
-    const ok = await bcrypt.compare(password, usuario.password);
-    return ok ? usuario : null;
-  }
-
-  // ---------------------------------------------------------
   // ADMIN
   // ---------------------------------------------------------
-
-  async findAll(): Promise<Usuario[]> {
-    return this.repo.find({ order: { creadoEn: 'DESC' } });
-  }
 
   /**
    * ⭐ Listado del panel de admin. Antes devolvía el usuario a pelo: puntos y nivel viven en
@@ -615,70 +598,7 @@ async findMe(id: string) {
 }
 
 
-async verificarLimiteTest(
-  usuarioId: string,
-  numPreguntas: number,
-  tipoTest: string,
-): Promise<{ permitido: boolean; motivo?: string; limite?: number }> {
-  const usuario = await this.findById(usuarioId);
-  if (!usuario) throw new NotFoundException('Usuario no encontrado');
-
-  // Reset diario si es nuevo día
-  const fechaAntes = usuario.fechaResetConsumo;
-  resetearConsumosSiEsNuevoDia(usuario);
-  if (usuario.fechaResetConsumo !== fechaAntes) await this.guardarConsumo(usuario);
-
-  const limits = getSuscripcionLimits(usuario.suscripcion);
-
-  // Simulacros bloqueados
-  if (tipoTest === 'simulacro' && !limits.simulacros) {
-    return { permitido: false, motivo: 'simulacro_bloqueado', limite: 0 };
-  }
-
-  // Límite por test según tipo
-  const limitePorTest = tipoTest === 'tema'
-    ? limits.preguntasPorTema
-    : limits.preguntasPorTest;
-
-  if (numPreguntas > limitePorTest) {
-    return { permitido: false, motivo: 'limite_por_test', limite: limitePorTest };
-  }
-
-  // Límite diario
-  if (
-    limits.preguntasTestDia !== Infinity &&
-    haSuperadoLimite(usuario.suscripcion, 'preguntasTestDia', usuario.preguntasTestHoy + numPreguntas)
-  ) {
-    const restantes = limits.preguntasTestDia - usuario.preguntasTestHoy;
-    return { permitido: false, motivo: 'limite_diario', limite: Math.max(0, restantes) };
-  }
-
-  return { permitido: true };
-}
-
-async verificarLimiteFlashcards(
-  usuarioId: string,
-  cantidad: number,
-): Promise<{ permitido: boolean; motivo?: string; limite?: number }> {
-  const usuario = await this.findById(usuarioId);
-  if (!usuario) throw new NotFoundException('Usuario no encontrado');
-
-  const fechaAntes = usuario.fechaResetConsumo;
-  resetearConsumosSiEsNuevoDia(usuario);
-  if (usuario.fechaResetConsumo !== fechaAntes) await this.guardarConsumo(usuario);
-
-  const limits = getSuscripcionLimits(usuario.suscripcion);
-
-  if (
-    limits.flashcardsDia !== Infinity &&
-    haSuperadoLimite(usuario.suscripcion, 'flashcardsDia', usuario.flashcardsHoy + cantidad)
-  ) {
-    const restantes = limits.flashcardsDia - usuario.flashcardsHoy;
-    return { permitido: false, motivo: 'limite_diario_flashcards', limite: Math.max(0, restantes) };
-  }
-
-  return { permitido: true };
-}
+// ⭐ Quitados verificarLimiteTest y verificarLimiteFlashcards: no se usaban (vale la de test.service).
 
   async getEstadisticas(): Promise<any> {
     const total = await this.repo.count();
@@ -780,6 +700,8 @@ async verificarLimiteFlashcards(
 }
 
 async cambiarTipoAvatar(usuarioId: string, tipo: 'oplo' | 'foto'): Promise<Usuario> {
+  // ⭐ 400 en vez de error 500 si llega otro valor
+  if (tipo !== 'oplo' && tipo !== 'foto') throw new BadRequestException('Tipo de avatar no válido');
   await this.repo.update(usuarioId, { tipoAvatar: tipo as TipoAvatar });
   return this.findById(usuarioId) as Promise<Usuario>;
 }
@@ -1018,7 +940,8 @@ async resetearProgreso(
 
     // --- Racha (sigue siendo global de cuenta, se resetea igualmente si se pide) ---
     if (!conservar.racha) {
-      await manager.update(Usuario, usuarioId, { rachaActual: 0 });
+      // ⭐ También se borra el último día de racha: si no, al estudiar ese mismo día seguía en 0
+      await manager.update(Usuario, usuarioId, { rachaActual: 0, ultimoDiaRacha: null as any });
       // rachaMaxima se mantiene como récord histórico, no se resetea nunca
     }
 

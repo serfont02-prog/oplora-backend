@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Ley } from './ley.entity';
@@ -238,8 +238,48 @@ async create(nombre: string, siglas?: string, descripcion?: string): Promise<Ley
     return this.diffRepo.save(diff);
   }
 
+  // ⭐ Auditoría M7: borrar una ley con versiones daba error 500 (las versiones y su estructura
+  // impedían el borrado). Ahora se borra todo en orden y en una transacción. Si hay contenido
+  // vinculado (temas, preguntas, flashcards, notas o subrayados de usuarios), no se borra nada y
+  // se avisa de qué hay que desvincular antes.
   async eliminar(id: string): Promise<void> {
-  await this.leyRepo.delete(id);
+  await this.leyRepo.manager.transaction(async (m) => {
+    const ley = await m.query(`SELECT id FROM leyes WHERE id = $1`, [id]);
+    if (!ley.length) throw new NotFoundException('Ley no encontrada');
+    const versiones: string[] = (await m.query(`SELECT id FROM versiones_ley WHERE "leyId" = $1`, [id])).map((f: any) => f.id);
+
+    if (versiones.length) {
+      const titulos = `SELECT id FROM titulos WHERE "versionLeyId" = ANY($1) OR "libroId" IN (SELECT id FROM libros WHERE "versionLeyId" = ANY($1))`;
+      const capitulos = `SELECT id FROM capitulos WHERE "tituloRefId" IN (${titulos})`;
+      const secciones = `SELECT id FROM secciones WHERE "capituloId" IN (${capitulos})`;
+      const articulos = `SELECT id FROM articulos WHERE "tituloRefId" IN (${titulos}) OR "capituloId" IN (${capitulos}) OR "seccionId" IN (${secciones})`;
+      const contar = async (sql: string) => Number((await m.query(sql, [versiones]))[0]?.n ?? 0);
+      const detalle: Record<string, number> = {
+        'vínculos con temas': await contar(`SELECT COUNT(*) AS n FROM temas_normativa WHERE "versionLeyId" = ANY($1) OR "tituloId" IN (${titulos}) OR "capituloId" IN (${capitulos}) OR "articuloId" IN (${articulos})`),
+        'preguntas de test': await contar(`SELECT COUNT(*) AS n FROM preguntas_test_articulos_articulos WHERE "articulosId" IN (${articulos})`),
+        'preguntas del banco': await contar(`SELECT COUNT(*) AS n FROM preguntas_banco WHERE "articuloId" IN (${articulos})`),
+        'preguntas cortas': await contar(`SELECT COUNT(*) AS n FROM preguntas_cortas WHERE "articuloId" IN (${articulos})`),
+        flashcards: await contar(`SELECT COUNT(*) AS n FROM flashcards WHERE "articuloId" IN (${articulos})`),
+        notas: await contar(`SELECT COUNT(*) AS n FROM notas_articulo WHERE "articuloId" IN (${articulos})`),
+        subrayados: await contar(`SELECT COUNT(*) AS n FROM subrayados_articulo WHERE "articuloId" IN (${articulos})`),
+      };
+      const texto = Object.entries(detalle).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(', ');
+      if (texto) {
+        throw new BadRequestException(`Esta ley tiene contenido vinculado (${texto}). Desvincúlalo antes de borrarla. No se ha borrado nada.`);
+      }
+
+      await m.query(`DELETE FROM articulos WHERE id IN (${articulos})`, [versiones]);
+      await m.query(`DELETE FROM secciones WHERE id IN (${secciones})`, [versiones]);
+      await m.query(`DELETE FROM capitulos WHERE id IN (${capitulos})`, [versiones]);
+      await m.query(`DELETE FROM titulos WHERE id IN (${titulos})`, [versiones]);
+      await m.query(`DELETE FROM libros WHERE "versionLeyId" = ANY($1)`, [versiones]);
+      await m.query(`DELETE FROM disposiciones WHERE "versionLeyId" = ANY($1)`, [versiones]);
+      await m.query(`DELETE FROM diffs_version WHERE "versionAnteriorId" = ANY($1) OR "versionNuevaId" = ANY($1)`, [versiones]);
+      await m.query(`DELETE FROM oposiciones_leyes WHERE "versionLeyId" = ANY($1)`, [versiones]);
+      await m.query(`DELETE FROM versiones_ley WHERE id = ANY($1)`, [versiones]);
+    }
+    await m.query(`DELETE FROM leyes WHERE id = $1`, [id]);
+  });
 }
 
 async getNoticiasLegislacion(oposicionId: string, limite?: number) {

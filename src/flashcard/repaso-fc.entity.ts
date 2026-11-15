@@ -10,6 +10,11 @@ export enum EstadoFC {
 
 // ⭐ Índices para las consultas de cada usuario (antes casi no había)
 @Index(['usuario', 'flashcard'])
+// ⭐ Auditoría M9: repasos que tocan hoy de cada usuario
+@Index(['usuario', 'proximoRepaso'])
+// ⭐ Auditoría M5: índice único (usuario, tarjeta). Lo crea la migración después de limpiar los
+// duplicados; con `synchronize: false` el arranque no lo crea (fallaría si quedan) ni lo borra.
+@Index('UQ_repasos_fc_usuario_flashcard', { synchronize: false })
 @Entity('repasos_fc')
 export class RepasoFC {
   @PrimaryGeneratedColumn('uuid')

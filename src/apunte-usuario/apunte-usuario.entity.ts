@@ -14,6 +14,15 @@ export class ApunteUsuario {
   @Column({ nullable: true })
   urlArchivo!: string;
 
+  // ⭐ Ruta del archivo en el almacén. El enlace se firma cada vez que se lee (antes se guardaba
+  // un enlace firmado por un año, que dejaría de abrirse). Los apuntes antiguos no la tienen:
+  // se saca de `urlArchivo`.
+  @Column({ type: 'varchar', nullable: true })
+  rutaArchivo!: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  tamanoBytes!: number | null;
+
   @Column({ type: 'text', nullable: true })
   textoExtraido!: string;
 

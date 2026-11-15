@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, CreateDateColumn, Index } from 'typeorm';
 import { Usuario } from '../usuario/usuario.entity';
 import { Oposicion } from '../oposicion/oposicion.entity';
 import { PsicotecnicoTipo } from './psicotecnico-tipo.enum';
@@ -16,6 +16,9 @@ export enum EstadoRetoPsicotecnico {
   EXPIRADO = 'expirado',
 }
 
+// ⭐ Auditoría M9: índices para las consultas de cada usuario (Postgres no los crea solo por las claves foráneas)
+@Index(['retador'])
+@Index(['retado'])
 @Entity('retos_psicotecnicos')
 export class RetoPsicotecnico {
   @PrimaryGeneratedColumn('uuid')

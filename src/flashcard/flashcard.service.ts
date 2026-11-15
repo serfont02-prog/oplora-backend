@@ -1,7 +1,7 @@
 import { accesoDeUsuario, errorSuscripcion, estaInscrito, exigirTemaPermitido, temaGratisDe, datosTema } from '../common/helpers/acceso.helper';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
-import { InicioDueloService } from '../duelo/inicio-duelo.service';
+import { InicioDueloService, preguntasOcultas } from '../duelo/inicio-duelo.service';
 import { partesMadrid, diaSemanaDe } from '../liga/liga-fechas.util';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Brackets, In, EntityManager } from 'typeorm';
@@ -26,8 +26,18 @@ const TIPOS_DUELO = [TipoFlashcard.VF, TipoFlashcard.TRAMPA];
 // y pertenece a la oposición: por su oposicionId o por su tema (tema → convocatoria → oposición).
 // El artículo enlazado ya NO decide la oposición (antes una FC de una oposición aparecía en otra
 // que compartiera ese artículo). `op` es una expresión SQL: ':param', '$1' o una columna.
-function sqlVisible(a: string, op: string): string {
-  return `(${a}.activa = true AND ${a}.estado = 'validada' AND ${a}."usuarioId" IS NULL AND (${a}."oposicionId" = ${op} OR EXISTS (SELECT 1 FROM temas vt JOIN convocatorias vc ON vc.id = vt."convocatoriaId" WHERE vt.id = ${a}."temaId" AND vc."oposicionId" = ${op})))`;
+// ⭐ Auditoría A5: una flashcard CON tema pertenece a la convocatoria de ese tema; la oposición
+// solo decide en las que no tienen tema. Antes bastaba con que el tema fuera de la oposición, y al
+// copiar una convocatoria cada tarjeta contaba dos veces (y un duelo podía repetir pregunta).
+// `conv` es una expresión SQL con la convocatoria de referencia: la del usuario si se conoce
+// (sqlConvDe con usuario) o, si no, la vigente de la oposición (activa; si no hay, la más reciente).
+function sqlConvDe(op: string, usuario?: string): string {
+  const vigente = `(SELECT cv.id FROM convocatorias cv WHERE cv."oposicionId" = ${op} ORDER BY (cv.estado = 'activa') DESC, cv.anyo DESC, cv.id LIMIT 1)`;
+  if (!usuario) return vigente;
+  return `COALESCE((SELECT uo."convocatoriaActivaId" FROM usuario_oposiciones uo WHERE uo.usuario_id = ${usuario} AND uo.oposicion_id = ${op} LIMIT 1), ${vigente})`;
+}
+function sqlVisible(a: string, op: string, conv: string = sqlConvDe(op)): string {
+  return `(${a}.activa = true AND ${a}.estado = 'validada' AND ${a}."usuarioId" IS NULL AND ((${a}."temaId" IS NULL AND ${a}."oposicionId" = ${op}) OR (${a}."temaId" IS NOT NULL AND EXISTS (SELECT 1 FROM temas vt WHERE vt.id = ${a}."temaId" AND vt."convocatoriaId" = ${conv}))))`;
 }
 // Una flashcard es de un tema si lo tiene asignado. Las que no tienen tema (solo oposición y
 // artículo) cuentan en los temas que incluyen ese artículo. `tema`: expresión SQL.
@@ -55,8 +65,6 @@ export class FlashcardService {
     private readonly configuracionService: ConfiguracionService,
     @InjectRepository(UsuarioOposicion)
     private readonly usuarioOposicionRepo: Repository<UsuarioOposicion>,
-    @InjectRepository(Flashcard)
-    private readonly flashcardRepo: Repository<Flashcard>,
     private readonly inicioDuelo: InicioDueloService,
   ) {}
 
@@ -358,9 +366,19 @@ export class FlashcardService {
    */
   async reenlazarArticulos(oposicionId?: string): Promise<{ revisadas: number; enlazadas: number }> {
     const usarOpo = !!oposicionId && FlashcardService.UUID.test(oposicionId);
-    const filas: { id: string; s: string; n: string }[] = await this.fcRepo.query(
-      `SELECT f.id, f."normaSiglas" AS s, f."articuloNumero" AS n FROM flashcards f
-        WHERE f."articuloId" IS NULL AND f."normaSiglas" IS NOT NULL AND f."articuloNumero" IS NOT NULL
+    // ⭐ Auditoría M6: también se revisan las que apuntan a un artículo de una versión que ya no es
+    // la vigente (antes solo las que no tenían artículo, y «Ver artículo» enseñaba el texto viejo).
+    const filas: { id: string; s: string; n: string; actual: string | null }[] = await this.fcRepo.query(
+      `SELECT f.id, f."normaSiglas" AS s, f."articuloNumero" AS n, f."articuloId" AS actual FROM flashcards f
+        WHERE f."normaSiglas" IS NOT NULL AND f."articuloNumero" IS NOT NULL
+          AND (f."articuloId" IS NULL OR NOT EXISTS (
+            SELECT 1 FROM articulos a
+              LEFT JOIN secciones s ON s.id = a."seccionId"
+              LEFT JOIN capitulos c ON c.id = COALESCE(a."capituloId", s."capituloId")
+              LEFT JOIN titulos t ON t.id = COALESCE(c."tituloRefId", a."tituloRefId")
+              LEFT JOIN libros lb ON lb.id = t."libroId"
+              JOIN versiones_ley v ON v.id = COALESCE(t."versionLeyId", lb."versionLeyId")
+             WHERE a.id = f."articuloId" AND v.activa = true))
           ${usarOpo ? `AND (f."oposicionId" = $1 OR EXISTS (SELECT 1 FROM temas t JOIN convocatorias c ON c.id = t."convocatoriaId" WHERE t.id = f."temaId" AND c."oposicionId" = $1))` : ''}`,
       usarOpo ? [oposicionId] : [],
     );
@@ -368,7 +386,7 @@ export class FlashcardService {
     let enlazadas = 0;
     for (const f of filas) {
       const articuloId = await this.resolverArticulo(f.s, f.n, cache);
-      if (articuloId) {
+      if (articuloId && articuloId !== f.actual) {
         await this.fcRepo.query(`UPDATE flashcards SET "articuloId" = $1 WHERE id = $2`, [articuloId, f.id]);
         enlazadas++;
       }
@@ -384,7 +402,10 @@ export class FlashcardService {
       .leftJoinAndSelect('fc.articulo', 'art')
       .leftJoinAndSelect('fc.tema', 'tema')
       .where('fc."articuloId" = :articuloId', { articuloId })
-      .andWhere(sqlVisible('fc', ':opoId'), { opoId: oposicionId });
+      .andWhere(
+        sqlVisible('fc', ':opoId', usuarioId ? sqlConvDe(':opoId', ':uidConv') : undefined),
+        usuarioId ? { opoId: oposicionId, uidConv: usuarioId } : { opoId: oposicionId },
+      );
     if (usuarioId) {
       // ⭐ Solo de una oposición en la que está inscrito y, sin acceso completo, solo del Tema 1
       if (!(await estaInscrito(this.fcRepo.manager, usuarioId, oposicionId))) return [];
@@ -418,21 +439,11 @@ export class FlashcardService {
       `SELECT f.id FROM flashcards f
          JOIN temas t ON t.id = $1
          JOIN convocatorias c ON c.id = t."convocatoriaId"
-        WHERE ${sqlDeTema('f', '$1')} AND ${sqlVisible('f', 'c."oposicionId"')}
+        WHERE ${sqlDeTema('f', '$1')} AND ${sqlVisible('f', 'c."oposicionId"', 'c.id')}
         ORDER BY f."creadoEn" ASC, f.id ASC`,
       [temaId],
     );
     return this.cargarEnOrden(filas.map((f) => f.id));
-  }
-
-  async findByOposicion(oposicionId: string): Promise<Flashcard[]> {
-    if (!FlashcardService.UUID.test(oposicionId)) return [];
-    return this.fcRepo
-      .createQueryBuilder('fc')
-      .leftJoinAndSelect('fc.articulo', 'art')
-      .leftJoinAndSelect('fc.tema', 'tema')
-      .where(sqlVisible('fc', ':opoId'), { opoId: oposicionId })
-      .getMany();
   }
 
   /** Carga flashcards por id (con tema y artículo) respetando el orden recibido. */
@@ -519,31 +530,46 @@ export class FlashcardService {
   // tarjetas nuevas de toda la oposición, y al subir un temario entero el botón de Inicio
   // mostraba miles de "pendientes" sin saber de qué tema eran. Las nuevas se empiezan ahora
   // desde cada tema, eligiendo cuántas (ver nuevasDeTema).
+  // ⭐ La misma consulta sirve para la lista y para el recuento (auditoría M9). La lógica de acceso
+  // no cambia: sin acceso completo, solo los repasos del Tema 1.
+  private async consultaPendientes(usuarioId: string, oposicionId: string, temaId: string | undefined, conDatos: boolean) {
+    if (!FlashcardService.UUID.test(oposicionId)) return null;
+    if (!(await accesoDeUsuario(this.repasoRepo.manager, usuarioId)).completo) {
+      const temaGratis = await temaGratisDe(this.repasoRepo.manager, usuarioId, oposicionId);
+      if (!temaGratis || (temaId && temaId !== temaGratis)) return null;
+      temaId = temaGratis;
+    }
+    const qb = this.repasoRepo.createQueryBuilder('r');
+    if (conDatos) {
+      qb.innerJoinAndSelect('r.flashcard', 'fc').leftJoinAndSelect('fc.tema', 'tema').leftJoinAndSelect('fc.articulo', 'art');
+    } else {
+      qb.innerJoin('r.flashcard', 'fc');
+    }
+    qb.where('r."usuarioId" = :usuarioId', { usuarioId })
+      .andWhere('r."proximoRepaso" <= :ahora', { ahora: new Date() })
+      .andWhere(sqlVisible('fc', ':opoId', sqlConvDe(':opoId', ':usuarioId')), { opoId: oposicionId });
+    if (temaId && FlashcardService.UUID.test(temaId)) {
+      qb.andWhere(sqlDeTema('fc', ':temaId'), { temaId });
+    }
+    return qb;
+  }
+
   async getPendientesRepaso(usuarioId: string, oposicionId: string, limite = 10, temaId?: string): Promise<Flashcard[]> {
-  const ahora = new Date();
   const tope = Math.max(1, Math.min(200, Math.trunc(limite) || 10));
-  if (!FlashcardService.UUID.test(oposicionId)) return [];
-  // ⭐ Sin acceso completo, solo los repasos del Tema 1
-  if (!(await accesoDeUsuario(this.repasoRepo.manager, usuarioId)).completo) {
-    const temaGratis = await temaGratisDe(this.repasoRepo.manager, usuarioId, oposicionId);
-    if (!temaGratis || (temaId && temaId !== temaGratis)) return [];
-    temaId = temaGratis;
-  }
-  const qb = this.repasoRepo
-    .createQueryBuilder('r')
-    .innerJoinAndSelect('r.flashcard', 'fc')
-    .leftJoinAndSelect('fc.tema', 'tema')
-    .leftJoinAndSelect('fc.articulo', 'art')
-    .where('r."usuarioId" = :usuarioId', { usuarioId })
-    .andWhere('r."proximoRepaso" <= :ahora', { ahora })
-    .andWhere(sqlVisible('fc', ':opoId'), { opoId: oposicionId });
-  if (temaId && FlashcardService.UUID.test(temaId)) {
-    qb.andWhere(sqlDeTema('fc', ':temaId'), { temaId });
-  }
+  const qb = await this.consultaPendientes(usuarioId, oposicionId, temaId, true);
+  if (!qb) return [];
   // Primero las que llevan más tiempo esperando
   const repasos = await qb.orderBy('r."proximoRepaso"', 'ASC').addOrderBy('r.id', 'ASC').limit(tope).getMany();
   return repasos.map((r) => r.flashcard);
 }
+
+  // ⭐ Auditoría M9: Inicio, Practicar y Flashcards descargaban hasta 99 tarjetas completas (con el
+  // texto del artículo) solo para enseñar un número. Ahora piden solo el número.
+  async contarPendientesRepaso(usuarioId: string, oposicionId: string, temaId?: string): Promise<{ total: number }> {
+    const qb = await this.consultaPendientes(usuarioId, oposicionId, temaId, false);
+    if (!qb) return { total: 0 };
+    return { total: await qb.getCount() };
+  }
 
   // Flashcards de cada tema de una convocatoria (directas o por artículo vinculado al tema),
   // oficiales o personales del propio usuario.
@@ -552,14 +578,14 @@ export class FlashcardService {
       FROM temas t
       JOIN convocatorias c ON c.id = t."convocatoriaId"
       JOIN flashcards fc ON fc."temaId" = t.id
-     WHERE t."convocatoriaId" = $1 AND ${sqlVisible('fc', 'c."oposicionId"')}
+     WHERE t."convocatoriaId" = $1 AND ${sqlVisible('fc', 'c."oposicionId"', 'c.id')}
     UNION
     SELECT tn."temaId", fc.id
       FROM temas_normativa tn
       JOIN temas t ON t.id = tn."temaId"
       JOIN convocatorias c ON c.id = t."convocatoriaId"
       JOIN flashcards fc ON fc."articuloId" = tn."articuloId" AND fc."temaId" IS NULL
-     WHERE t."convocatoriaId" = $1 AND ${sqlVisible('fc', 'c."oposicionId"')}`; }
+     WHERE t."convocatoriaId" = $1 AND ${sqlVisible('fc', 'c."oposicionId"', 'c.id')}`; }
 
   /** Por cada tema: cuántas tiene, cuántas ha visto, dominadas y por repasar hoy. Y las nuevas de hoy. */
   async resumenTemas(usuarioId: string, convocatoriaId: string) {
@@ -599,7 +625,7 @@ export class FlashcardService {
          FROM flashcards f
          JOIN temas t ON t.id = $1
          JOIN convocatorias c ON c.id = t."convocatoriaId"
-        WHERE ${sqlDeTema('f', '$1')} AND ${sqlVisible('f', 'c."oposicionId"')}
+        WHERE ${sqlDeTema('f', '$1')} AND ${sqlVisible('f', 'c."oposicionId"', 'c.id')}
           AND NOT EXISTS (SELECT 1 FROM repasos_fc r WHERE r."flashcardId" = f.id AND r."usuarioId" = $2)
         ORDER BY f."creadoEn" ASC, f.id ASC
         LIMIT $3`,
@@ -859,21 +885,26 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string, manage
       if (Number.isNaN(fecha.getTime())) throw new BadRequestException('Fecha de repaso no válida');
     }
 
-    for (const fc of flashcards) {
-      let repaso = await this.repasoRepo.findOne({
-        where: { usuario: { id: usuarioId }, flashcard: { id: fc.id } },
-      });
-
-      if (!repaso) {
-        repaso = this.repasoRepo.create({
-          usuario: { id: usuarioId } as any,
-          flashcard: { id: fc.id } as any,
+    // ⭐ Auditoría M5: mismo bloqueo por usuario y tarjeta que al responder, para que un doble toque
+    // no cree dos repasos de la misma tarjeta (antes: buscar y crear sin bloqueo).
+    await this.repasoRepo.manager.transaction(async (m) => {
+      for (const fc of flashcards) {
+        await m.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`repasofc:${usuarioId}:${fc.id}`]);
+        let repaso = await m.findOne(RepasoFC, {
+          where: { usuario: { id: usuarioId }, flashcard: { id: fc.id } } as any,
         });
-      }
 
-      repaso.proximoRepaso = fecha;
-      await this.repasoRepo.save(repaso);
-    }
+        if (!repaso) {
+          repaso = m.create(RepasoFC, {
+            usuario: { id: usuarioId } as any,
+            flashcard: { id: fc.id } as any,
+          });
+        }
+
+        repaso.proximoRepaso = fecha;
+        await m.save(RepasoFC, repaso);
+      }
+    });
 
     // Notificar
     await this.notificacionService.crear({
@@ -888,20 +919,7 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string, manage
 
   // ─── RETOS FC ────────────────────────────────────────────
 
-  async crearRetoDiarioFC(oposicionId: string): Promise<RetoFC> {
-    // ⭐ Mismo criterio que los duelos: validadas, de la oposición y corregibles (vf/trampa)
-    const flashcards = await this.findParaDuelo(oposicionId, 10);
-
-    const fechaFin = new Date();
-    fechaFin.setHours(23, 59, 59, 999);
-
-    return this.retoFcRepo.save(this.retoFcRepo.create({
-      tipo: TipoRetoFC.DIARIO,
-      flashcards,
-      fechaFin,
-      oposicion: { id: oposicionId } as any,
-    }));
-  }
+  // ⭐ Quitado crearRetoDiarioFC: los retos diarios se retiraron y nadie lo llamaba.
 
   async crearDueloFC(
     retadorId: string,
@@ -929,10 +947,12 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string, manage
       temaId = temaGratis;
     }
 
-    const busqueda = retadoNickOEmail.toLowerCase().trim();
-    let retado = await this.usuarioRepo.findOne({ where: { nick: busqueda } });
-    if (!retado) retado = await this.usuarioRepo.findOne({ where: { email: busqueda } });
-    if (!retado) throw new NotFoundException('Usuario no encontrado con ese nick o email');
+    // ⭐ Solo por nick (auditoría M3): con un email no se revela si la cuenta existe
+    const busqueda = String(retadoNickOEmail ?? '').toLowerCase().trim();
+    const retado = busqueda && !busqueda.includes('@')
+      ? await this.usuarioRepo.findOne({ where: { nick: busqueda } })
+      : null;
+    if (!retado) throw new NotFoundException('No hemos encontrado a nadie con ese nick');
     if (retado.id === retadorId) throw new BadRequestException('No puedes retarte a ti mismo');
 
     const retadorOposicion = await this.usuarioOposicionRepo.findOne({
@@ -988,6 +1008,8 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string, manage
 
     // ⭐ El retador aún no ha jugado: sin soluciones en la respuesta.
     reto.flashcards = (reto.flashcards ?? []).map((fc) => ({ ...fc, respuesta: undefined, explicacion: undefined }) as any);
+    // ⭐ Auditoría M2: la respuesta de crear tampoco trae las tarjetas (se piden al pulsar «Empezar»)
+    (reto as any).flashcards = preguntasOcultas((reto as any).flashcards);
     return reto;
   }
 
@@ -1030,7 +1052,7 @@ async getEstadisticasFCTema(
   // Total de flashcards visibles del tema (validadas y de la oposición)
   const total = await this.fcRepo
     .createQueryBuilder('fc')
-    .where(sqlVisible('fc', ':opoId'), { opoId: oposicionId })
+    .where(sqlVisible('fc', ':opoId', sqlConvDe(':opoId', ':usuarioId')), { opoId: oposicionId, usuarioId })
     .andWhere(sqlDeTema('fc', ':temaId'), { temaId })
     .getCount();
 
@@ -1039,7 +1061,7 @@ async getEstadisticasFCTema(
     .createQueryBuilder('r')
     .innerJoin('r.flashcard', 'fc')
     .where('r."usuarioId" = :usuarioId', { usuarioId })
-    .andWhere(sqlVisible('fc', ':opoId'), { opoId: oposicionId })
+    .andWhere(sqlVisible('fc', ':opoId', sqlConvDe(':opoId', ':usuarioId')), { opoId: oposicionId })
     .andWhere(sqlDeTema('fc', ':temaId'), { temaId })
     .getMany();
 
@@ -1064,7 +1086,7 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
   const inicioMes = new Date(ahora); inicioMes.setDate(ahora.getDate() - 30);
 
   // Todos los repasos del usuario para flashcards de esa oposición
-  const subPeriodo = this.flashcardsDeOposicionQB(oposicionId, 'pfc').select('pfc.id');
+  const subPeriodo = this.flashcardsDeOposicionQB(oposicionId, 'pfc', usuarioId).select('pfc.id');
   const repasos = await this.repasoRepo
     .createQueryBuilder('r')
     .where('r."usuarioId" = :usuarioId', { usuarioId })
@@ -1375,8 +1397,13 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
 
     // ⭐ No se envía la solución de las tarjetas de un duelo que el usuario aún no ha jugado:
     // la corrección es en servidor y así no se puede mirar en la respuesta de red.
+    const empezadosFC = await this.inicioDuelo.empezados('fc', usuarioId, retos.map((r) => r.id));
     for (const r of retos) {
       const completado = r.resultados?.some((x: any) => x.usuario?.id === usuarioId && x.completado);
+      // ⭐ Auditoría M2: las tarjetas, solo después de pulsar «Empezar»
+      if (r.tipo === TipoRetoFC.DUELO && !completado && !empezadosFC.has(r.id)) {
+        r.flashcards = preguntasOcultas(r.flashcards);
+      }
       if (r.tipo === TipoRetoFC.DUELO && !completado) {
         r.flashcards = (r.flashcards ?? []).map((fc) => ({ ...fc, respuesta: undefined, explicacion: undefined }) as any);
         // Las respuestas corregidas del rival también revelan las soluciones
@@ -1396,20 +1423,26 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
    * convocatorias o por artículo de una de sus leyes, también vía Sección). Se usa para el
    * total y como subconsulta para contar solo los repasos de ESA oposición.
    */
-  private flashcardsDeOposicionQB(oposicionId: string, alias = 'fc') {
+  private flashcardsDeOposicionQB(oposicionId: string, alias = 'fc', usuarioId?: string) {
     // ⭐ Mismo criterio único que el resto (validadas y de la oposición, no por ley compartida)
     return this.fcRepo
       .createQueryBuilder(alias)
-      .where(sqlVisible(alias, ':fcOpoId'), { fcOpoId: FlashcardService.UUID.test(oposicionId) ? oposicionId : '00000000-0000-0000-0000-000000000000' });
+      .where(
+        sqlVisible(alias, ':fcOpoId', usuarioId ? sqlConvDe(':fcOpoId', ':fcUsuarioId') : undefined),
+        {
+          fcOpoId: FlashcardService.UUID.test(oposicionId) ? oposicionId : '00000000-0000-0000-0000-000000000000',
+          ...(usuarioId ? { fcUsuarioId: usuarioId } : {}),
+        },
+      );
   }
 
   async getEstadisticasFC(usuarioId: string, oposicionId: string): Promise<any> {
-  const total = await this.flashcardsDeOposicionQB(oposicionId).getCount();
+  const total = await this.flashcardsDeOposicionQB(oposicionId, 'fc', usuarioId).getCount();
 
   // ⭐ Antes se contaban las dominadas/dudosas de TODAS las oposiciones del usuario y el total
   // solo de la activa (salían porcentajes de más del 100%). Ahora solo cuentan los repasos de
   // flashcards de esta oposición.
-  const sub = this.flashcardsDeOposicionQB(oposicionId, 'sfc').select('sfc.id');
+  const sub = this.flashcardsDeOposicionQB(oposicionId, 'sfc', usuarioId).select('sfc.id');
   const filas: { estado: EstadoFC; n: string }[] = await this.repasoRepo
     .createQueryBuilder('r')
     .select('r.estado', 'estado')

@@ -1,7 +1,7 @@
 import { accesoDeUsuario, errorSuscripcion, TEMA_GRATIS } from '../common/helpers/acceso.helper';
 import { Injectable, NotFoundException, BadRequestException, forwardRef  } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Not } from 'typeorm';
 import { ApunteOplora } from './apunte-oplora.entity';
 import { ProgresoLectura } from './progreso-lectura.entity';
 import { createClient } from '@supabase/supabase-js';
@@ -184,11 +184,20 @@ if (tipo === 'pdf') {
      await this.progresoRepo.delete({ apunte: { id } as any });
      await this.subrayadoRepo.delete({ apunte: { id } as any });
 
-    // Extraer path del archivo de la URL
-    const url = new URL(apunte.urlArchivo);
-    const path = url.pathname.split('/apuntes-oplora/')[1];
+    // ⭐ Auditoría M8: «Copiar convocatoria» copia los apuntes con el mismo archivo. Antes, al borrar
+    // uno se borraba el archivo y la copia de la otra convocatoria se quedaba sin él. Ahora el
+    // archivo solo se borra si ningún otro apunte lo usa.
+    const otrosConElMismoArchivo = apunte.urlArchivo
+      ? await this.repo.count({ where: { urlArchivo: apunte.urlArchivo, id: Not(id) } })
+      : 0;
+    let path: string | undefined;
+    try {
+      path = apunte.urlArchivo ? decodeURIComponent(new URL(apunte.urlArchivo).pathname.split('/apuntes-oplora/')[1] ?? '') || undefined : undefined;
+    } catch {
+      path = undefined; // enlace mal guardado: se borra la fila igualmente
+    }
 
-    if (path) {
+    if (path && otrosConElMismoArchivo === 0) {
       await this.supabase.storage
         .from('apuntes-oplora')
         .remove([path]);
@@ -239,6 +248,11 @@ if (tipo === 'pdf') {
 async guardarProgreso(usuarioId: string, apunteId: string, porcentaje: number) {
   if (typeof porcentaje !== 'number' || Number.isNaN(porcentaje) || porcentaje < 0 || porcentaje > 100) {
     throw new BadRequestException('El porcentaje debe ser un número entre 0 y 100');
+  }
+  // ⭐ La columna es entera: con decimales (por ejemplo 33.5) daba error 500
+  porcentaje = Math.round(porcentaje);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(apunteId))) {
+    throw new BadRequestException('Apunte no válido');
   }
 
   const apunte = await this.repo.findOne({ where: { id: apunteId } });

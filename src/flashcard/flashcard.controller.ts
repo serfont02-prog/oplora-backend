@@ -103,6 +103,12 @@ export class FlashcardController {
   return this.service.getEstadisticasFCPorPeriodo(req.user.id, oposicionId);
 }
 
+  // ⭐ Solo el número de repasos que tocan hoy (auditoría M9)
+  @Get('pendientes/:oposicionId/total')
+  contarPendientes(@Param('oposicionId') oposicionId: string, @Query('temaId') temaId: string, @Request() req: any) {
+    return this.service.contarPendientesRepaso(req.user.id, oposicionId, temaId || undefined);
+  }
+
   // ⭐ Solo repasos que tocan hoy (opcionalmente de un tema). Las nuevas van por tema.
   @Get('pendientes/:oposicionId')
 getPendientes(

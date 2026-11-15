@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -290,6 +290,9 @@ async getSubrayados(usuarioId: string, articuloId: string): Promise<SubrayadoArt
   });
 }
 
+// ⭐ Auditoría A12: dos subrayados que se pisaban se guardaban tal cual y la pantalla pintaba el
+// texto repetido. Ahora, al crear uno que toca a otros del mismo usuario en ese artículo, se unen
+// en uno solo (en una transacción, para que dos toques seguidos no dejen subrayados solapados).
 async crearSubrayado(
   usuarioId: string,
   articuloId: string,
@@ -298,14 +301,40 @@ async crearSubrayado(
   textoSeleccionado: string,
   color: string = 'amarillo',
 ): Promise<SubrayadoArticulo> {
-  return this.subrayadoRepo.save(this.subrayadoRepo.create({
-    inicio,
-    fin,
-    textoSeleccionado,
-    color,
-    usuario: { id: usuarioId } as any,
-    articulo: { id: articuloId } as any,
-  }));
+  let ini = Math.trunc(Number(inicio));
+  let final = Math.trunc(Number(fin));
+  if (!Number.isFinite(ini) || !Number.isFinite(final) || ini < 0 || final <= ini) {
+    throw new BadRequestException('Selección no válida');
+  }
+  const colorLimpio = typeof color === 'string' && /^[a-z]{1,20}$/i.test(color) ? color : 'amarillo';
+
+  return this.subrayadoRepo.manager.transaction(async (m) => {
+    await m.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`subrayado:${usuarioId}:${articuloId}`]);
+    const articulo = await m.findOne(Articulo, { where: { id: articuloId }, select: { id: true, contenido: true } });
+    if (!articulo) throw new NotFoundException('Artículo no encontrado');
+    const contenido = articulo.contenido ?? '';
+    final = Math.min(final, contenido.length);
+    if (final <= ini) throw new BadRequestException('Selección no válida');
+
+    const existentes = await m.find(SubrayadoArticulo, {
+      where: { usuario: { id: usuarioId } as any, articulo: { id: articuloId } as any },
+    });
+    const tocados = existentes.filter((s) => s.inicio <= final && s.fin >= ini);
+    for (const s of tocados) {
+      ini = Math.min(ini, s.inicio);
+      final = Math.max(final, Math.min(s.fin, contenido.length));
+    }
+    if (tocados.length) await m.delete(SubrayadoArticulo, tocados.map((s) => s.id));
+
+    return m.save(SubrayadoArticulo, m.create(SubrayadoArticulo, {
+      inicio: ini,
+      fin: final,
+      textoSeleccionado: contenido.slice(ini, final) || String(textoSeleccionado ?? '').slice(0, 20000),
+      color: colorLimpio,
+      usuario: { id: usuarioId } as any,
+      articulo: { id: articuloId } as any,
+    }));
+  });
 }
 
 async borrarSubrayado(id: string, usuarioId: string): Promise<void> {

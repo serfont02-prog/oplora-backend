@@ -276,195 +276,213 @@ async remove(id: string): Promise<void> {
 }
 
 async copiarConvocatoria(id: string): Promise<Convocatoria> {
-  const original = await this.convocatoriaRepo.findOne({
-    where: { id },
-    relations: ['oposicion', 'temas'],
-  });
-  if (!original) throw new NotFoundException('Convocatoria no encontrada');
+  // ⭐ Auditoría A6: toda la copia va en una transacción. Si algo falla, no queda una
+  // convocatoria nueva a medio copiar.
+  return this.convocatoriaRepo.manager.transaction(async (m) => {
+    const convocatoriaRepo = m.getRepository(Convocatoria);
+    const temaRepo = m.getRepository(Tema);
+    const temaNormativaRepo = m.getRepository(TemaNormativa);
+    const flashcardRepo = m.getRepository(Flashcard);
+    const apunteOploraRepo = m.getRepository(ApunteOplora);
+    const notaRepo = m.getRepository(NotaArticulo);
+    const psicotecnicoConfigRepo = m.getRepository(PsicotecnicoConfigOposicion);
 
-  const nueva = await this.convocatoriaRepo.save(this.convocatoriaRepo.create({
-    anyo: original.anyo + 1,
-    plazas: original.plazas,
-    estado: 'borrador' as any,
-    urlOficial: original.urlOficial,
-    turno: original.turno,
-    ejercicios: original.ejercicios,
-    fraccionPenalizacion: original.fraccionPenalizacion,
-    permiteBlancos: original.permiteBlancos,
-    fraccionPenalizacionBlanco: original.fraccionPenalizacionBlanco,
-    notaMinimaAprobado: original.notaMinimaAprobado,
-    requisitos: original.requisitos,
-    formacionPosterior: original.formacionPosterior,
-    descripcionAdicional: original.descripcionAdicional,
-    generaBolsaEmpleo: original.generaBolsaEmpleo,
-    bolsaEmpleoDescripcion: original.bolsaEmpleoDescripcion,
-    plazasDesglose: original.plazasDesglose,
-    fasesAdicionales: original.fasesAdicionales,
-    puestos: original.puestos,
-    bloquesTemario: original.bloquesTemario,
-    fechaConvocatoria: undefined,
-    numeroSolicitudes: undefined,
-    numeroPresentados: undefined,
-    oposicion: { id: original.oposicion.id } as any,
-  }));
+    const original = await convocatoriaRepo.findOne({
+      where: { id },
+      relations: ['oposicion', 'temas'],
+    });
+    if (!original) throw new NotFoundException('Convocatoria no encontrada');
 
-  // Copiar temas
-  const temas = await this.temaRepo.find({
-    where: { convocatoria: { id } },
-    relations: ['normativas', 'normativas.articulo'],
-    order: { numero: 'ASC' },
-  });
-
-  const mapaTemasViejoNuevo: Record<string, string> = {};
-
-  for (const tema of temas) {
-    const nuevoTema = await this.temaRepo.save(this.temaRepo.create({
-      numero: tema.numero,
-      titulo: tema.titulo,
-      tipo: tema.tipo,
-      contexto: tema.contexto,
-      bloque: tema.bloque,
-      convocatoria: { id: nueva.id } as any,
-      claveEstable: tema.claveEstable,
+    const nueva = await convocatoriaRepo.save(convocatoriaRepo.create({
+      anyo: original.anyo + 1,
+      plazas: original.plazas,
+      estado: 'borrador' as any,
+      urlOficial: original.urlOficial,
+      turno: original.turno,
+      ejercicios: original.ejercicios,
+      fraccionPenalizacion: original.fraccionPenalizacion,
+      permiteBlancos: original.permiteBlancos,
+      fraccionPenalizacionBlanco: original.fraccionPenalizacionBlanco,
+      notaMinimaAprobado: original.notaMinimaAprobado,
+      requisitos: original.requisitos,
+      formacionPosterior: original.formacionPosterior,
+      descripcionAdicional: original.descripcionAdicional,
+      generaBolsaEmpleo: original.generaBolsaEmpleo,
+      bolsaEmpleoDescripcion: original.bolsaEmpleoDescripcion,
+      plazasDesglose: original.plazasDesglose,
+      fasesAdicionales: original.fasesAdicionales,
+      puestos: original.puestos,
+      bloquesTemario: original.bloquesTemario,
+      fechaConvocatoria: undefined,
+      numeroSolicitudes: undefined,
+      numeroPresentados: undefined,
+      oposicion: { id: original.oposicion.id } as any,
     }));
-    mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
 
-    // Copiar vinculación de artículos (TemaNormativa)
-    if (tema.normativas?.length) {
-      for (const tn of tema.normativas) {
-        await this.temaNormativaRepo.save(this.temaNormativaRepo.create({
+    // Copiar temas
+    const temas = await temaRepo.find({
+      where: { convocatoria: { id } },
+      relations: ['normativas', 'normativas.articulo', 'normativas.capitulo', 'normativas.titulo', 'normativas.versionLey'],
+      order: { numero: 'ASC' },
+    });
+
+    const mapaTemasViejoNuevo: Record<string, string> = {};
+
+    for (const tema of temas) {
+      const nuevoTema = await temaRepo.save(temaRepo.create({
+        numero: tema.numero,
+        titulo: tema.titulo,
+        tipo: tema.tipo,
+        contexto: tema.contexto,
+        bloque: tema.bloque,
+        convocatoria: { id: nueva.id } as any,
+        claveEstable: tema.claveEstable,
+      }));
+      mapaTemasViejoNuevo[tema.id] = nuevoTema.id;
+
+      // Copiar vinculación de artículos (TemaNormativa)
+      if (tema.normativas?.length) {
+        for (const tn of tema.normativas) {
+          // ⭐ Se copian todos los niveles del vínculo (artículo, capítulo, título o ley entera).
+          // Antes se daba por hecho que siempre había artículo y la copia se rompía a medias.
+          await temaNormativaRepo.save(temaNormativaRepo.create({
+            nivel: tn.nivel,
+            tema: { id: nuevoTema.id } as any,
+            articulo: tn.articulo ? ({ id: tn.articulo.id } as any) : undefined,
+            capitulo: tn.capitulo ? ({ id: tn.capitulo.id } as any) : undefined,
+            titulo: tn.titulo ? ({ id: tn.titulo.id } as any) : undefined,
+            versionLey: tn.versionLey ? ({ id: tn.versionLey.id } as any) : undefined,
+          }));
+        }
+      }
+
+          // Vincular preguntas al tema nuevo (copiando las filas de la tabla intermedia directamente)
+        const preguntasVinculadas = await temaRepo.query(
+          `SELECT "preguntasTestId" FROM preguntas_test_temas_temas WHERE "temasId" = $1`,
+          [tema.id],
+        );
+
+        for (const fila of preguntasVinculadas) {
+          await temaRepo.query(
+            `INSERT INTO preguntas_test_temas_temas ("temasId", "preguntasTestId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+            [nuevoTema.id, fila.preguntasTestId],
+          );
+        }
+
+      // Copiar Flashcards del tema
+      // ⭐ Se cargan artículo y oposición (antes no se cargaban y la copia perdía el enlace al
+      // artículo) y se copian también los campos del estándar de nov 2026.
+      const flashcardsOrigen = await flashcardRepo.find({
+        where: { tema: { id: tema.id } as any },
+        relations: ['articulo', 'oposicion', 'usuario'],
+      });
+      for (const fc of flashcardsOrigen) {
+        if ((fc as any).usuario) continue; // las personales no se copian
+        await flashcardRepo.save(flashcardRepo.create({
+          tipo: fc.tipo,
+          nivel: fc.nivel,
+          pregunta: fc.pregunta,
+          respuesta: fc.respuesta,
+          explicacion: fc.explicacion,
+          esParaDuelo: fc.esParaDuelo,
+          activa: fc.activa,
           tema: { id: nuevoTema.id } as any,
-          articulo: { id: (tn.articulo as any).id } as any,
+          articulo: fc.articulo ? { id: (fc.articulo as any).id } as any : undefined,
+          oposicion: fc.oposicion ? { id: (fc.oposicion as any).id } as any : undefined,
+          estado: fc.estado,
+          bloque: fc.bloque,
+          referencia: fc.referencia,
+          normaSiglas: fc.normaSiglas,
+          articuloNumero: fc.articuloNumero,
+          apartado: fc.apartado,
+          fechaReferencia: fc.fechaReferencia,
+          estructura: fc.estructura,
+          fechaRevision: fc.fechaRevision,
+          fuenteValidacion: fc.fuenteValidacion,
+          motivoObsolescencia: fc.motivoObsolescencia,
+        } as any));
+      }
+
+      // Copiar Apuntes OPLORA del tema
+      const apuntesOrigen = await apunteOploraRepo.find({ where: { tema: { id: tema.id } as any } });
+      for (const ap of apuntesOrigen) {
+        await apunteOploraRepo.save(apunteOploraRepo.create({
+          titulo: ap.titulo,
+          descripcion: ap.descripcion,
+          urlArchivo: ap.urlArchivo,
+          tipo: ap.tipo,
+          orden: ap.orden,
+          contenidoEstructurado: ap.contenidoEstructurado,
+          textoCompleto: ap.textoCompleto,
+          activo: ap.activo,
+          versionLeyId: ap.versionLeyId,
+          paginas: ap.paginas,
+          tamanoBytes: ap.tamanoBytes,
+          versionParser: ap.versionParser,
+          tema: { id: nuevoTema.id } as any,
+        } as any));
+      }
+    }
+
+    // Copiar datos de usuarios — notas de temas
+    for (const [temaViejoId, temaNuevoId] of Object.entries(mapaTemasViejoNuevo)) {
+      const notas = await notaRepo.find({
+        where: { tema: { id: temaViejoId } } as any,
+        relations: ['usuario'],
+      });
+      for (const nota of notas) {
+        await notaRepo.save(notaRepo.create({
+          contenido: nota.contenido,
+          fechaRepaso: nota.fechaRepaso,
+          usuario: { id: (nota.usuario as any).id } as any,
+          tema: { id: temaNuevoId } as any,
         }));
       }
     }
 
-        // Vincular preguntas al tema nuevo (copiando las filas de la tabla intermedia directamente)
-      const preguntasVinculadas = await this.temaRepo.query(
-        `SELECT "preguntasTestId" FROM preguntas_test_temas_temas WHERE "temasId" = $1`,
-        [tema.id],
-      );
-
-      for (const fila of preguntasVinculadas) {
-        await this.temaRepo.query(
-          `INSERT INTO preguntas_test_temas_temas ("temasId", "preguntasTestId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-          [nuevoTema.id, fila.preguntasTestId],
-        );
-      }
-
-    // Copiar Flashcards del tema
-    // ⭐ Se cargan artículo y oposición (antes no se cargaban y la copia perdía el enlace al
-    // artículo) y se copian también los campos del estándar de nov 2026.
-    const flashcardsOrigen = await this.flashcardRepo.find({
-      where: { tema: { id: tema.id } as any },
-      relations: ['articulo', 'oposicion', 'usuario'],
+    // Copiar overrides de psicotécnicos específicos de esta convocatoria (si los hay).
+    // La config "por defecto" de la oposición (convocatoria = null) ya se aplica sola a
+    // la nueva convocatoria sin copiar nada; esto solo traslada excepciones puntuales.
+    const configsConvocatoria = await psicotecnicoConfigRepo.find({
+      where: { convocatoria: { id: original.id } as any },
     });
-    for (const fc of flashcardsOrigen) {
-      if ((fc as any).usuario) continue; // las personales no se copian
-      await this.flashcardRepo.save(this.flashcardRepo.create({
-        tipo: fc.tipo,
-        nivel: fc.nivel,
-        pregunta: fc.pregunta,
-        respuesta: fc.respuesta,
-        explicacion: fc.explicacion,
-        esParaDuelo: fc.esParaDuelo,
-        activa: fc.activa,
-        tema: { id: nuevoTema.id } as any,
-        articulo: fc.articulo ? { id: (fc.articulo as any).id } as any : undefined,
-        oposicion: fc.oposicion ? { id: (fc.oposicion as any).id } as any : undefined,
-        estado: fc.estado,
-        bloque: fc.bloque,
-        referencia: fc.referencia,
-        normaSiglas: fc.normaSiglas,
-        articuloNumero: fc.articuloNumero,
-        apartado: fc.apartado,
-        fechaReferencia: fc.fechaReferencia,
-        estructura: fc.estructura,
-        fechaRevision: fc.fechaRevision,
-        fuenteValidacion: fc.fuenteValidacion,
-        motivoObsolescencia: fc.motivoObsolescencia,
-      } as any));
-    }
-
-    // Copiar Apuntes OPLORA del tema
-    const apuntesOrigen = await this.apunteOploraRepo.find({ where: { tema: { id: tema.id } as any } });
-    for (const ap of apuntesOrigen) {
-      await this.apunteOploraRepo.save(this.apunteOploraRepo.create({
-        titulo: ap.titulo,
-        descripcion: ap.descripcion,
-        urlArchivo: ap.urlArchivo,
-        tipo: ap.tipo,
-        orden: ap.orden,
-        contenidoEstructurado: ap.contenidoEstructurado,
-        textoCompleto: ap.textoCompleto,
-        activo: ap.activo,
-        versionLeyId: ap.versionLeyId,
-        paginas: ap.paginas,
-        tamanoBytes: ap.tamanoBytes,
-        versionParser: ap.versionParser,
-        tema: { id: nuevoTema.id } as any,
-      } as any));
-    }
-  }
-
-  // Copiar datos de usuarios — notas de temas
-  for (const [temaViejoId, temaNuevoId] of Object.entries(mapaTemasViejoNuevo)) {
-    const notas = await this.notaRepo.find({
-      where: { tema: { id: temaViejoId } } as any,
-      relations: ['usuario'],
-    });
-    for (const nota of notas) {
-      await this.notaRepo.save(this.notaRepo.create({
-        contenido: nota.contenido,
-        fechaRepaso: nota.fechaRepaso,
-        usuario: { id: (nota.usuario as any).id } as any,
-        tema: { id: temaNuevoId } as any,
+    for (const cfg of configsConvocatoria) {
+      await psicotecnicoConfigRepo.save(psicotecnicoConfigRepo.create({
+        tipo: cfg.tipo,
+        habilitado: cfg.habilitado,
+        oficial: cfg.oficial,
+        subtiposHabilitados: cfg.subtiposHabilitados,
+        dificultadesDisponibles: cfg.dificultadesDisponibles,
+        oposicion: { id: original.oposicion.id } as any,
+        convocatoria: { id: nueva.id } as any,
       }));
     }
-  }
 
-  // Copiar overrides de psicotécnicos específicos de esta convocatoria (si los hay).
-  // La config "por defecto" de la oposición (convocatoria = null) ya se aplica sola a
-  // la nueva convocatoria sin copiar nada; esto solo traslada excepciones puntuales.
-  const configsConvocatoria = await this.psicotecnicoConfigRepo.find({
-    where: { convocatoria: { id: original.id } as any },
-  });
-  for (const cfg of configsConvocatoria) {
-    await this.psicotecnicoConfigRepo.save(this.psicotecnicoConfigRepo.create({
-      tipo: cfg.tipo,
-      habilitado: cfg.habilitado,
-      oficial: cfg.oficial,
-      subtiposHabilitados: cfg.subtiposHabilitados,
-      dificultadesDisponibles: cfg.dificultadesDisponibles,
-      oposicion: { id: original.oposicion.id } as any,
-      convocatoria: { id: nueva.id } as any,
-    }));
-  }
-
-  // Copiar ENLACES pregunta psicotécnica ↔ convocatoria (igual que con el banco de
-  // Test/Tema): se vincula la MISMA pregunta a la convocatoria nueva, no se duplica.
-  // Si luego el admin la desvincula/edita solo para la convocatoria nueva, la vieja
-  // no se entera. Las preguntas "globales" (sin convocatorias) no necesitan copia,
-  // ya aplican solas a cualquier convocatoria de la oposición.
-  const preguntasPsicoVinculadas = await this.temaRepo.query(
-    `SELECT "preguntaId" FROM preguntas_psicotecnicas_convocatorias WHERE "convocatoriaId" = $1`,
-    [original.id],
-  );
-  for (const fila of preguntasPsicoVinculadas) {
-    await this.temaRepo.query(
-      `INSERT INTO preguntas_psicotecnicas_convocatorias ("preguntaId", "convocatoriaId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-      [fila.preguntaId, nueva.id],
+    // Copiar ENLACES pregunta psicotécnica ↔ convocatoria (igual que con el banco de
+    // Test/Tema): se vincula la MISMA pregunta a la convocatoria nueva, no se duplica.
+    // Si luego el admin la desvincula/edita solo para la convocatoria nueva, la vieja
+    // no se entera. Las preguntas "globales" (sin convocatorias) no necesitan copia,
+    // ya aplican solas a cualquier convocatoria de la oposición.
+    const preguntasPsicoVinculadas = await temaRepo.query(
+      `SELECT "preguntaId" FROM preguntas_psicotecnicas_convocatorias WHERE "convocatoriaId" = $1`,
+      [original.id],
     );
-  }
+    for (const fila of preguntasPsicoVinculadas) {
+      await temaRepo.query(
+        `INSERT INTO preguntas_psicotecnicas_convocatorias ("preguntaId", "convocatoriaId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [fila.preguntaId, nueva.id],
+      );
+    }
 
-  // ⭐ Programar notificación diferida (1 hora), en vez de notificar inmediatamente
-  await this.convocatoriaRepo.update(nueva.id, {
-    notificarCambioEn: new Date(Date.now() + 60 * 60 * 1000),
-    notificacionCambioEnviada: false,
-    convocatoriaOrigenId: original.id,
-  } as any);
+    // ⭐ Programar notificación diferida (1 hora), en vez de notificar inmediatamente
+    await convocatoriaRepo.update(nueva.id, {
+      notificarCambioEn: new Date(Date.now() + 60 * 60 * 1000),
+      notificacionCambioEnviada: false,
+      convocatoriaOrigenId: original.id,
+    } as any);
 
-  return nueva;
+    return nueva;
+  });
 }
 
 private readonly plantillasNoticia = PLANTILLAS_NOTICIA_DOCUMENTO;

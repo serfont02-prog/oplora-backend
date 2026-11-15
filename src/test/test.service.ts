@@ -103,6 +103,8 @@ export interface Pregunta {
   fuente?: string;
 }
 
+const ES_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 @Injectable()
 export class TestService {
 
@@ -686,8 +688,12 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
   if (Date.now() - new Date(sesion.creadoEn).getTime() > CADUCIDAD_SESION_MS) {
     throw new BadRequestException('El test ha caducado. Empieza uno nuevo.');
   }
-  if (sesion.modo === 'primer_reto') datos.tipoTest = 'primer_reto';
-  else if (datos.tipoTest === 'primer_reto') datos.tipoTest = sesion.modo ?? 'rapido';
+  // ⭐ Auditoría A1/M14: el tipo de test y la oposición son los de la sesión que sirvió el servidor,
+  // no los que manda la app al terminar (antes se podía apuntar el resultado y los puntos a otra
+  // oposición o cambiar el tipo, y un id mal formado daba un error 500).
+  datos.tipoTest = sesion.modo ?? 'rapido';
+  datos.oposicionId = sesion.oposicionId ?? datos.oposicionId;
+  if (!ES_UUID.test(String(datos.oposicionId ?? ''))) throw new BadRequestException('Oposición no válida');
   datos.tiempoSegundos = Math.max(0, Math.trunc(Number(datos.tiempoSegundos)) || 0);
 
   // Primera respuesta enviada para cada pregunta de la sesión (las demás se ignoran)
@@ -724,6 +730,10 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
       articuloId: real?.articulos?.[0]?.id ?? d.articuloId ?? null,
     };
   });
+
+  // El tema del resultado solo vale si es uno de los temas de las preguntas servidas
+  const temasDeLaSesion = new Set(detalleVerificado.flatMap((d) => d.temaIds as string[]));
+  if (!datos.temaId || !temasDeLaSesion.has(datos.temaId)) datos.temaId = undefined;
 
   const totalPreguntasVerificado = detalleVerificado.length;
   const correctasVerificadas = detalleVerificado.filter(

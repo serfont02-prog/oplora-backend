@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, OneToMany, Index } from 'typeorm';
 import { Articulo } from '../normativa/articulo.entity';
 import { Tema } from '../tema/tema.entity';
 import { Oposicion } from '../oposicion/oposicion.entity';
@@ -35,6 +35,10 @@ export enum NivelFlashcard {
   ALTO = 'alto',
 }
 
+// ⭐ Auditoría M9: índices por tema, oposición y artículo (todas las listas de flashcards filtran por ellos)
+@Index(['tema'])
+@Index(['oposicion'])
+@Index(['articulo'])
 @Entity('flashcards')
 export class Flashcard {
   @PrimaryGeneratedColumn('uuid')

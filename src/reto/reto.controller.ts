@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Body, Param, Query, UseGuards, Request, Delete } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { RetoService } from './reto.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -12,6 +13,8 @@ export class RetoController {
 
   // ⭐ Reto diario y semanal retirados: los sustituirán la Liga Oplora y el test del día.
 
+  // ⭐ 20 búsquedas por minuto (auditoría M3)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Get('validar-destinatario')
 validarDestinatario(
   @Query('nickOEmail') nickOEmail: string,

@@ -2,7 +2,7 @@ import { exigirAccesoCompleto } from '../common/helpers/acceso.helper';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
 import { registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
-import { InicioDueloService } from '../duelo/inicio-duelo.service';
+import { InicioDueloService, preguntasOcultas } from '../duelo/inicio-duelo.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull } from 'typeorm';
 import { PsicotecnicoConfigOposicion } from './psicotecnico-config-oposicion.entity';
@@ -411,8 +411,12 @@ export class PsicotecnicoService {
     }[];
     tiempoSegundos?: number;
   }) {
+    // ⭐ Lista vacía, mal formada o con ids que no son UUID: 400 en vez de error 500
+    if (!Array.isArray(datos.respuestas)) throw new BadRequestException('Respuestas no válidas');
+    const esId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    datos.respuestas = datos.respuestas.filter((r) => r && esId.test(String(r.preguntaId))).slice(0, 300);
     const ids = datos.respuestas.map((r) => r.preguntaId);
-    const preguntas = await this.preguntaRepo.find({ where: { id: In(ids) } });
+    const preguntas = ids.length ? await this.preguntaRepo.find({ where: { id: In(ids) } }) : [];
     const mapaPreguntas = new Map(preguntas.map((p) => [p.id, p]));
 
     let correctas = 0;
@@ -443,8 +447,9 @@ export class PsicotecnicoService {
       if (esCorrecta) correctas++;
 
       if (pregunta) {
-        this.preguntaRepo.increment({ id: pregunta.id }, esCorrecta ? 'aciertos' : 'fallos', 1);
-        this.preguntaRepo.increment({ id: pregunta.id }, 'vecesUsada', 1);
+        // ⭐ Con `catch`: antes, si la base de datos fallaba aquí, el error no lo recogía nadie
+        void this.preguntaRepo.increment({ id: pregunta.id }, esCorrecta ? 'aciertos' : 'fallos', 1).catch(() => null);
+        void this.preguntaRepo.increment({ id: pregunta.id }, 'vecesUsada', 1).catch(() => null);
       }
 
       return { preguntaId: r.preguntaId, correcta: esCorrecta, tiempoMs: r.tiempoMs };
@@ -466,7 +471,12 @@ export class PsicotecnicoService {
     // El primer intento no cuenta como "mejor marca"; después, solo si supera la anterior.
     const esMejorMarca = !!mejorAnterior && porcentaje > mejorAnterior.porcentaje;
 
-    await registrarDiaDeEstudio(this.resultadoRepo.manager, datos.usuarioId); // ⭐ cuenta para la racha
+    // ⭐ Auditoría M4: solo cuenta para la racha si se ha contestado al menos una pregunta que
+    // existe (antes bastaba con enviar la lista vacía).
+    const contestadas = datos.respuestas.filter(
+      (r) => mapaPreguntas.has(r.preguntaId) && (r.respuesta != null || r.respuestaTexto != null),
+    ).length;
+    if (contestadas > 0) await registrarDiaDeEstudio(this.resultadoRepo.manager, datos.usuarioId);
     const resultado = await this.resultadoRepo.save(
       this.resultadoRepo.create({
         tipo: datos.tipo,
@@ -738,10 +748,12 @@ export class PsicotecnicoService {
     const retador = await this.usuarioRepo.findOne({ where: { id: retadorId } });
     if (!retador) throw new NotFoundException('Retador no encontrado');
 
-    const busqueda = retadoNickOEmail.toLowerCase().trim();
-    let retado = await this.usuarioRepo.findOne({ where: { nick: busqueda } });
-    if (!retado) retado = await this.usuarioRepo.findOne({ where: { email: busqueda } });
-    if (!retado) throw new NotFoundException('Usuario no encontrado con ese nick o email');
+    // ⭐ Solo por nick (auditoría M3): con un email no se revela si la cuenta existe
+    const busqueda = String(retadoNickOEmail ?? '').toLowerCase().trim();
+    const retado = busqueda && !busqueda.includes('@')
+      ? await this.usuarioRepo.findOne({ where: { nick: busqueda } })
+      : null;
+    if (!retado) throw new NotFoundException('No hemos encontrado a nadie con ese nick');
     if (retado.id === retadorId) throw new BadRequestException('No puedes retarte a ti mismo');
 
     // Mismo bloque de validación "vinculado a la oposición + misma convocatoria
@@ -836,6 +848,8 @@ export class PsicotecnicoService {
       urlAccion: `/app/retos/psico/${reto.id}`,
     });
 
+    // ⭐ Auditoría M2: la respuesta de crear tampoco trae las preguntas (se piden al pulsar «Empezar»)
+    (reto as any).preguntas = preguntasOcultas((reto as any).preguntas);
     return reto;
   }
 
@@ -1141,8 +1155,11 @@ export class PsicotecnicoService {
     }
 
     // ⭐ Las respuestas corregidas del rival revelan las soluciones: fuera si aún no has terminado.
+    const empezadosPsico = await this.inicioDuelo.empezados('psico', usuarioId, retos.map((r) => r.id));
     for (const r of retos) {
       const yoTerminado = r.resultados?.some((x: any) => x.usuario?.id === usuarioId && x.completado);
+      // ⭐ Auditoría M2: las preguntas, solo después de pulsar «Empezar»
+      if (!yoTerminado && !empezadosPsico.has(r.id)) r.preguntas = preguntasOcultas(r.preguntas) as any;
       for (const x of r.resultados ?? []) {
         if ((x.usuario as any)?.id !== usuarioId) {
           (x as any).parciales = undefined;

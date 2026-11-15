@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { registrarDiaDeEstudio } from '../common/helpers/consumo.helper';
-import { InicioDueloService } from '../duelo/inicio-duelo.service';
+import { InicioDueloService, preguntasOcultas } from '../duelo/inicio-duelo.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull } from 'typeorm';
 import { Reto, TipoReto, EstadoReto } from './reto.entity';
@@ -16,18 +16,7 @@ import { ConfiguracionService } from '../config/configuracion.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { SorteoReto } from './sorteo-reto.entity';
-
-/** "1/3" → 0.333…, "0,25" → 0.25, vacío → 0 */
-function parseFraccionReto(f: string | null | undefined): number {
-  if (f == null || String(f).trim() === '') return 0;
-  const s = String(f).trim().replace(',', '.');
-  if (s.includes('/')) {
-    const [a, b] = s.split('/').map(Number);
-    return b ? a / b : 0;
-  }
-  const n = Number(s);
-  return Number.isFinite(n) ? n : 0;
-}
+import { parseFraccion } from '../common/helpers/penalizacion.helper';
 
 /** Nota del duelo (participaciones antiguas sin puntuación: su % de acierto sobre 10). */
 const notaDe = (p: { puntuacion?: number | null; porcentaje?: number | null }) =>
@@ -187,9 +176,12 @@ async crearRetoUsuario(
   if (!retador) throw new NotFoundException('Retador no encontrado');
 
   // Buscar retado por nick o email
-  let retado = await this.usuarioRepo.findOne({ where: { nick: retadoNickOEmail.toLowerCase().trim() } });
-  if (!retado) retado = await this.usuarioRepo.findOne({ where: { email: retadoNickOEmail.toLowerCase().trim() } });
-  if (!retado) throw new NotFoundException('Usuario no encontrado con ese nick o email');
+  // ⭐ Solo por nick (auditoría M3): con un email no se revela si la cuenta existe
+  const nickBuscado = String(retadoNickOEmail ?? '').toLowerCase().trim();
+  const retado = nickBuscado && !nickBuscado.includes('@')
+    ? await this.usuarioRepo.findOne({ where: { nick: nickBuscado } })
+    : null;
+  if (!retado) throw new NotFoundException('No hemos encontrado a nadie con ese nick');
   if (retado.id === retadorId) throw new BadRequestException('No puedes retarte a ti mismo');
 
   // ⭐ Verificar misma oposición y convocatoria
@@ -226,7 +218,8 @@ async crearRetoUsuario(
   );
   if (!preguntas.length) throw new BadRequestException('No hay preguntas disponibles para este reto');
 
-   const horasPlazoFinal = horasPlazo && horasPlazo > 0 ? horasPlazo : 48;
+   // ⭐ Con tope de 14 días, como los duelos de flashcards y psicotécnicos (antes sin tope)
+   const horasPlazoFinal = Number(horasPlazo) > 0 ? Math.min(Math.trunc(Number(horasPlazo)), 24 * 14) : 48;
    const fechaFin = new Date();
     fechaFin.setHours(fechaFin.getHours() + horasPlazoFinal);
 
@@ -273,6 +266,8 @@ async crearRetoUsuario(
 
     // ⭐ El creador todavía no ha jugado: no se le devuelven las soluciones.
     this.ocultarSoluciones(retoGuardado, retadorId, false);
+    // ⭐ Auditoría M2: la respuesta de crear tampoco trae las preguntas (se piden al pulsar «Empezar»)
+    (retoGuardado as any).preguntas = preguntasOcultas((retoGuardado as any).preguntas);
     return retoGuardado;
   }
 
@@ -378,8 +373,8 @@ async completarReto(
     relations: ['convocatoriaActiva'],
   });
   const conv = uoPen?.convocatoriaActiva;
-  const fraccion = parseFraccionReto(conv?.fraccionPenalizacion);
-  const fraccionBlanco = conv?.permiteBlancos === false ? parseFraccionReto(conv?.fraccionPenalizacionBlanco) : 0;
+  const fraccion = parseFraccion(conv?.fraccionPenalizacion);
+  const fraccionBlanco = conv?.permiteBlancos === false ? parseFraccion(conv?.fraccionPenalizacionBlanco) : 0;
   const puntuacion = Math.round(Math.max(0, ((correctas - fallos * fraccion - blancos * fraccionBlanco) / total) * 10) * 100) / 100;
 
   // ⭐ El tiempo que desempata lo mide el servidor (desde que pulsó "Empezar"); el que manda el
@@ -389,6 +384,7 @@ async completarReto(
     (await this.inicioDuelo.tiempoMs('test', reto.id, usuarioId, reto.creadoEn)) / 1000,
   );
 
+  // (el doble envío ya lo corta la guarda de arriba, que marca completado antes de corregir)
   await this.participacionRepo.update(participacion.id, {
     completado: true,
     porcentaje,
@@ -407,9 +403,18 @@ async completarReto(
 
    // Verificar si todos han completado (el cierre con ganador/perdedor solo aplica a duelos entre usuarios;
   // los retos diario/semanal comparten cohortes grandes y no deben cerrarse como si fueran un duelo 1 a 1)
-  const todasCompletadas = reto.participaciones.every(
-    (p) => p.id === participacion.id || p.completado
-  );
+  // ⭐ Auditoría M1: se vuelve a contar DESPUÉS de guardar. Antes se miraba la lista leída al
+  // principio: si los dos terminaban a la vez, cada uno veía al otro «sin completar» y el duelo
+  // se quedaba abierto hasta caducar, sin ganador ni puntos.
+  // Cuenta como pendiente quien aún no ha enviado y también quien ya pasó la guarda pero todavía
+  // no ha guardado su nota (porcentaje vacío): así nunca se cierra con la nota del rival a medias.
+  const sinCompletar = await this.participacionRepo.count({
+    where: [
+      { reto: { id: reto.id }, completado: false },
+      { reto: { id: reto.id }, porcentaje: IsNull() },
+    ],
+  });
+  const todasCompletadas = sinCompletar === 0;
 
   if (todasCompletadas && reto.tipo === TipoReto.USUARIO) {
     await this.cerrarRetoUsuario(reto);
@@ -433,7 +438,13 @@ async completarReto(
     relations: ['usuario'],
   })).sort((a, b) => notaDe(b) - notaDe(a) || (a.tiempoSegundos ?? 0) - (b.tiempoSegundos ?? 0));
 
-  await this.retoRepo.update(reto.id, { estado: EstadoReto.COMPLETADO });
+  // ⭐ Guarda atómica: solo cierra (y reparte posiciones, avisos y puntos) la primera petición
+  // que consigue pasar el duelo a «completado». Si las dos llegan a la vez, la otra no repite.
+  const cierre = await this.retoRepo.update(
+    { id: reto.id, estado: Not(EstadoReto.COMPLETADO) },
+    { estado: EstadoReto.COMPLETADO },
+  );
+  if (!cierre.affected) return;
 
   if (participaciones.length < 2) return;
 
@@ -585,12 +596,32 @@ async completarReto(
     }
   }
 
+  const empezados = await this.inicioDuelo.empezados(
+    'test', usuarioId, participaciones.filter((p) => !p.completado && p.reto).map((p) => p.reto.id),
+  );
+  // ⭐ Auditoría M9: los niveles de todos los participantes en una sola consulta (antes, una por
+  // participante y duelo: unas 600 consultas al abrir la lista).
+  const pares = participaciones.flatMap((p) =>
+    (p.reto?.participaciones ?? []).map((x) => [(x.usuario as any)?.id, (p.reto?.oposicion as any)?.id]),
+  ).filter(([u, o]) => u && o);
+  const niveles = new Map<string, number>();
+  if (pares.length) {
+    const filas: { u: string; o: string; nivel: number }[] = await this.usuarioOposicionRepo.query(
+      `SELECT usuario_id AS u, oposicion_id AS o, nivel FROM usuario_oposiciones
+        WHERE (usuario_id, oposicion_id) IN (SELECT * FROM unnest($1::uuid[], $2::uuid[]))`,
+      [pares.map((x) => x[0]), pares.map((x) => x[1])],
+    );
+    for (const f of filas) niveles.set(`${f.u}:${f.o}`, f.nivel);
+  }
   for (const p of participaciones) {
-    if (p.reto?.oposicion?.id) {
-      await this.enriquecerNivelesParticipantes(p.reto, (p.reto.oposicion as any).id);
+    const opoId = (p.reto?.oposicion as any)?.id;
+    for (const x of p.reto?.participaciones ?? []) {
+      if ((x.usuario as any)?.id && opoId) (x.usuario as any).nivel = niveles.get(`${(x.usuario as any).id}:${opoId}`) ?? 1;
     }
     // ⭐ Sin soluciones mientras no haya jugado
     this.ocultarSoluciones(p.reto, usuarioId, p.completado);
+    // ⭐ Auditoría M2: y sin preguntas hasta pulsar «Empezar»
+    if (p.reto && !p.completado && !empezados.has(p.reto.id)) p.reto.preguntas = preguntasOcultas(p.reto.preguntas) as any;
   }
 
   return participaciones;
@@ -616,6 +647,10 @@ async completarReto(
 
     // No exponer las soluciones hasta que el usuario haya completado su participación.
     this.ocultarSoluciones(reto, usuarioId, !!miParticipacion?.completado);
+    // ⭐ Auditoría M2: las preguntas, solo después de pulsar «Empezar» (o una vez terminado)
+    if (!miParticipacion?.completado && !(await this.inicioDuelo.empezados('test', usuarioId, [reto.id])).has(reto.id)) {
+      reto.preguntas = preguntasOcultas(reto.preguntas) as any;
+    }
 
     return this.enriquecerNivelesParticipantes(reto, (reto.oposicion as any).id);
   }
@@ -807,8 +842,12 @@ private async enriquecerNivelesParticipantes(reto: Reto, oposicionId: string): P
 
 // Backend — nuevo endpoint
 async validarDestinatarioReto(retadorId: string, nickOEmail: string, oposicionId: string) {
-  let retado = await this.usuarioRepo.findOne({ where: { nick: nickOEmail.toLowerCase().trim() } });
-  if (!retado) retado = await this.usuarioRepo.findOne({ where: { email: nickOEmail.toLowerCase().trim() } });  
+  // ⭐ Auditoría M3: el rival se busca solo por nick. Antes también por email, y cualquiera podía
+  // comprobar si un correo tenía cuenta (y ver su nick). Con un email la respuesta es la misma
+  // exista o no la cuenta; para esos casos está «Invitar por email».
+  const buscado = String(nickOEmail ?? '').toLowerCase().trim();
+  if (!buscado || buscado.length > 60 || buscado.includes('@')) return { encontrado: false };
+  const retado = await this.usuarioRepo.findOne({ where: { nick: buscado } });
 
   if (!retado) {
     return { encontrado: false };

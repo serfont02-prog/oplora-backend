@@ -1,5 +1,6 @@
 import { EstadoConvocatoria, TipoEjercicio, TurnoEnum } from './convocatoria.entity';
-import { IsArray, IsBoolean, IsEnum, IsNumber, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsNumber, IsObject, IsOptional, IsString, Matches } from 'class-validator';
+import { FORMATO_PENALIZACION } from '../common/helpers/penalizacion.helper';
 
 export class CreateConvocatoriaDto {
   @IsNumber()
@@ -67,10 +68,12 @@ export class CreateConvocatoriaDto {
 
   @IsOptional()
   @IsString()
+  @Matches(FORMATO_PENALIZACION, { message: 'La penalización debe ser una fracción (1/3) o un número (0,33)' })
   fraccionPenalizacion?: string;
 
   @IsOptional()
   @IsString()
+  @Matches(FORMATO_PENALIZACION, { message: 'La penalización debe ser una fracción (1/3) o un número (0,33)' })
   fraccionPenalizacionBlanco?: string;
 
   @IsOptional()
@@ -220,10 +223,12 @@ export class UpdateConvocatoriaDto {
 
   @IsOptional()
   @IsString()
+  @Matches(FORMATO_PENALIZACION, { message: 'La penalización debe ser una fracción (1/3) o un número (0,33)' })
   fraccionPenalizacion?: string;
 
   @IsOptional()
   @IsString()
+  @Matches(FORMATO_PENALIZACION, { message: 'La penalización debe ser una fracción (1/3) o un número (0,33)' })
   fraccionPenalizacionBlanco?: string;
 
   @IsOptional()

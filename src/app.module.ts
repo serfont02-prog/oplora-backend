@@ -60,7 +60,13 @@
       password: config.get('DB_PASSWORD'),
       database: config.get('DB_NAME'),
       entities: [__dirname + '/**/*.entity{.ts,.js}'],
-      synchronize: true, // solo en desarrollo
+      // ⭐ Auditoría A11: preparado para migraciones. Mientras no se ponga DB_SYNCHRONIZE=false,
+      // todo sigue igual que antes (synchronize encendido). Con DB_SYNCHRONIZE=false el esquema
+      // solo cambia con migraciones; DB_MIGRATIONS_RUN=true las ejecuta al arrancar.
+      migrations: [__dirname + '/migrations/*{.ts,.js}'],
+      migrationsTableName: 'migraciones',
+      synchronize: config.get('DB_SYNCHRONIZE') !== 'false',
+      migrationsRun: config.get('DB_MIGRATIONS_RUN') === 'true',
     };
   },
 }),

@@ -8,6 +8,8 @@ import { InvitacionService } from './invitacion.service';
 export class InvitacionController {
   constructor(private readonly service: InvitacionService) {}
 
+  // ⭐ 10 comprobaciones por minuto (auditoría M3): esta ruta dice si un email ya tiene cuenta
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Get('estado')
   estado(@Query('destino') destino: string, @Query('oposicionId') oposicionId: string, @Request() req: any) {
     return this.service.estado(req.user.id, destino, oposicionId);
