@@ -19,6 +19,8 @@ import { Convocatoria } from '../convocatoria/convocatoria.entity';
 import { VersionLey } from '../ley/version-ley.entity';
 import { ExamenOficialService } from './examen-oficial.service';
 import { ExamenOficialController } from './examen-oficial.controller';
+import { ImportacionTestService } from './importacion-test.service';
+import { ImportacionTestController } from './importacion-test.controller';
 
 @Module({
   imports: [
@@ -43,8 +45,8 @@ import { ExamenOficialController } from './examen-oficial.controller';
     forwardRef(() => TemaModule), 
   ],
 
-  controllers: [TestController, ExamenOficialController],
-  providers: [TestService, ExamenOficialService],
+  controllers: [TestController, ExamenOficialController, ImportacionTestController],
+  providers: [TestService, ExamenOficialService, ImportacionTestService],
   exports: [TestService],
 })
 export class TestModule {}
