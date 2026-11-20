@@ -5,9 +5,13 @@ import { VersionLey } from './version-ley.entity';
 import { Articulo } from '../normativa/articulo.entity';
 import { Disposicion } from '../normativa/disposicion.entity';
 import { SubrayadoArticulo } from '../normativa/subrayado-articulo.entity';
+import { Seccion } from '../normativa/seccion.entity';
+import { Capitulo } from '../normativa/capitulo.entity';
+import { Titulo } from '../normativa/titulo.entity';
 import { claveArticulo, normalizarContenido, relocalizarFragmento } from './texto-legal.util';
 
-interface ArticuloJson { numero: string; titulo?: string | null; contenido: string; ruta?: string }
+type NodoJson = { numero?: string | null; nombre?: string | null };
+interface ArticuloJson { numero: string; titulo?: string | null; contenido: string; ruta?: string; nodos?: { titulo?: NodoJson; capitulo?: NodoJson; seccion?: NodoJson } }
 /** Dónde cuelga un artículo de la app: exactamente uno de los tres. */
 type Contenedor = { campo: 'seccion' | 'capitulo' | 'tituloRef'; id: string };
 interface DisposicionJson { categoria: string; etiqueta?: string | null; contenido: string }
@@ -27,6 +31,8 @@ export interface ResultadoActualizacion {
   };
   disposiciones: { aCambiar: number; sinCambios: number; nuevas: number; soloEnApp: string[] };
   subrayados: { recolocados: number; noEncontrados: number };
+  // ⭐ Títulos, capítulos y secciones cuyo número o nombre cambia (p. ej. "2.ª" «bis De la…» → "2.ª bis" «De la…»)
+  estructura: { aCambiar: number; cambios: string[] };
   muestras: { numero: string; antes: string; despues: string }[];
 }
 
@@ -75,6 +81,7 @@ export class SincronizacionTextoService {
       articulos: { enApp: articulosBd.length, enJson: articulosJson.length, aCambiar: 0, sinCambios: 0, rubricasCambiadas: 0, soloEnApp: [], soloEnJson: [], creados: [] },
       disposiciones: { aCambiar: 0, sinCambios: 0, nuevas: 0, soloEnApp: [] },
       subrayados: { recolocados: 0, noEncontrados: 0 },
+      estructura: { aCambiar: 0, cambios: [] },
       muestras: [],
     };
 
@@ -108,6 +115,7 @@ export class SincronizacionTextoService {
     // que su vecino del JSON, justo detrás del anterior (o delante del siguiente). Solo si el vecino
     // está en el mismo sitio de la estructura en el JSON; si no, se avisa y no se crean.
     const nuevosArt = this.planificarNuevos(articulosJson, articulosBd, clavesBd, r);
+    const cambiosEstructura = await this.planificarEstructura(articulosBd, porClave, r);
 
     const claveDisp = (categoria: string, etiqueta?: string | null) =>
       `${(categoria ?? '').toLowerCase().trim()}|${(etiqueta ?? '').toLowerCase().trim()}`;
@@ -156,6 +164,7 @@ export class SincronizacionTextoService {
         } as any));
         n.propio.orden = pos;
       }
+      for (const c of cambiosEstructura) await m.update(c.entidad as any, c.id, { numero: c.numero, nombre: c.nombre });
       for (const c of cambiosDisp) await m.update(Disposicion, c.id, { contenido: c.contenido });
       let orden = disposicionesBd.reduce((max, d) => Math.max(max, d.orden ?? 0), 0);
       for (const d of nuevasDisp) {
@@ -171,7 +180,7 @@ export class SincronizacionTextoService {
 
     this.logger.log(
       `Actualizar desde JSON ${version.ley?.nombre ?? ''} v${version.version}: ` +
-        `${r.articulos.aCambiar} artículos (${r.articulos.creados.length} nuevos) y ${r.disposiciones.aCambiar + r.disposiciones.nuevas} disposiciones`,
+        `${r.articulos.aCambiar} artículos (${r.articulos.creados.length} nuevos), ${r.estructura.aCambiar} títulos/capítulos/secciones y ${r.disposiciones.aCambiar + r.disposiciones.nuevas} disposiciones`,
     );
     return r;
   }
@@ -183,18 +192,74 @@ export class SincronizacionTextoService {
   private aplanarArticulos(e: EstructuraJson): ArticuloJson[] {
     const out: ArticuloJson[] = [];
     const n = (x: any, i: number) => `${x?.numero ?? ''}~${x?.nombre ?? ''}~${i}`;
-    const add = (arts: any[], ruta: string) => { for (const a of arts ?? []) out.push({ ...a, ruta }); };
+    const add = (arts: any[], ruta: string, nodos: ArticuloJson['nodos']) => { for (const a of arts ?? []) out.push({ ...a, ruta, nodos }); };
     const deTitulo = (t: any, rt: string) => {
-      add(t?.articulos, rt);
+      add(t?.articulos, rt, { titulo: t });
       (t?.capitulos ?? []).forEach((c: any, ci: number) => {
         const rc = `${rt}|C${n(c, ci)}`;
-        add(c?.articulos, rc);
-        (c?.secciones ?? []).forEach((s: any, si: number) => add(s?.articulos, `${rc}|S${n(s, si)}`));
+        add(c?.articulos, rc, { titulo: t, capitulo: c });
+        (c?.secciones ?? []).forEach((s: any, si: number) => add(s?.articulos, `${rc}|S${n(s, si)}`, { titulo: t, capitulo: c, seccion: s }));
       });
     };
     (e.libros ?? []).forEach((l: any, li: number) => (l?.titulos ?? []).forEach((t: any, ti: number) => deTitulo(t, `L${li}|T${n(t, ti)}`)));
     (e.titulos ?? []).forEach((t: any, ti: number) => deTitulo(t, `L-|T${n(t, ti)}`));
     return out.filter((a) => a && a.numero != null);
+  }
+
+  /** ⭐ Número y nombre de los títulos, capítulos y secciones: cada artículo emparejado dice en qué
+   *  sección/capítulo/título de la app está y en cuál del JSON; si difieren, se corrigen. Si dos
+   *  artículos del mismo nodo de la app traen nombres distintos en el JSON (estructura reordenada),
+   *  ese nodo no se toca. */
+  private async planificarEstructura(articulosBd: Articulo[], porClave: Map<string, ArticuloJson>, r: ResultadoActualizacion) {
+    const ids = { seccion: new Set<string>(), capitulo: new Set<string>(), titulo: new Set<string>() };
+    for (const a of articulosBd as any[]) {
+      if (a.seccion) ids.seccion.add(a.seccion);
+      if (a.capitulo) ids.capitulo.add(a.capitulo);
+      if (a.tituloRef) ids.titulo.add(a.tituloRef);
+    }
+    const secciones = ids.seccion.size ? await this.dataSource.getRepository(Seccion).createQueryBuilder('s')
+      .where('s.id IN (:...ids)', { ids: [...ids.seccion] }).loadAllRelationIds({ relations: ['capitulo'] }).getMany() : [];
+    for (const s of secciones as any[]) if (s.capitulo) ids.capitulo.add(s.capitulo);
+    const capitulos = ids.capitulo.size ? await this.dataSource.getRepository(Capitulo).createQueryBuilder('c')
+      .where('c.id IN (:...ids)', { ids: [...ids.capitulo] }).loadAllRelationIds({ relations: ['tituloRef'] }).getMany() : [];
+    for (const c of capitulos as any[]) if (c.tituloRef) ids.titulo.add(c.tituloRef);
+    const titulos = ids.titulo.size ? await this.dataSource.getRepository(Titulo).findBy([...ids.titulo].map((id) => ({ id }))) : [];
+    const sMap = new Map<string, any>(secciones.map((x: any) => [x.id, x]));
+    const cMap = new Map<string, any>(capitulos.map((x: any) => [x.id, x]));
+    const tMap = new Map<string, any>(titulos.map((x: any) => [x.id, x]));
+
+    const norm = (v: any) => (v == null ? '' : String(v).trim());
+    const propuesta = new Map<string, { entidad: any; tipo: string; bd: any; numero: string | null; nombre: string; conflicto: boolean }>();
+    const proponer = (entidad: any, tipo: string, bd: any, js?: NodoJson) => {
+      if (!bd || !js) return;
+      const numero = norm(js.numero) || null;
+      const nombre = norm(js.nombre);
+      const k = `${tipo}|${bd.id}`;
+      const prev = propuesta.get(k);
+      if (prev) { if (prev.numero !== numero || prev.nombre !== nombre) prev.conflicto = true; return; }
+      propuesta.set(k, { entidad, tipo, bd, numero, nombre, conflicto: false });
+    };
+    for (const a of articulosBd as any[]) {
+      const js = porClave.get(claveArticulo(a.numero));
+      if (!js?.nodos) continue;
+      const sec = a.seccion ? sMap.get(a.seccion) : null;
+      const cap = a.capitulo ? cMap.get(a.capitulo) : sec?.capitulo ? cMap.get(sec.capitulo) : null;
+      const tit = a.tituloRef ? tMap.get(a.tituloRef) : cap?.tituloRef ? tMap.get(cap.tituloRef) : null;
+      // Solo si el artículo está al mismo nivel en la app y en el JSON
+      if (!!sec !== !!js.nodos.seccion || !!cap !== !!js.nodos.capitulo) continue;
+      proponer(Seccion, 'Sección', sec, js.nodos.seccion);
+      proponer(Capitulo, 'Capítulo', cap, js.nodos.capitulo);
+      proponer(Titulo, 'Título', tit, js.nodos.titulo);
+    }
+    const cambios: { entidad: any; id: string; numero: string | null; nombre: string }[] = [];
+    for (const p of propuesta.values()) {
+      if (p.conflicto || !p.nombre) continue;
+      if ((norm(p.bd.numero) || null) === p.numero && norm(p.bd.nombre) === p.nombre) continue;
+      cambios.push({ entidad: p.entidad, id: p.bd.id, numero: p.numero, nombre: p.nombre });
+      r.estructura.cambios.push(`${p.tipo} ${norm(p.bd.numero)} «${norm(p.bd.nombre)}» → ${p.numero ?? ''} «${p.nombre}»`);
+    }
+    r.estructura.aCambiar = cambios.length;
+    return cambios;
   }
 
   /** Decide dónde va cada artículo del JSON que no existe en la app. */
