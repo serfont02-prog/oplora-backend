@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { PreguntaTest } from './pregunta-test.entity';
+import { sqlArticulosDeTemas } from './test.service';
 
 /**
  * ⭐ IMPORTACIÓN MASIVA DEL BANCO DE TEST (nov 2026)
@@ -10,15 +11,23 @@ import { PreguntaTest } from './pregunta-test.entity';
  * se vincula:
  *   - "tema": número de tema de la convocatoria activa de la oposición (o "temaId"), y/o
  *   - "norma" (siglas) + "articulo" (número), o "articulos": [{ norma, articulo }, ...].
- * Si trae las dos cosas, se vincula al tema Y al artículo (lo normal en preguntas de ley).
  * Hace falta al menos un tema o un artículo que se encuentre.
  *
+ * ⭐ Banco compartido (nov 2026): una pregunta de ley pertenece a su artículo, no a la oposición.
+ *   - Si trae tema y artículo, el tema solo se usa como RESPALDO: se vincula al tema únicamente
+ *     cuando ninguno de sus artículos está vinculado a ese tema en «Vincular normativa» (si no,
+ *     no saldría en el test del tema). Con enlaceTema = 'siempre' se vincula siempre, como antes.
+ *   - 3 o 4 opciones. Con 4, "descartable" (opcional) dice qué incorrecta se quita cuando la
+ *     convocatoria usa 3 opciones.
+ *
  * Opciones:
- *   - borrar: 'ninguno' (por defecto) | 'banco' | 'todo'
+ *   - borrar: 'ninguno' (por defecto) | 'banco' | 'todo' | 'global'
  *       'banco' borra las preguntas de esta oposición SALVO las de exámenes oficiales;
  *       'todo' borra también las de exámenes oficiales (los simulacros se quedan vacíos).
- *       Nunca borra preguntas que también estén en temas de otra oposición, ni las que solo
- *       cuelgan de artículos de leyes compartidas con otra oposición.
+ *       Estos dos nunca borran preguntas que también estén en temas de otra oposición, ni las
+ *       que solo cuelgan de artículos de leyes compartidas con otra oposición.
+ *       'global' borra TODAS las preguntas de test de TODAS las oposiciones salvo las de exámenes
+ *       oficiales (para rehacer el banco compartido desde cero).
  *   - simular: true → no escribe nada; devuelve el mismo informe para revisar antes.
  *
  * Duplicados (mismo enunciado y mismas opciones): no se crea otra; se vincula la existente
@@ -34,9 +43,15 @@ export interface InformeImportacion {
   vinculadasExistentes: number;
   yaEstaban: number;
   conArticulo: number;
+  /** Preguntas con artículo que además se han vinculado a su tema porque el artículo no está vinculado a ese tema. */
+  temaComoRespaldo: number;
+  conDescartable: number;
   noEnlazadas: { fila: number; enunciado: string; referencia: string }[];
   errores: string[];
-  borrado?: { modo: string; borradas: number; conservadasOficiales: number; conservadasCompartidas: number };
+  borrado?: {
+    modo: string; borradas: number; conservadasOficiales: number; conservadasCompartidas: number;
+    porOposicion?: { oposicion: string; preguntas: number }[];
+  };
 }
 
 const MAX_POR_PETICION = 2000;
@@ -115,12 +130,46 @@ export class ImportacionTestService {
     };
   }
 
+  /** ⭐ Modo 'global': todas las preguntas de test que no son de un examen oficial, de cualquier oposición. */
+  private async candidatasGlobales() {
+    const filas: { id: string }[] = await this.preguntaRepo.query(
+      `SELECT id FROM preguntas_test WHERE "examenAnteriorId" IS NULL`,
+    );
+    const [{ n }] = await this.preguntaRepo.query(
+      `SELECT count(*)::int AS n FROM preguntas_test WHERE "examenAnteriorId" IS NOT NULL`,
+    );
+    // Reparto por oposición (por sus temas o por las leyes de sus artículos), solo para el informe.
+    const porOposicion: { oposicion: string; preguntas: number }[] = await this.preguntaRepo.query(
+      `WITH art_ley AS (${SQL_ARTICULO_LEY}),
+       vinc AS (
+         SELECT x."preguntasTestId" AS pid, c."oposicionId" AS opo
+           FROM preguntas_test_temas_temas x
+           JOIN temas t ON t.id = x."temasId" JOIN convocatorias c ON c.id = t."convocatoriaId"
+         UNION
+         SELECT y."preguntasTestId", ol."oposicionId"
+           FROM preguntas_test_articulos_articulos y
+           JOIN art_ley al ON al.art = y."articulosId"
+           JOIN oposiciones_leyes ol ON ol."leyId" = al.ley)
+       SELECT COALESCE(o.nombre, '(sin oposición)') AS oposicion, count(DISTINCT p.id)::int AS preguntas
+         FROM preguntas_test p
+         LEFT JOIN vinc v ON v.pid = p.id
+         LEFT JOIN oposiciones o ON o.id = v.opo
+        WHERE p."examenAnteriorId" IS NULL
+        GROUP BY 1 ORDER BY 2 DESC`,
+    );
+    return { borrar: filas.map((f) => f.id), conservadasOficiales: n as number, conservadasCompartidas: 0, porOposicion };
+  }
+
+  private candidatas(oposicionId: string, modo: string) {
+    return modo === 'global' ? this.candidatasGlobales() : this.candidatasABorrar(oposicionId, modo === 'todo');
+  }
+
   /* ──────────────────────── Importación ─────────────────────── */
 
   async importarMasivo(
     oposicionId: string,
     preguntas: any[],
-    opciones: { borrar?: string; simular?: boolean; offset?: number } = {},
+    opciones: { borrar?: string; simular?: boolean; offset?: number; enlaceTema?: string } = {},
   ): Promise<InformeImportacion> {
     if (!UUID.test(oposicionId ?? '')) throw new BadRequestException('oposicionId no válido');
     if (!Array.isArray(preguntas)) throw new BadRequestException('"preguntas" tiene que ser una lista');
@@ -131,16 +180,18 @@ export class ImportacionTestService {
     if (!opo) throw new NotFoundException('Oposición no encontrada');
 
     const simular = opciones.simular === true;
-    const modoBorrado = ['banco', 'todo'].includes(String(opciones.borrar)) ? String(opciones.borrar) : 'ninguno';
+    const modoBorrado = ['banco', 'todo', 'global'].includes(String(opciones.borrar)) ? String(opciones.borrar) : 'ninguno';
+    const enlaceTemaSiempre = opciones.enlaceTema === 'siempre';
 
     const informe: InformeImportacion = {
       simulacion: simular, recibidas: preguntas.length, importadas: 0, vinculadasExistentes: 0,
-      yaEstaban: 0, conArticulo: 0, noEnlazadas: [], errores: [],
+      yaEstaban: 0, conArticulo: 0, temaComoRespaldo: 0, conDescartable: 0, noEnlazadas: [], errores: [],
     };
 
     // ── 1. Borrado previo (si se pide)
     if (modoBorrado !== 'ninguno') {
-      const c = await this.candidatasABorrar(oposicionId, modoBorrado === 'todo');
+      const c: { borrar: string[]; conservadasOficiales: number; conservadasCompartidas: number; porOposicion?: any[] } =
+        await this.candidatas(oposicionId, modoBorrado);
       if (!simular && c.borrar.length) {
         await this.dataSource.transaction(async (m) => {
           for (let i = 0; i < c.borrar.length; i += 1000) {
@@ -152,6 +203,7 @@ export class ImportacionTestService {
       informe.borrado = {
         modo: modoBorrado, borradas: c.borrar.length,
         conservadasOficiales: c.conservadasOficiales, conservadasCompartidas: c.conservadasCompartidas,
+        ...(c.porOposicion ? { porOposicion: c.porOposicion } : {}),
       };
     }
 
@@ -207,13 +259,24 @@ export class ImportacionTestService {
       for (const f of filas) existentes.set(claveDuplicado(f.enunciado, f.opciones), f.id);
     } else {
       // En simulación con borrado: solo cuentan como existentes las que NO se borrarían.
-      const c = await this.candidatasABorrar(oposicionId, modoBorrado === 'todo');
+      const c = await this.candidatas(oposicionId, modoBorrado);
       const fuera = new Set(c.borrar);
       const filas: { id: string; enunciado: string; opciones: any }[] =
         await this.preguntaRepo.query(`SELECT id, enunciado, opciones FROM preguntas_test`);
       for (const f of filas) if (!fuera.has(f.id)) existentes.set(claveDuplicado(f.enunciado, f.opciones), f.id);
     }
     const enLote = new Set<string>();
+
+    // ⭐ Artículos vinculados a cada tema en «Vincular normativa» (a cualquier nivel). Una pregunta
+    // de ley solo se vincula también al tema si ninguno de sus artículos está aquí.
+    const cacheVinculados = new Map<string, Set<string>>();
+    const articulosDelTema = async (temaId: string): Promise<Set<string>> => {
+      if (!cacheVinculados.has(temaId)) {
+        const filas: { id: string }[] = await this.preguntaRepo.query(sqlArticulosDeTemas('$1'), [temaId]);
+        cacheVinculados.set(temaId, new Set(filas.map((f) => f.id)));
+      }
+      return cacheVinculados.get(temaId)!;
+    };
 
     const vincularSiFalta = async (preguntaId: string, relacion: 'temas' | 'articulos', destinoId: string) => {
       const tabla = relacion === 'temas' ? 'preguntas_test_temas_temas' : 'preguntas_test_articulos_articulos';
@@ -262,6 +325,14 @@ export class ImportacionTestService {
         continue;
       }
 
+      // Tema como respaldo: si la pregunta ya llega al tema por sus artículos, no se vincula al tema.
+      let temaAVincular: string | null = temaId;
+      if (temaId && articuloIds.length && !enlaceTemaSiempre) {
+        const vinculados = await articulosDelTema(temaId);
+        if (articuloIds.some((a) => vinculados.has(a))) temaAVincular = null;
+        else informe.temaComoRespaldo++;
+      }
+
       // Duplicados
       const clave = claveDuplicado(p.enunciado, p.opciones);
       if (enLote.has(clave)) { informe.errores.push(`${etiqueta}: duplicada dentro del archivo — "${String(p.enunciado).slice(0, 60)}…"`); continue; }
@@ -269,7 +340,7 @@ export class ImportacionTestService {
       const existente = existentes.get(clave);
       if (existente) {
         let nuevo = false;
-        if (temaId) nuevo = (await vincularSiFalta(existente, 'temas', temaId)) || nuevo;
+        if (temaAVincular) nuevo = (await vincularSiFalta(existente, 'temas', temaAVincular)) || nuevo;
         for (const a of articuloIds) nuevo = (await vincularSiFalta(existente, 'articulos', a)) || nuevo;
         if (nuevo) informe.vinculadasExistentes++; else informe.yaEstaban++;
         continue;
@@ -281,6 +352,7 @@ export class ImportacionTestService {
           enunciado: String(p.enunciado).trim(),
           opciones: p.opciones.map((o: string) => String(o).trim()),
           correcta: p.correcta,
+          descartable: p.descartable === undefined || p.descartable === null ? null : p.descartable,
           explicacion: p.explicacion ? String(p.explicacion).trim() : undefined,
           dificultad: [1, 2, 3].includes(Number(p.dificultad)) ? Number(p.dificultad) : 1,
           fuente: p.fuente ? String(p.fuente).trim().slice(0, 250) : undefined,
@@ -289,12 +361,13 @@ export class ImportacionTestService {
           estado: p.estado && ['vigente', 'fuera_temario', 'desactualizada', 'anulada'].includes(p.estado) ? p.estado : 'vigente',
           activa: true,
         }));
-        if (temaId) await this.preguntaRepo.createQueryBuilder().relation(PreguntaTest, 'temas').of(saved.id).add(temaId);
+        if (temaAVincular) await this.preguntaRepo.createQueryBuilder().relation(PreguntaTest, 'temas').of(saved.id).add(temaAVincular);
         if (articuloIds.length) await this.preguntaRepo.createQueryBuilder().relation(PreguntaTest, 'articulos').of(saved.id).add(articuloIds);
         existentes.set(clave, saved.id);
       }
       informe.importadas++;
       if (articuloIds.length) informe.conArticulo++;
+      if (p.descartable !== undefined && p.descartable !== null) informe.conDescartable++;
     }
 
     return informe;
@@ -312,6 +385,13 @@ export class ImportacionTestService {
     if (new Set(normal).size !== normal.length) return 'hay opciones repetidas';
     if (typeof p.correcta !== 'number' || !Number.isInteger(p.correcta) || p.correcta < 0 || p.correcta >= p.opciones.length) {
       return `el índice "correcta" (${p.correcta}) está fuera de rango para ${p.opciones.length} opciones`;
+    }
+    if (p.descartable !== undefined && p.descartable !== null) {
+      if (p.opciones.length !== 4) return '"descartable" solo tiene sentido en preguntas de 4 opciones';
+      if (typeof p.descartable !== 'number' || !Number.isInteger(p.descartable) || p.descartable < 0 || p.descartable > 3) {
+        return `"descartable" (${p.descartable}) tiene que ser 0, 1, 2 o 3`;
+      }
+      if (p.descartable === p.correcta) return '"descartable" no puede ser la opción correcta';
     }
     if (p.temaId && !UUID.test(String(p.temaId))) return '"temaId" no válido';
     if (String(p.norma ?? '').length > 40 || String(p.articulo ?? '').length > 40) return '"norma" o "articulo" demasiado largos';

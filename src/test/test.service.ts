@@ -18,20 +18,38 @@ import { ConfiguracionService } from '../config/configuracion.service';
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 
 /**
- * Recorta el pool de opciones de una pregunta vinculada a artículo (autoradas
- * con 4 opciones: 1 correcta + 3 distractoras) al número de opciones que use
- * la convocatoria activa del usuario (numOpcionesTest en Convocatoria).
+ * Recorta el pool de opciones de una pregunta al número de opciones que use la
+ * convocatoria activa del usuario (numOpcionesTest en Convocatoria).
  * No muta la fila guardada: opera sobre una copia y devuelve un nuevo índice
- * "correcta" recalculado tras el recorte + reordenado aleatorio.
+ * "correcta" recalculado.
  * Si numOpciones es null/undefined o >= opciones.length, devuelve tal cual.
+ *
+ * ⭐ Banco compartido de 4 opciones (nov 2026): si la pregunta marca cuál es su opción
+ * «descartable» y hay que quitar exactamente una (4 → 3), se quita esa y se respeta el orden
+ * de las demás. Así cada oposición de 3 opciones ve SIEMPRE la misma pregunta (estadísticas
+ * e incidencias coherentes). Sin «descartable» (o si hay que quitar más de una) se mantiene el
+ * recorte aleatorio de siempre.
  */
 export function recortarOpcionesArticulo(
   opciones: string[],
   correcta: number,
   numOpciones?: number | null,
+  descartable?: number | null,
 ): { opciones: string[]; correcta: number } {
   if (!numOpciones || numOpciones >= opciones.length || numOpciones < 2) {
     return { opciones, correcta };
+  }
+
+  if (
+    typeof descartable === 'number' &&
+    Number.isInteger(descartable) &&
+    descartable >= 0 &&
+    descartable < opciones.length &&
+    descartable !== correcta &&
+    opciones.length - 1 === numOpciones
+  ) {
+    const seleccion = opciones.filter((_, i) => i !== descartable);
+    return { opciones: seleccion, correcta: correcta > descartable ? correcta - 1 : correcta };
   }
 
   const correctaTexto = opciones[correcta];
@@ -51,6 +69,21 @@ export function recortarOpcionesArticulo(
   }
 
   return { opciones: seleccion, correcta: seleccion.indexOf(correctaTexto) };
+}
+
+/**
+ * ⭐ Opciones que ve el usuario de una pregunta del banco según su convocatoria.
+ * Se recorta si la pregunta es de artículo (banco compartido) o si marca «descartable».
+ * Las preguntas propias de un tema sin artículo ni «descartable» se muestran tal cual.
+ */
+export function opcionesParaConvocatoria(
+  p: { opciones: string[]; correcta: number; descartable?: number | null; articulos?: any[] },
+  numOpciones?: number | null,
+): { opciones: string[]; correcta: number } {
+  const recortable = !!p.articulos?.length || (p.descartable !== null && p.descartable !== undefined);
+  return recortable
+    ? recortarOpcionesArticulo(p.opciones, p.correcta, numOpciones, p.descartable)
+    : { opciones: p.opciones, correcta: p.correcta };
 }
 
 /**
@@ -357,6 +390,15 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
     // de exámenes oficiales se quedan únicamente en el simulacro de su examen.
     query = query.andWhere("pregunta.estado = 'vigente'");
 
+    // ⭐ Banco compartido (nov 2026): una convocatoria de N opciones solo recibe preguntas con
+    // N opciones o más (las de más se recortan al servirlas). Antes, a una oposición de 4 le
+    // llegaban tal cual las preguntas de 3 de otra oposición que compartía artículos.
+    if (numOpcionesTestActiva && numOpcionesTestActiva >= 2) {
+      query = query.andWhere('jsonb_array_length(pregunta.opciones) >= :numOpcionesMin', {
+        numOpcionesMin: numOpcionesTestActiva,
+      });
+    }
+
     return { query, numOpcionesTestActiva };
   }
 
@@ -487,10 +529,7 @@ if (!temaId && (!temasIds || temasIds.length === 0) && !versionLeyId && !tituloI
       // El recorte de opciones (4→N) solo aplica a preguntas vinculadas a
       // artículo (banco compartido entre oposiciones/convocatorias). Las
       // preguntas por tema mantienen siempre sus opciones tal cual.
-      const esArticulo = !!p.articulos?.length;
-      const { opciones, correcta } = esArticulo
-        ? recortarOpcionesArticulo(p.opciones, p.correcta, numOpcionesTestActiva)
-        : { opciones: p.opciones, correcta: p.correcta };
+      const { opciones, correcta } = opcionesParaConvocatoria(p, numOpcionesTestActiva);
 
       return {
         id: p.id,
@@ -1418,10 +1457,7 @@ async generarRepasoInteligente(
   numOpcionesTestActiva = uoRepaso?.convocatoriaActiva?.numOpcionesTest;
 
   const payloadPrioritario: Pregunta[] = preguntasPrioritarias.map((p) => {
-    const esArticulo = !!p.articulos?.length;
-    const { opciones, correcta } = esArticulo
-      ? recortarOpcionesArticulo(p.opciones, p.correcta, numOpcionesTestActiva)
-      : { opciones: p.opciones, correcta: p.correcta };
+    const { opciones, correcta } = opcionesParaConvocatoria(p, numOpcionesTestActiva);
 
     return {
       id: p.id,
@@ -1574,9 +1610,25 @@ async actualizarPreguntaBanco(preguntaId: string, cambios: {
   explicacion?: string;
   dificultad?: number;
   activa?: boolean;
+  descartable?: number | null;
 }): Promise<PreguntaTest> {
   const pregunta = await this.preguntaRepo.findOne({ where: { id: preguntaId } });
   if (!pregunta) throw new NotFoundException('Pregunta no encontrada');
+
+  // ⭐ «descartable» (banco compartido): tiene que ser una incorrecta de una pregunta de 4 opciones.
+  // Si se cambian opciones o correcta sin indicarlo y deja de ser válido, se vacía.
+  const opcionesFinales = cambios.opciones ?? pregunta.opciones;
+  const correctaFinal = cambios.correcta ?? pregunta.correcta;
+  let descartableFinal: number | null | undefined = cambios.descartable !== undefined ? cambios.descartable : pregunta.descartable;
+  const descartableValido = (d: any) =>
+    d === null || d === undefined ||
+    (Number.isInteger(d) && d >= 0 && d < opcionesFinales.length && d !== correctaFinal && opcionesFinales.length === 4);
+  if (!descartableValido(descartableFinal)) {
+    if (cambios.descartable !== undefined) {
+      throw new ForbiddenException('Cambios inválidos: «descartable» tiene que ser una opción incorrecta de una pregunta de 4 opciones');
+    }
+    descartableFinal = null;
+  }
 
   // Si se tocan enunciado/opciones/correcta, validamos el resultado final igual que en la importación
   const propuesta = {
@@ -1596,6 +1648,7 @@ async actualizarPreguntaBanco(preguntaId: string, cambios: {
     ...(cambios.explicacion !== undefined && { explicacion: cambios.explicacion }),
     ...(cambios.dificultad !== undefined && { dificultad: cambios.dificultad }),
     ...(cambios.activa !== undefined && { activa: cambios.activa }),
+    ...(descartableFinal !== pregunta.descartable && { descartable: descartableFinal ?? null }),
   });
 
   return this.preguntaRepo.findOne({ where: { id: preguntaId }, relations: ['temas', 'articulos'] }) as Promise<PreguntaTest>;

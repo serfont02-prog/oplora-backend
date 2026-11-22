@@ -24,7 +24,7 @@ import { PreguntaPsicotecnica } from '../psicotecnico/pregunta-psicotecnica.enti
 import { UsuarioOposicion } from '../usuario/usuario-oposicion.entity';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { TipoNotificacion, PrioridadNotificacion } from '../notificacion/notificacion.entity';
-import { recortarOpcionesArticulo } from '../test/test.service';
+import { opcionesParaConvocatoria, sqlArticulosDeTemas } from '../test/test.service';
 import {
   EstadoLiga,
   EstadoJornada,
@@ -378,19 +378,28 @@ export class LigaService {
     }
   }
 
-  /** IDs de preguntas activas de un tema: vinculadas al tema o a sus artículos. */
-  private async idsPreguntasDeTema(temaId: string): Promise<string[]> {
-    const filas = await this.preguntaRepo
+  /**
+   * IDs de preguntas activas de un tema: vinculadas al tema o a sus artículos.
+   * ⭐ Con numOpciones, solo las que tienen al menos ese número de opciones (banco compartido).
+   */
+  private async idsPreguntasDeTema(temaId: string, numOpciones?: number | null): Promise<string[]> {
+    let q = this.preguntaRepo
       .createQueryBuilder('p')
       .leftJoin('p.temas', 't')
       .leftJoin('p.articulos', 'a')
       .where('p.activa = true')
-      .andWhere("p.estado = 'vigente'")
+      .andWhere("p.estado = 'vigente'");
+    if (numOpciones && numOpciones >= 2) {
+      q = q.andWhere('jsonb_array_length(p.opciones) >= :numOpcionesMin', { numOpcionesMin: numOpciones });
+    }
+    const filas = await q
       .andWhere(
         new Brackets((qb) => {
+          // ⭐ Igual que los tests: cuenta la normativa vinculada al tema a cualquier nivel
+          // (artículo, capítulo, título o ley entera), no solo los artículos sueltos.
           qb.where('t.id = :temaId', { temaId }).orWhere(
-            'a.id IN (SELECT tn."articuloId" FROM temas_normativa tn WHERE tn."temaId" = :temaId)',
-            { temaId },
+            `a.id IN (${sqlArticulosDeTemas(':...temasLigaNorma')})`,
+            { temasLigaNorma: [temaId] },
           );
         }),
       )
@@ -435,7 +444,7 @@ export class LigaService {
     // Temas / bloque / temario
     const temaIds = jornada.temaIds ?? [];
     const pools = new Map<string, string[]>();
-    for (const temaId of temaIds) pools.set(temaId, barajar(await this.idsPreguntasDeTema(temaId)));
+    for (const temaId of temaIds) pools.set(temaId, barajar(await this.idsPreguntasDeTema(temaId, convocatoria.numOpcionesTest)));
 
     const elegidas: { id: string; temaId: string | null }[] = [];
     const usadas = new Set<string>();
@@ -474,7 +483,7 @@ export class LigaService {
       ];
       for (const t of candidatos) {
         if (elegidas.length >= n) break;
-        tomar(t.id, barajar(await this.idsPreguntasDeTema(t.id)), n - elegidas.length);
+        tomar(t.id, barajar(await this.idsPreguntasDeTema(t.id, convocatoria.numOpcionesTest)), n - elegidas.length);
       }
     }
 
@@ -491,10 +500,7 @@ export class LigaService {
       .map((e): PreguntaJornada | null => {
         const p = porId.get(e.id);
         if (!p) return null;
-        const esArticulo = !!p.articulos?.length;
-        const { opciones, correcta } = esArticulo
-          ? recortarOpcionesArticulo(p.opciones, p.correcta, numOpciones)
-          : { opciones: p.opciones, correcta: p.correcta };
+        const { opciones, correcta } = opcionesParaConvocatoria(p, numOpciones);
         return {
           id: p.id,
           origen: 'test',

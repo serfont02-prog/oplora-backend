@@ -7,7 +7,8 @@ import { ImportacionTestService } from './importacion-test.service';
 /**
  * ⭐ Importación masiva del banco de test (un archivo con todos los temas).
  * POST /test/importar/masivo/:oposicionId
- * Body: { preguntas: [...], borrar?: 'ninguno' | 'banco' | 'todo', simular?: boolean, offset?: number }
+ * Body: { preguntas: [...], borrar?: 'ninguno' | 'banco' | 'todo' | 'global', simular?: boolean, offset?: number,
+ *         enlaceTema?: 'respaldo' (por defecto) | 'siempre' }
  * La pantalla /admin/importar-test manda el archivo por partes (el límite de cada petición es 5 MB).
  */
 @Controller('test')
@@ -23,7 +24,8 @@ export class ImportacionTestController {
     @Body('borrar') borrar?: string,
     @Body('simular') simular?: boolean,
     @Body('offset') offset?: number,
+    @Body('enlaceTema') enlaceTema?: string,
   ) {
-    return this.service.importarMasivo(oposicionId, preguntas, { borrar, simular: simular === true, offset });
+    return this.service.importarMasivo(oposicionId, preguntas, { borrar, simular: simular === true, offset, enlaceTema });
   }
 }

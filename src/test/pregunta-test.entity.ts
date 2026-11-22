@@ -30,6 +30,12 @@ export class PreguntaTest {
   @Column()
   correcta: number;
 
+  /* ⭐ Banco compartido de 4 opciones (nov 2026): índice de la opción incorrecta que se quita
+     cuando la convocatoria usa una opción menos (4 → 3). Vacío en preguntas de 3 opciones,
+     en las de exámenes oficiales y en las de 4 que no se comparten con oposiciones de 3. */
+  @Column({ type: 'int', nullable: true })
+  descartable: number | null;
+
   @Column({ type: 'text', nullable: true })
   explicacion: string;
 
