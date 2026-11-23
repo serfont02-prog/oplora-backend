@@ -27,15 +27,47 @@ export class LeyService {
 
   // ─── LEYES ───────────────────────────────────────────────
 
-  findAll(search?: string): Promise<Ley[]> {
+  // ⭐ Además de la ley, cada fila lleva cuántos artículos tiene su versión activa (articulosTotal)
+  // y cuántos están vinculados a algún tema de cualquier oposición (articulosVinculados), sea cual
+  // sea el nivel del vínculo (artículo, capítulo, título o ley completa). La búsqueda mira también las siglas.
+  async findAll(search?: string): Promise<(Ley & { articulosTotal: number; articulosVinculados: number })[]> {
   const qb = this.leyRepo.createQueryBuilder('l')
     .leftJoinAndSelect('l.versiones', 'v', 'v.activa = true')
     .leftJoinAndSelect('l.oposicionLeyes', 'ol')
     .orderBy('l.nombre', 'ASC');
   if (search) {
-    qb.where('LOWER(l.nombre) LIKE :s', { s: `%${search.toLowerCase()}%` });
+    qb.where('(LOWER(l.nombre) LIKE :s OR LOWER(COALESCE(l.siglas, \'\')) LIKE :s)', { s: `%${search.toLowerCase()}%` });
   }
-  return qb.getMany();
+  const leyes = await qb.getMany();
+  const conteos: { ley: string; total: string; vinculados: string }[] = leyes.length
+    ? await this.leyRepo.query(
+        `SELECT v."leyId" AS ley,
+                COUNT(DISTINCT a.id) AS total,
+                COUNT(DISTINCT a.id) FILTER (WHERE EXISTS (
+                  SELECT 1 FROM temas_normativa tn
+                   WHERE tn."articuloId" = a.id
+                      OR tn."capituloId" = c.id
+                      OR tn."capituloId" = cs.id
+                      OR tn."tituloId" = t.id
+                      OR tn."versionLeyId" = v.id
+                )) AS vinculados
+           FROM articulos a
+           LEFT JOIN capitulos c ON c.id = a."capituloId"
+           LEFT JOIN secciones s ON s.id = a."seccionId"
+           LEFT JOIN capitulos cs ON cs.id = s."capituloId"
+           LEFT JOIN titulos t ON t.id = COALESCE(a."tituloRefId", c."tituloRefId", cs."tituloRefId")
+           LEFT JOIN libros lb ON lb.id = t."libroId"
+           JOIN versiones_ley v ON v.id = COALESCE(t."versionLeyId", lb."versionLeyId") AND v.activa = true
+          WHERE v."leyId" = ANY($1)
+          GROUP BY v."leyId"`,
+        [leyes.map((l) => l.id)],
+      )
+    : [];
+  const porLey = new Map(conteos.map((c) => [c.ley, c]));
+  return leyes.map((l) => Object.assign(l, {
+    articulosTotal: Number(porLey.get(l.id)?.total ?? 0),
+    articulosVinculados: Number(porLey.get(l.id)?.vinculados ?? 0),
+  }));
 }
 
   async findOne(id: string): Promise<Ley> {
