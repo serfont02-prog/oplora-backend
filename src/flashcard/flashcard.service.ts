@@ -1096,16 +1096,21 @@ async getEstadisticasFCPorPeriodo(usuarioId: string, oposicionId: string) {
     .setParameters(subPeriodo.getParameters())
     .getMany();
 
+  // ⭐ El porcentaje se mide sobre TODAS las flashcards de la oposición, no solo sobre las ya
+  // vistas: antes 6 dominadas de 21 repasadas salían como un 29 % aunque el banco tuviera 1.245.
+  const totalBanco = await this.flashcardsDeOposicionQB(oposicionId, 'bfc', usuarioId).getCount();
+
   const calcular = (desde: Date | null) => {
     const filtrados = desde
       ? repasos.filter((r) => r.ultimaVista && r.ultimaVista >= desde)
       : repasos;
 
-    const total = filtrados.length;
+    const total = filtrados.length; // repasadas en el periodo
     const dominadas = filtrados.filter((r) => r.estado === EstadoFC.DOMINADA).length;
-    const porcentajeDominadas = total > 0 ? Math.round((dominadas / total) * 100) : 0;
+    // Con un decimal, para que unas pocas dominadas de un banco grande no salgan como 0 %
+    const porcentajeDominadas = totalBanco > 0 ? Math.round((dominadas / totalBanco) * 1000) / 10 : 0;
 
-    return { total, dominadas, porcentajeDominadas };
+    return { total, dominadas, totalBanco, porcentajeDominadas };
   };
 
   return {
