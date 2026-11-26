@@ -32,33 +32,28 @@ export class NormativaController {
   ) {}
 
   
+  // ⭐ Todos los recuentos en una sola consulta (antes eran 9 seguidas, con listas de ids).
   @Get('estadisticas/:versionLeyId')
   async getEstadisticas(@Param('versionLeyId') versionLeyId: string) {
-    const titulos = await this.tituloRepo.count({ where: { versionLey: { id: versionLeyId } } });
-    const tituloIds = (await this.tituloRepo.find({ where: { versionLey: { id: versionLeyId } }, select: ['id'] })).map((t) => t.id);
-
-    const capitulos = tituloIds.length ? await this.capituloRepo.count({ where: { tituloRef: { id: In(tituloIds) } } }) : 0;
-    const capituloIds = tituloIds.length
-      ? (await this.capituloRepo.find({ where: { tituloRef: { id: In(tituloIds) } }, select: ['id'] })).map((c) => c.id)
-      : [];
-
-    const secciones = capituloIds.length ? await this.seccionRepo.count({ where: { capitulo: { id: In(capituloIds) } } }) : 0;
-    const seccionIds = secciones
-      ? (await this.seccionRepo.find({ where: { capitulo: { id: In(capituloIds) } }, select: ['id'] })).map((s) => s.id)
-      : [];
-
-    const articulosDirectosTitulo = tituloIds.length ? await this.articuloRepo.count({ where: { tituloRef: { id: In(tituloIds) } } }) : 0;
-    const articulosDirectosCapitulo = capituloIds.length ? await this.articuloRepo.count({ where: { capitulo: { id: In(capituloIds) } } }) : 0;
-    const articulosEnSecciones = seccionIds.length ? await this.articuloRepo.count({ where: { seccion: { id: In(seccionIds) } } }) : 0;
-
-    const disposiciones = await this.disposicionRepo.count({ where: { versionLey: { id: versionLeyId } } });
-
+    const [fila] = await this.tituloRepo.query(
+      `WITH t AS (SELECT id FROM titulos WHERE "versionLeyId" = $1),
+            c AS (SELECT id FROM capitulos WHERE "tituloRefId" IN (SELECT id FROM t)),
+            s AS (SELECT id FROM secciones WHERE "capituloId" IN (SELECT id FROM c))
+       SELECT (SELECT count(*) FROM t) AS titulos,
+              (SELECT count(*) FROM c) AS capitulos,
+              (SELECT count(*) FROM s) AS secciones,
+              (SELECT count(*) FROM articulos WHERE "tituloRefId" IN (SELECT id FROM t))
+                + (SELECT count(*) FROM articulos WHERE "capituloId" IN (SELECT id FROM c))
+                + (SELECT count(*) FROM articulos WHERE "seccionId" IN (SELECT id FROM s)) AS articulos,
+              (SELECT count(*) FROM disposiciones WHERE "versionLeyId" = $1) AS disposiciones`,
+      [versionLeyId],
+    );
     return {
-      titulos,
-      capitulos,
-      secciones,
-      articulos: articulosDirectosTitulo + articulosDirectosCapitulo + articulosEnSecciones,
-      disposiciones,
+      titulos: Number(fila?.titulos ?? 0),
+      capitulos: Number(fila?.capitulos ?? 0),
+      secciones: Number(fila?.secciones ?? 0),
+      articulos: Number(fila?.articulos ?? 0),
+      disposiciones: Number(fila?.disposiciones ?? 0),
     };
   }
 
@@ -166,10 +161,13 @@ getSecciones(@Param('capituloId') capituloId: string) {
 }
 
 @Get('disposiciones/:versionLeyId')
-getDisposiciones(@Param('versionLeyId') versionLeyId: string) {
+getDisposiciones(@Param('versionLeyId') versionLeyId: string, @Query('resumen') resumen?: string) {
+  // ⭐ ?resumen=1: solo categoría y etiqueta, sin el texto (la ficha de la ley carga el texto
+  // cuando se abre una categoría).
   return this.disposicionRepo.find({
     where: { versionLey: { id: versionLeyId } },
     order: { orden: 'ASC' },
+    ...(resumen === '1' ? { select: { id: true, categoria: true, etiqueta: true, orden: true } } : {}),
   });
 }
 

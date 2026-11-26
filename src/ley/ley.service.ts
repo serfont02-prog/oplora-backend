@@ -6,6 +6,11 @@ import { VersionLey, TipoCambio } from './version-ley.entity';
 import { DiffVersion } from './diff-version.entity';
 import { OposicionLey } from './oposicion-ley.entity';
 import * as fs from 'fs';
+
+// ⭐ Columnas de una versión sin `textoCompleto` (el texto entero de la ley, que puede ocupar
+// varios MB). Las pantallas no lo usan y mandarlo hacía muy lenta la apertura de leyes grandes.
+const COLUMNAS_VERSION = ['id', 'version', 'referenciaBoe', 'tipoNorma', 'fechaPublicacion', 'fechaVigencia', 'tipoCambio', 'activa', 'notas', 'creadoEn'];
+const columnasVersion = (alias: string) => COLUMNAS_VERSION.map((c) => `${alias}.${c}`);
 import { NoticiaService } from '../noticia/noticia.service';
 const pdfParse = require('pdf-parse');
 
@@ -71,10 +76,12 @@ export class LeyService {
 }
 
   async findOne(id: string): Promise<Ley> {
-    const ley = await this.leyRepo.findOne({
-      where: { id },
-      relations: ['versiones'],
-    });
+    const ley = await this.leyRepo
+      .createQueryBuilder('ley')
+      .leftJoin('ley.versiones', 'v')
+      .addSelect(columnasVersion('v'))
+      .where('ley.id = :id', { id })
+      .getOne();
     if (!ley) throw new NotFoundException(`Ley ${id} no encontrada`);
     return ley;
   }
@@ -236,17 +243,25 @@ async create(nombre: string, siglas?: string, descripcion?: string): Promise<Ley
   }
 
   findByOposicion(oposicionId: string): Promise<OposicionLey[]> {
-    return this.oposicionLeyRepo.find({
-      where: { oposicion: { id: oposicionId } },
-      relations: ['ley', 'versionLey'],
-    });
+    return this.oposicionLeyRepo
+      .createQueryBuilder('ol')
+      .leftJoinAndSelect('ol.ley', 'ley')
+      .leftJoin('ol.versionLey', 'v')
+      .addSelect(columnasVersion('v'))
+      .innerJoin('ol.oposicion', 'opFiltro')
+      .where('opFiltro.id = :oposicionId', { oposicionId })
+      .getMany();
   }
 
   findOposicionesByLey(leyId: string): Promise<OposicionLey[]> {
-    return this.oposicionLeyRepo.find({
-      where: { ley: { id: leyId } },
-      relations: ['oposicion', 'versionLey'],
-    });
+    return this.oposicionLeyRepo
+      .createQueryBuilder('ol')
+      .leftJoinAndSelect('ol.oposicion', 'oposicion')
+      .leftJoin('ol.versionLey', 'v')
+      .addSelect(columnasVersion('v'))
+      .innerJoin('ol.ley', 'leyFiltro')
+      .where('leyFiltro.id = :leyId', { leyId })
+      .getMany();
   }
 
   // ─── DIFFS ───────────────────────────────────────────────
@@ -325,6 +340,7 @@ async getNoticiasLegislacion(oposicionId: string, limite?: number) {
 
   const query = this.versionRepo
     .createQueryBuilder('v')
+    .select(columnasVersion('v'))
     .leftJoinAndSelect('v.ley', 'ley')
     .where('v.leyId IN (:...leyIds)', { leyIds })
     .orderBy('v.fechaPublicacion', 'DESC');
