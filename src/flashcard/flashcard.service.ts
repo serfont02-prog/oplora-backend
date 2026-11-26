@@ -1,3 +1,4 @@
+import { CacheMemoria } from '../common/helpers/cache-memoria';
 import { accesoDeUsuario, errorSuscripcion, estaInscrito, exigirTemaPermitido, temaGratisDe, datosTema } from '../common/helpers/acceso.helper';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { inicioDiaMadrid, inicioDiaMadridDesplazado, diaMadrid } from '../common/helpers/dia.helper';
@@ -1040,6 +1041,8 @@ private async darPuntosPorDominar(usuarioId: string, flashcardId: string, manage
     await this.retoFcRepo.delete(retoId);
   }
 
+private static readonly cacheTotalTema = new CacheMemoria<number>(5 * 60_000);
+
 async getEstadisticasFCTema(
   usuarioId: string,
   oposicionId: string,
@@ -1049,12 +1052,14 @@ async getEstadisticasFCTema(
   if (!FlashcardService.UUID.test(temaId) || !FlashcardService.UUID.test(oposicionId)) {
     return { total: 0, dominadas: 0, dudosas: 0, noDominadas: 0, sinVer: 0 };
   }
-  // Total de flashcards visibles del tema (validadas y de la oposición)
-  const total = await this.fcRepo
-    .createQueryBuilder('fc')
-    .where(sqlVisible('fc', ':opoId', sqlConvDe(':opoId', ':usuarioId')), { opoId: oposicionId, usuarioId })
-    .andWhere(sqlDeTema('fc', ':temaId'), { temaId })
-    .getCount();
+  // Total de flashcards visibles del tema (validadas y de la oposición).
+  // ⭐ Se guarda 5 minutos: el progreso del temario lo pide para cada tema en cada visita.
+  const total = await FlashcardService.cacheTotalTema.obtener(`${usuarioId}:${oposicionId}:${temaId}`, () =>
+    this.fcRepo
+      .createQueryBuilder('fc')
+      .where(sqlVisible('fc', ':opoId', sqlConvDe(':opoId', ':usuarioId')), { opoId: oposicionId, usuarioId })
+      .andWhere(sqlDeTema('fc', ':temaId'), { temaId })
+      .getCount());
 
   // Stats del usuario para esas mismas flashcards
   const repasos = await this.repasoRepo

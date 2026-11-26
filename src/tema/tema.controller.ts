@@ -11,8 +11,10 @@ export class TemaController {
   constructor(private readonly service: TemaService) {}
 
   @Get('convocatoria/:convocatoriaId')
-  findByConvocatoria(@Param('convocatoriaId') convocatoriaId: string) {
-    return this.service.findByConvocatoria(convocatoriaId);
+  // ⭐ Por defecto, solo los datos del tema (rápido). Con ?normativa=1, también los artículos
+  // vinculados y su ley (lo usa el admin de temas).
+  findByConvocatoria(@Param('convocatoriaId') convocatoriaId: string, @Query('normativa') normativa?: string) {
+    return this.service.findByConvocatoria(convocatoriaId, normativa === '1');
   }
 
   @Get('oposicion/:oposicionId/progreso-completo')

@@ -1,3 +1,4 @@
+import { CacheMemoria } from '../common/helpers/cache-memoria';
 import { MAX_PREGUNTAS_POR_TEST } from '../config/plan-limits';
 import { accesoDeUsuario, estadoAcceso, errorSuscripcion, temaGratisDe } from '../common/helpers/acceso.helper';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -1016,7 +1017,14 @@ return {
 };}
 
   /** Artículos vinculados a un tema, a cualquier nivel (artículo, capítulo, título o ley entera). */
+  // ⭐ Los artículos de un tema son iguales para todos: se guardan 5 minutos
+  private static readonly cacheArticulosTema = new CacheMemoria<Set<string>>(5 * 60_000);
+
   async articulosDelTema(temaId: string): Promise<Set<string>> {
+    return TestService.cacheArticulosTema.obtener(temaId, () => this.cargarArticulosDelTema(temaId));
+  }
+
+  private async cargarArticulosDelTema(temaId: string): Promise<Set<string>> {
     const filas: { id: string }[] = await this.resultadoRepo.query(`SELECT DISTINCT x.id FROM (${sqlArticulosDeTemas('$1')}) x`, [temaId]);
     return new Set(filas.map((f) => f.id));
   }

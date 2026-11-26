@@ -1,3 +1,4 @@
+import { CacheMemoria } from '../common/helpers/cache-memoria';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { borrarTemas } from '../common/helpers/borrado.helper';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -66,7 +67,13 @@ export class TemaService {
   ) {}
 
   
-  async findByConvocatoria(convocatoriaId: string): Promise<Tema[]> {
+  // ⭐ conNormativa=false: solo los temas, sin los artículos vinculados (con todo su texto) ni sus
+  // leyes. El temario, Flashcards y el modal de test solo necesitan número y título, y cargar la
+  // normativa de 45 temas hacía muy lenta la lista.
+  async findByConvocatoria(convocatoriaId: string, conNormativa = true): Promise<Tema[]> {
+  if (!conNormativa) {
+    return this.temaRepo.find({ where: { convocatoria: { id: convocatoriaId } }, order: { numero: 'ASC' } });
+  }
   return this.temaRepo.find({
     where: { convocatoria: { id: convocatoriaId } },
     order: { numero: 'ASC' },
@@ -362,7 +369,15 @@ async getExamenesByOposicionUsuario(usuarioId: string, oposicionId: string) {
 // ⭐ Preguntas del tema: las ligadas al propio tema y las de los artículos vinculados al tema a
 // cualquier nivel (artículo, capítulo, título o ley entera). Antes solo contaban los artículos
 // vinculados uno a uno, así que un capítulo vinculado entero no sumaba.
+// ⭐ Es igual para todos los usuarios: se guarda 5 minutos (el progreso del temario lo pedía
+// para cada tema en cada visita).
+private static readonly cacheTotalPreguntas = new CacheMemoria<number>(5 * 60_000);
+
 async getTotalPreguntasDelTema(temaId: string): Promise<number> {
+  return TemaService.cacheTotalPreguntas.obtener(temaId, () => this.contarPreguntasDelTema(temaId));
+}
+
+private async contarPreguntasDelTema(temaId: string): Promise<number> {
   return this.preguntaTestRepo
     .createQueryBuilder('p')
     .leftJoin('p.articulos', 'art')
