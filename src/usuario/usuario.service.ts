@@ -382,6 +382,8 @@ async marcarOnboardingEntrenamiento(usuarioId: string) {
         activo: u.activo !== false,
         estado: u.estado,
         suscripcion: u.suscripcion,
+        // ⭐ Tipo de acceso real (admin, pago, regalo, prueba o gratis), con sus fechas
+        acceso: estadoAcceso(u),
         creadoEn: u.creadoEn,
         ultimaActividad: u.ultimaActividad,
         rachaActual: rachaVigente(u),
@@ -604,18 +606,22 @@ async findMe(id: string) {
     const total = await this.repo.count();
     // ⭐ Todos tienen plan (por defecto "gratuito"): "con suscripción" = de pago. Antes contaba
     // a todos y la conversión salía siempre al 100 %.
-    const conSuscripcion = await this.repo.count({
-      where: { suscripcion: In([SuscripcionUsuario.ESENCIAL, SuscripcionUsuario.PROFESIONAL]) },
+    // ⭐ Planes de nov 2026: el tipo de acceso sale de estadoAcceso (pago, regalo, prueba, gratis
+    // o admin). Ya no hay Esencial/Profesional: la columna suscripcion solo marca los regalos.
+    const filasAcceso = await this.repo.find({
+      select: ['id', 'rol', 'suscripcion', 'accesoHasta', 'pruebaHasta', 'renovacionAutomatica'] as any,
     });
+    const porTipo: Record<string, number> = {};
+    for (const u of filasAcceso) {
+      const m = estadoAcceso(u as any).motivo;
+      porTipo[m] = (porTipo[m] ?? 0) + 1;
+    }
+    const conSuscripcion = porTipo.pago ?? 0;
     const desactivados = await this.repo.count({ where: { activo: false } });
 
-    const porSuscripcion = await this.repo
-      .createQueryBuilder('u')
-      .select('u.suscripcion', 'suscripcion')
-      .addSelect('COUNT(*)', 'total')
-      .where('u.suscripcion IS NOT NULL')
-      .groupBy('u.suscripcion')
-      .getRawMany();
+    const porSuscripcion = ['pago', 'regalo', 'prueba', 'gratis', 'admin']
+      .filter((m) => porTipo[m])
+      .map((m) => ({ suscripcion: m, total: String(porTipo[m]) }));
 
       const porNivel = await this.usuarioOposicionRepo
     .createQueryBuilder('uo')
